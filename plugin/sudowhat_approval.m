@@ -216,12 +216,14 @@ static int sudowhat_check(char * const command_info[],
 
         /* Tiered policy selection. Prefer
          * LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion
-         * (renamed from ...WithBiometricsOrWatch in macOS 15; covers
-         * Apple Watch and iPhone) so a wrist double-click works
-         * alongside Touch ID. That policy has no password fallback
-         * though, so when the user has neither biometric nor a
-         * companion device available (lid closed without external Touch
-         * ID, Watch off-wrist, iPhone locked), fall back to
+         * (renamed from ...WithBiometricsOrWatch in macOS 15) so a
+         * paired Apple Watch's side-button double-click approves
+         * alongside Touch ID. The policy nominally also covers iPhone
+         * proximity unlock since macOS 15 / iOS 18, but that path has
+         * not been observed firing in testing - watch is the verified
+         * companion. That policy has no password fallback, so when the
+         * user has neither biometric nor a usable companion (lid closed
+         * without external Touch ID, watch off-wrist), fall back to
          * LAPolicyDeviceOwnerAuthentication, which adds password as a
          * last resort. canEvaluatePolicy reports availability against
          * the EUID we already dropped to, so the companion/biometric

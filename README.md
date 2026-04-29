@@ -1,0 +1,193 @@
+# sudowhat
+
+A sudo approval plugin for macOS that displays the **exact command** sudo will run — inside the system Touch ID prompt — before you authorize it.
+
+```
+$ sudo /bin/echo hello
+        ┌──────────────────────────────────┐
+        │  🔒  Run as root:                │
+        │                                  │
+        │      /bin/echo hello             │
+        │                                  │
+        │      [ Touch ID  /  Watch  /     │
+        │        Use Password ]            │
+        └──────────────────────────────────┘
+hello
+```
+
+## Why
+
+Stock macOS sudo with `pam_tid.so` shows a generic "sudo wants permission" Touch ID prompt. The prompt does not show *what command* is being authorized.
+
+A compromised user shell — or a typo, a malicious `npm install` postinstall, an alias planted by a copy-pasted snippet — can hide an attack behind that generic prompt:
+
+```sh
+alias unlock='sudo chown attacker:wheel /etc/sudoers'
+```
+
+You think you're unlocking your own file. The prompt looks identical. You biometrically approve a sudoers takeover.
+
+**sudowhat closes that wedge.** The system-trusted Touch ID dialog displays the resolved command path and arguments — the same bytes sudo will pass to `execve` — *before* you authorize. Argv tokens are shell-quoted; control characters (newlines, terminal escapes) are rendered as `\xNN` escapes so an attacker cannot smuggle hidden lines into the prompt.
+
+## Authentication methods
+
+A single dialog accepts any of the following:
+
+- **Touch ID** — fingerprint sensor on the keyboard or external Magic Keyboard.
+- **Apple Watch** — double-click the side button while wearing an unlocked, paired watch.
+- **iPhone** (companion?) — `LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion` is documented to cover iPhone-as-companion since macOS 15, but I have not seen the prompt actually appear on a paired iPhone in testing. Watch is the verified case; iPhone is "the policy theoretically supports it, no evidence it fires."
+- **Password fallback** — clicking "Use Password" opens an Authorization Services prompt (the classic lock-icon dialog) with the same command shown, accepting your account password.
+
+The prompt binds to *your* user account, not "System Administrator", so your password works in the fallback. (sudo runs as root by the time the plugin executes; sudowhat drops EUID to your user around the auth call so biometric and password both resolve against your enrollment.)
+
+## Quick start
+
+Build, sign, install. Requires macOS with Xcode Command Line Tools.
+
+```sh
+git clone https://github.com/jooize/sudowhat
+cd sudowhat
+make sign           # ad-hoc-signs the bundles for personal use
+sudo make install   # drops bundles into /usr/local, edits /etc/sudo.conf,
+                    # /etc/pam.d/sudo_local, /etc/sudoers.d/sudowhat;
+                    # rolls back on any failure
+```
+
+Verify:
+
+```sh
+sudo -k && sudo /bin/echo hello
+```
+
+A Touch ID dialog should pop up reading `Run as root:` followed by `/bin/echo hello`. Approve to run; cancel to deny — sudo prints `sudowhat: authorization denied: ...` and exits non-zero.
+
+To remove:
+
+```sh
+sudo make uninstall
+```
+
+This restores stock sudo behavior, removing all four files sudowhat installs.
+
+## How it works
+
+Two signed Mach-O bundles loaded into sudo's process, mutually verifying each other's code signature. No daemon, no agent, no IPC.
+
+```
+sudo /usr/bin/foo bar
+  │
+  ▼  PAM auth chain
+/etc/pam.d/sudo
+  └── auth include sudo_local
+      └── /etc/pam.d/sudo_local
+          ├── auth requisite  /usr/local/lib/pam/pam_sudowhat.so
+          │     • parses /etc/sudo.conf, confirms our Plugin line is present
+          │     • SecStaticCodeCheckValidity on the approval plugin bundle
+          │     • returns PAM_SUCCESS (-> sufficient pam_permit -> done)
+          │              or PAM_AUTH_ERR (-> sudo aborts)
+          └── auth sufficient pam_permit.so
+  │
+  ▼  sudo loads approval plugin
+/etc/sudo.conf
+  └── Plugin sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so
+      • SecStaticCodeCheckValidity on pam_sudowhat.so (mutual)
+      • SCDynamicStoreCopyConsoleUser == invoking UID (SSH-attacker guard)
+      • formats the command with shell-quoting and control-char escapes
+      • seteuid drops to the user
+      • LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometricsOrCompanion)
+      • on fallback: AuthorizationCreate with system.privilege.admin and
+        kAuthorizationEnvironmentPrompt = command string
+      • seteuid restores to root
+      • re-stat target binary; deny if (dev,inode) changed during auth
+      • returns 1 = allow, 0 = deny, -1 = error
+  │
+  ▼  sudo execve("/usr/bin/foo", ["bar"], ...)
+```
+
+**Trust root:** Apple Developer ID code signing. In a release build, `SignatureVerifier` enforces the team-identifier requirement `anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"`. Forging the integrity check requires forging your developer signature.
+
+**Fail-closed:** any failure of either component aborts sudo. No path leads to `pam_opendirectory`-style permissive defaults. Apple's stock `pam_tid.so` is the broken behavior we're fixing — falling back to it would be regression, not recovery.
+
+**SSH-attacker defense:** the plugin compares the invoking UID (from sudo's `user_info["uid"]`) to the active console UID (`SCDynamicStoreCopyConsoleUser`). Mismatch → deny without prompting. An SSH session cannot pop a Touch ID dialog the local user reflexively approves.
+
+**Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache. Every privileged command re-prompts.
+
+## What gets installed
+
+| Path | Purpose |
+|------|---------|
+| `/usr/local/libexec/sudo/sudowhat_approval.so` | Sudo approval plugin |
+| `/usr/local/lib/pam/pam_sudowhat.so` | PAM auth module |
+| `/etc/sudo.conf` (one line appended) | Tells sudo to load the approval plugin |
+| `/etc/sudoers.d/sudowhat` | Disables sudo's auth cache |
+| `/etc/pam.d/sudo_local` | Wires the PAM module into sudo's auth chain |
+
+Apple's stock `/etc/pam.d/sudo` already includes `auth include sudo_local`, so the install survives system updates that touch `/etc/pam.d/sudo`.
+
+## Build modes
+
+**Dev / ad-hoc** (default — no Apple Developer account required):
+
+```sh
+make sign
+```
+
+Bundles are ad-hoc-signed. `SignatureVerifier` validates that signatures are intact (`kSecCSBasicValidateOnly`) but does not enforce a team-identifier requirement. Tampered or replaced binaries with broken signatures still fail; substitution with a different validly-signed binary is **not** detected. Suitable for personal use.
+
+**Release** (Apple Developer ID, full authorship enforcement):
+
+```sh
+make SUDOWHAT_TEAM_ID=XXXXXXXXXX DEVELOPER_NAME="Your Name" sign
+```
+
+Bundles are signed with your Developer ID Application certificate. The team-identifier requirement is enforced at runtime: tampering breaks the signature, and replacement with a differently-signed binary is detected.
+
+## Status
+
+| | |
+|---|---|
+| Latest release | `v0.3.1` |
+| Tested on | macOS Tahoe (Darwin 25.4) |
+| Architecture | Apple silicon (arm64) |
+| Signing | ad-hoc dev mode shipped; Developer ID release planned |
+
+## Known limitations
+
+These are documented design trade-offs, not bugs.
+
+**TOCTOU between approval and execve.** A residual window exists between sudowhat returning "approved" and sudo's `execve` of the resolved binary path. The plugin opens the file before the prompt, re-stats it after, and denies if the `(dev, inode)` pair changed — but a swap occurring after the final stat and before sudo's exec cannot be detected from inside a plugin. macOS lacks `fexecve`, so eliminating this window completely requires patching sudo itself. For binaries on root-only paths (`/bin`, `/usr/bin`, `/usr/sbin`), an attacker capable of writing there already has root and doesn't need TOCTOU.
+
+**Ad-hoc dev mode integrity-only.** In dev mode, any validly signed bundle passes the integrity check. Tampering with content is detected; substitution with a different signed bundle (e.g., an Apple-signed `/bin/ls`) is not. Use a Developer ID release build for any deployment outside personal local use.
+
+**`sudo bash`, interactive editors.** Approving a shell or editor opens unbounded post-approval risk. This is inherent to all sudo-likes; sudowhat shows the program being launched so the user can refuse, but cannot constrain what happens inside it.
+
+**GUI session detached.** `LAContext.evaluatePolicy` may fail when the user's GUI session has been fast-user-switched out. The plugin denies in that case — fail-closed by design.
+
+## Verification matrix
+
+After install, smoke-test the security properties:
+
+```sh
+sudo -k && sudo /bin/echo hello                  # happy path
+sudo -k && sudo /bin/echo hello                  # cancel; expect "sudowhat: authorization denied"
+sudo -k && sudo /bin/echo $'hidden\nsudoers'    # control chars escape literally
+sudo /bin/echo first; sudo /bin/echo second      # no auth caching; two prompts
+ssh localhost 'sudo -n /bin/echo from-ssh' 2>&1 # SSH attacker guard
+sudo make uninstall                              # stock sudo behavior restored
+```
+
+See `project_trusted_sudo_prompt.md` for the original design notes and full test matrix.
+
+## Roadmap
+
+- Apple Developer ID release build with notarization.
+- Homebrew tap / formula.
+- Optional: a small `sudowhat status` CLI for users to inspect install state.
+
+## Disclaimer
+
+sudowhat is an independent project. It is not affiliated with, authorized by, sponsored by, or otherwise approved by Apple Inc.
+
+## License
+
+MIT — see `LICENSE`.
