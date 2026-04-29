@@ -6,13 +6,13 @@
  * the console UID.
  */
 
-#ifndef TSUDO_SESSION_GUARD_H
-#define TSUDO_SESSION_GUARD_H
+#ifndef SUDOWHAT_SESSION_GUARD_H
+#define SUDOWHAT_SESSION_GUARD_H
 
 #import <Foundation/Foundation.h>
 #include <sys/types.h>
 
-@interface TSudoSessionGuard : NSObject
+@interface SudoWhatSessionGuard : NSObject
 
 /* Returns YES iff invokingUid matches an active console session UID
  * (not 0, not (uid_t)-1). */

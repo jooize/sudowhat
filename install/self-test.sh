@@ -1,6 +1,6 @@
 #!/bin/bash
 # Post-install sanity check. We deliberately do NOT drive sudo through an
-# end-to-end auth here: tsudo's approval plugin pops a system-trusted
+# end-to-end auth here: sudowhat's approval plugin pops a system-trusted
 # Touch ID dialog and forcing that during `make install` is hostile.
 #
 # The checks below confirm that all four placed files are in place with
@@ -10,10 +10,10 @@
 
 set -euo pipefail
 
-PLUGIN_DST="/usr/local/libexec/sudo/tsudo_approval.so"
-PAM_DST="/usr/local/lib/pam/pam_tsudo.so"
+PLUGIN_DST="/usr/local/libexec/sudo/sudowhat_approval.so"
+PAM_DST="/usr/local/lib/pam/pam_sudowhat.so"
 SUDO_CONF="/etc/sudo.conf"
-SUDOERS_D="/etc/sudoers.d/tsudo"
+SUDOERS_D="/etc/sudoers.d/sudowhat"
 PAM_LOCAL="/etc/pam.d/sudo_local"
 
 # (1) Files exist with expected modes.
@@ -24,14 +24,14 @@ PAM_LOCAL="/etc/pam.d/sudo_local"
 [ -f "$PAM_LOCAL" ]                 || { echo "self-test: $PAM_LOCAL missing" >&2;                    exit 1; }
 
 # (2) /etc/sudo.conf names our approval plugin at the expected path.
-if ! grep -qF "tsudo_approval_plugin /usr/local/libexec/sudo/tsudo_approval.so" "$SUDO_CONF"; then
-    echo "self-test: $SUDO_CONF does not name tsudo_approval_plugin at the expected path" >&2
+if ! grep -qF "sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so" "$SUDO_CONF"; then
+    echo "self-test: $SUDO_CONF does not name sudowhat_approval_plugin at the expected path" >&2
     exit 1
 fi
 
 # (3) /etc/pam.d/sudo_local references our PAM module at the expected path.
-if ! grep -qF "/usr/local/lib/pam/pam_tsudo.so" "$PAM_LOCAL"; then
-    echo "self-test: $PAM_LOCAL does not reference pam_tsudo.so at the expected path" >&2
+if ! grep -qF "/usr/local/lib/pam/pam_sudowhat.so" "$PAM_LOCAL"; then
+    echo "self-test: $PAM_LOCAL does not reference pam_sudowhat.so at the expected path" >&2
     exit 1
 fi
 
@@ -50,4 +50,4 @@ if ! sudo -V >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "tsudo: install verified (run 'sudo /bin/echo hello' to test the live prompt)"
+echo "sudowhat: install verified (run 'sudo /bin/echo hello' to test the live prompt)"

@@ -3,8 +3,8 @@
  * plugin. Cross-checked against sudo 1.9.x plugin interface.
  */
 
-#ifndef TSUDO_SUDO_PLUGIN_H
-#define TSUDO_SUDO_PLUGIN_H
+#ifndef SUDOWHAT_SUDO_PLUGIN_H
+#define SUDOWHAT_SUDO_PLUGIN_H
 
 #include <sys/types.h>
 

@@ -1,6 +1,6 @@
 #import "PromptFormatter.h"
 
-@implementation TSudoPromptFormatter
+@implementation SudoWhatPromptFormatter
 
 + (NSCharacterSet *)safeSet {
     static NSCharacterSet *set;

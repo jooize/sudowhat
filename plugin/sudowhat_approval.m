@@ -1,5 +1,5 @@
 /*
- * tsudo approval plugin (sudo plugin API: SUDO_APPROVAL_PLUGIN, type 4).
+ * sudowhat approval plugin (sudo plugin API: SUDO_APPROVAL_PLUGIN, type 4).
  *
  * Loaded by sudo via /etc/sudo.conf after PAM authentication. The bytes shown
  * in the Touch ID prompt are the same bytes sudo will execve(): both come
@@ -79,16 +79,16 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
     }
 }
 
-static int tsudo_open(unsigned int version,
-                      sudo_conv_t conversation,
-                      sudo_printf_t plugin_printf,
-                      char * const settings[],
-                      char * const user_info[],
-                      int submit_optind,
-                      char * const submit_argv[],
-                      char * const submit_envp[],
-                      char * const plugin_options[],
-                      const char **errstr) {
+static int sudowhat_open(unsigned int version,
+                         sudo_conv_t conversation,
+                         sudo_printf_t plugin_printf,
+                         char * const settings[],
+                         char * const user_info[],
+                         int submit_optind,
+                         char * const submit_argv[],
+                         char * const submit_envp[],
+                         char * const plugin_options[],
+                         const char **errstr) {
     (void)conversation; (void)settings;
     (void)submit_optind; (void)submit_argv;
     (void)submit_envp; (void)plugin_options;
@@ -96,14 +96,14 @@ static int tsudo_open(unsigned int version,
     g_plugin_printf = plugin_printf;
 
     if (SUDO_API_VERSION_GET_MAJOR(version) != SUDO_API_VERSION_MAJOR) {
-        set_errstr(errstr, "tsudo: unsupported sudo plugin API major version %u",
+        set_errstr(errstr, "sudowhat: unsupported sudo plugin API major version %u",
                    SUDO_API_VERSION_GET_MAJOR(version));
         return -1;
     }
 
     const char *uidStr = find_kv(user_info, "uid");
     if (uidStr == NULL) {
-        set_errstr(errstr, "tsudo: missing uid in user_info");
+        set_errstr(errstr, "sudowhat: missing uid in user_info");
         return -1;
     }
     g_invoking_uid = (uid_t)strtoul(uidStr, NULL, 10);
@@ -111,35 +111,35 @@ static int tsudo_open(unsigned int version,
     return 1;
 }
 
-static void tsudo_close(void) {
+static void sudowhat_close(void) {
     g_have_invoking_uid = 0;
     g_invoking_uid = (uid_t)-1;
     g_plugin_printf = NULL;
 }
 
-static int tsudo_check(char * const command_info[],
-                       char * const run_argv[],
-                       char * const run_envp[],
-                       const char **errstr) {
+static int sudowhat_check(char * const command_info[],
+                          char * const run_argv[],
+                          char * const run_envp[],
+                          const char **errstr) {
     (void)run_envp;
 
     @autoreleasepool {
-        /* (1) Mutual integrity check: verify pam_tsudo.so before trusting
-         * that the PAM step was actually our module. */
+        /* (1) Mutual integrity check: verify pam_sudowhat.so before
+         * trusting that the PAM step was actually our module. */
         NSError *sigErr = nil;
-        if (![TSudoSignatureVerifier verifyPath:@TSUDO_PAM_PATH error:&sigErr]) {
-            set_errstr(errstr, "tsudo: pam_tsudo signature invalid: %s",
+        if (![SudoWhatSignatureVerifier verifyPath:@SUDOWHAT_PAM_PATH error:&sigErr]) {
+            set_errstr(errstr, "sudowhat: pam_sudowhat signature invalid: %s",
                        utf8_or(sigErr.localizedDescription, "unknown"));
             return 0;
         }
 
         /* (2) Console-UID guard. */
         if (!g_have_invoking_uid) {
-            set_errstr(errstr, "tsudo: invoking uid not captured at open()");
+            set_errstr(errstr, "sudowhat: invoking uid not captured at open()");
             return -1;
         }
-        if (![TSudoSessionGuard isInvokingUserActiveConsole:g_invoking_uid]) {
-            set_errstr(errstr, "tsudo: not in active GUI session "
+        if (![SudoWhatSessionGuard isInvokingUserActiveConsole:g_invoking_uid]) {
+            set_errstr(errstr, "sudowhat: not in active GUI session "
                                "(invoking uid %u is not the console user)",
                        g_invoking_uid);
             return 0;
@@ -148,7 +148,7 @@ static int tsudo_check(char * const command_info[],
         /* (3) Resolve command. */
         const char *commandC = find_kv(command_info, "command");
         if (commandC == NULL) {
-            set_errstr(errstr, "tsudo: missing 'command' in command_info");
+            set_errstr(errstr, "sudowhat: missing 'command' in command_info");
             return -1;
         }
         NSString *commandPath = [NSString stringWithUTF8String:commandC];
@@ -169,7 +169,7 @@ static int tsudo_check(char * const command_info[],
          * doesn't leak into the execed program. */
         int preFd = open(commandC, O_RDONLY | O_CLOEXEC);
         if (preFd < 0) {
-            set_errstr(errstr, "tsudo: cannot open target binary %s: %s",
+            set_errstr(errstr, "sudowhat: cannot open target binary %s: %s",
                        commandC, strerror(errno));
             return 0;
         }
@@ -177,16 +177,16 @@ static int tsudo_check(char * const command_info[],
         if (fstat(preFd, &preSt) != 0) {
             int saved = errno;
             close(preFd);
-            set_errstr(errstr, "tsudo: fstat(%s) failed: %s",
+            set_errstr(errstr, "sudowhat: fstat(%s) failed: %s",
                        commandC, strerror(saved));
             return -1;
         }
 
         /* (4) Format prompt. */
         NSString *promptText =
-            [TSudoPromptFormatter formatWithCommandPath:commandPath
-                                              runasUser:runasUser
-                                                   argv:argv];
+            [SudoWhatPromptFormatter formatWithCommandPath:commandPath
+                                                 runasUser:runasUser
+                                                      argv:argv];
 
         /* (5) LAContext call.
          *
@@ -206,7 +206,7 @@ static int tsudo_check(char * const command_info[],
         if (seteuid(g_invoking_uid) != 0) {
             int saved = errno;
             close(preFd);
-            set_errstr(errstr, "tsudo: seteuid(%u) failed: %s",
+            set_errstr(errstr, "sudowhat: seteuid(%u) failed: %s",
                        g_invoking_uid, strerror(saved));
             return -1;
         }
@@ -235,7 +235,7 @@ static int tsudo_check(char * const command_info[],
                                      error:&policyErr]) {
             (void)seteuid(0);
             close(preFd);
-            set_errstr(errstr, "tsudo: cannot evaluate authentication policy: %s",
+            set_errstr(errstr, "sudowhat: cannot evaluate authentication policy: %s",
                        utf8_or(policyErr.localizedDescription, "unknown"));
             return 0;
         }
@@ -333,7 +333,7 @@ static int tsudo_check(char * const command_info[],
 
         if (!allowed) {
             close(preFd);
-            set_errstr(errstr, "tsudo: authorization denied: %s",
+            set_errstr(errstr, "sudowhat: authorization denied: %s",
                        utf8_or(replyErr.localizedDescription, "user cancelled"));
             return 0;
         }
@@ -346,14 +346,14 @@ static int tsudo_check(char * const command_info[],
         if (stat(commandC, &postSt) != 0) {
             int saved = errno;
             close(preFd);
-            set_errstr(errstr, "tsudo: post-auth stat(%s) failed: %s",
+            set_errstr(errstr, "sudowhat: post-auth stat(%s) failed: %s",
                        commandC, strerror(saved));
             return 0;
         }
         close(preFd);
 
         if (postSt.st_dev != preSt.st_dev || postSt.st_ino != preSt.st_ino) {
-            set_errstr(errstr, "tsudo: target binary changed during authorization");
+            set_errstr(errstr, "sudowhat: target binary changed during authorization");
             return 0;
         }
 
@@ -362,11 +362,11 @@ static int tsudo_check(char * const command_info[],
 }
 
 __attribute__((visibility("default")))
-struct approval_plugin tsudo_approval_plugin = {
+struct approval_plugin sudowhat_approval_plugin = {
     SUDO_APPROVAL_PLUGIN,
     SUDO_API_VERSION,
-    tsudo_open,
-    tsudo_close,
-    tsudo_check,
+    sudowhat_open,
+    sudowhat_close,
+    sudowhat_check,
     NULL
 };

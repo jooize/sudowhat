@@ -1,2 +1,2 @@
-# Append to /etc/sudo.conf to enable tsudo. Create the file if missing.
-Plugin tsudo_approval_plugin /usr/local/libexec/sudo/tsudo_approval.so
+# Append to /etc/sudo.conf to enable sudowhat. Create the file if missing.
+Plugin sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so

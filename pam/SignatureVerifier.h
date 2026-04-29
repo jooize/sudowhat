@@ -5,20 +5,20 @@
  * files (they are identical except for the class name and file path
  * comment).
  *
- * The class is named TSudoPamSigVerifier rather than TSudoSignatureVerifier
- * to avoid an Objective-C runtime "duplicate class" warning when sudo
- * loads both bundles into the same process: each .so registers its own
- * copy of the class with the runtime, the runtime keeps whichever was
- * registered first, and warns about the other. Distinct class names per
- * bundle is the simplest fix.
+ * The class is named SudoWhatPamSigVerifier rather than
+ * SudoWhatSignatureVerifier to avoid an Objective-C runtime "duplicate
+ * class" warning when sudo loads both bundles into the same process: each
+ * .so registers its own copy of the class with the runtime, the runtime
+ * keeps whichever was registered first, and warns about the other.
+ * Distinct class names per bundle is the simplest fix.
  */
 
-#ifndef TSUDO_PAM_SIGNATURE_VERIFIER_H
-#define TSUDO_PAM_SIGNATURE_VERIFIER_H
+#ifndef SUDOWHAT_PAM_SIGNATURE_VERIFIER_H
+#define SUDOWHAT_PAM_SIGNATURE_VERIFIER_H
 
 #import <Foundation/Foundation.h>
 
-@interface TSudoPamSigVerifier : NSObject
+@interface SudoWhatPamSigVerifier : NSObject
 
 + (BOOL)verifyPath:(NSString *)path error:(NSError **)error;
 

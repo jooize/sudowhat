@@ -8,12 +8,12 @@
  * visible prompt via embedded newlines or terminal escape sequences.
  */
 
-#ifndef TSUDO_PROMPT_FORMATTER_H
-#define TSUDO_PROMPT_FORMATTER_H
+#ifndef SUDOWHAT_PROMPT_FORMATTER_H
+#define SUDOWHAT_PROMPT_FORMATTER_H
 
 #import <Foundation/Foundation.h>
 
-@interface TSudoPromptFormatter : NSObject
+@interface SudoWhatPromptFormatter : NSObject
 
 + (NSString *)formatWithCommandPath:(NSString *)path
                           runasUser:(NSString *)user

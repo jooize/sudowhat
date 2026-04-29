@@ -1,6 +1,6 @@
 #import "SudoConfChecker.h"
 
-@implementation TSudoSudoConfChecker
+@implementation SudoWhatConfChecker
 
 + (BOOL)verifyConfPath:(NSString *)confPath
         expectedSymbol:(NSString *)symbol
@@ -12,7 +12,7 @@
                                                      error:&readErr];
     if (content == nil) {
         if (error) {
-            *error = readErr ? readErr : [NSError errorWithDomain:@"tsudo.SudoConfChecker"
+            *error = readErr ? readErr : [NSError errorWithDomain:@"sudowhat.SudoConfChecker"
                                                               code:1
                                                           userInfo:@{NSLocalizedDescriptionKey:
                                                                          [NSString stringWithFormat:@"cannot read %@", confPath]}];
@@ -37,7 +37,7 @@
         return YES;
     }
 
-    if (error) *error = [NSError errorWithDomain:@"tsudo.SudoConfChecker"
+    if (error) *error = [NSError errorWithDomain:@"sudowhat.SudoConfChecker"
                                             code:2
                                         userInfo:@{NSLocalizedDescriptionKey:
                                                        [NSString stringWithFormat:@"%@ has no 'Plugin %@ %@' line",

@@ -2,11 +2,11 @@
 #import <Security/Security.h>
 #import "Constants.h"
 
-@implementation TSudoSignatureVerifier
+@implementation SudoWhatSignatureVerifier
 
 + (BOOL)verifyPath:(NSString *)path error:(NSError **)error {
     if (path.length == 0) {
-        if (error) *error = [NSError errorWithDomain:@"tsudo.SignatureVerifier"
+        if (error) *error = [NSError errorWithDomain:@"sudowhat.SignatureVerifier"
                                                 code:1
                                             userInfo:@{NSLocalizedDescriptionKey: @"empty path"}];
         return NO;
@@ -29,10 +29,10 @@
     SecRequirementRef requirement = NULL;
     SecCSFlags flags = kSecCSStrictValidate | kSecCSCheckAllArchitectures;
 
-    if (!TSUDO_IS_DEV_BUILD()) {
+    if (!SUDOWHAT_IS_DEV_BUILD()) {
         NSString *requirementText =
             [NSString stringWithFormat:@"anchor apple generic and certificate leaf[subject.OU] = \"%s\"",
-             TSUDO_TEAM_ID];
+             SUDOWHAT_TEAM_ID];
         status = SecRequirementCreateWithString((__bridge CFStringRef)requirementText,
                                                 kSecCSDefaultFlags,
                                                 &requirement);

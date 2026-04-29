@@ -1,21 +1,21 @@
-# tsudo — TrustedSudoPrompt
+# sudowhat
 #
 # Builds two ad-hoc-signable Mach-O bundles:
-#   build/tsudo_approval.so    — sudo approval plugin (LAContext prompt)
-#   build/pam_tsudo.so         — PAM auth module (integrity check)
+#   build/sudowhat_approval.so    - sudo approval plugin (LAContext / AS prompt)
+#   build/pam_sudowhat.so         - PAM auth module (integrity check)
 #
 # Release build (Developer ID, enforces team-ID requirement):
-#   make TSUDO_TEAM_ID=XXXXXXXXXX DEVELOPER_NAME="Your Name" sign
+#   make SUDOWHAT_TEAM_ID=XXXXXXXXXX DEVELOPER_NAME="Your Name" sign
 #
-# Dev build (ad-hoc, signature-integrity only — default):
+# Dev build (ad-hoc, signature-integrity only - default):
 #   make sign
 
-TSUDO_TEAM_ID ?= -
+SUDOWHAT_TEAM_ID ?= -
 
 CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
           -Iplugin -Ipam -Ishared \
-          -DTSUDO_TEAM_ID='"$(TSUDO_TEAM_ID)"'
+          -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"'
 LDFLAGS = -bundle \
           -framework Foundation \
           -framework CoreFoundation \
@@ -23,44 +23,44 @@ LDFLAGS = -bundle \
           -framework SystemConfiguration \
           -framework LocalAuthentication
 
-PLUGIN_OBJS = plugin/tsudo_approval.o \
+PLUGIN_OBJS = plugin/sudowhat_approval.o \
               plugin/PromptFormatter.o \
               plugin/SignatureVerifier.o \
               plugin/SessionGuard.o
 
-PAM_OBJS    = pam/pam_tsudo.o \
+PAM_OBJS    = pam/pam_sudowhat.o \
               pam/SudoConfChecker.o \
               pam/SignatureVerifier.o
 
 .PHONY: all sign install uninstall test clean
 
-all: build/tsudo_approval.so build/pam_tsudo.so
+all: build/sudowhat_approval.so build/pam_sudowhat.so
 
 build:
 	mkdir -p build
 
-build/tsudo_approval.so: $(PLUGIN_OBJS) | build
+build/sudowhat_approval.so: $(PLUGIN_OBJS) | build
 	$(CC) $(LDFLAGS) -o $@ $(PLUGIN_OBJS)
 
-build/pam_tsudo.so: $(PAM_OBJS) | build
+build/pam_sudowhat.so: $(PAM_OBJS) | build
 	$(CC) $(LDFLAGS) -o $@ $(PAM_OBJS)
 
 %.o: %.m
 	$(CC) $(CFLAGS) -c $< -o $@
 
 sign: all
-	@if [ "$(TSUDO_TEAM_ID)" = "-" ]; then \
+	@if [ "$(SUDOWHAT_TEAM_ID)" = "-" ]; then \
 		echo "ad-hoc signing build/*.so (dev mode)"; \
-		codesign --force --sign - build/tsudo_approval.so build/pam_tsudo.so; \
+		codesign --force --sign - build/sudowhat_approval.so build/pam_sudowhat.so; \
 	else \
 		if [ -z "$$DEVELOPER_NAME" ]; then \
 			echo "DEVELOPER_NAME must be set for release builds" >&2; \
 			exit 1; \
 		fi; \
-		echo "Developer ID signing as team $(TSUDO_TEAM_ID)"; \
+		echo "Developer ID signing as team $(SUDOWHAT_TEAM_ID)"; \
 		codesign --force --options runtime \
-		    --sign "Developer ID Application: $$DEVELOPER_NAME ($(TSUDO_TEAM_ID))" \
-		    build/tsudo_approval.so build/pam_tsudo.so; \
+		    --sign "Developer ID Application: $$DEVELOPER_NAME ($(SUDOWHAT_TEAM_ID))" \
+		    build/sudowhat_approval.so build/pam_sudowhat.so; \
 	fi
 
 install: sign

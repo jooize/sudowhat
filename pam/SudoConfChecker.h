@@ -1,16 +1,16 @@
 /*
  * SudoConfChecker — confirms /etc/sudo.conf contains a non-comment Plugin
  * line naming the expected approval-plugin symbol at the expected absolute
- * path. Used by pam_tsudo so a missing or rerouted plugin entry fails sudo
- * at the PAM stage.
+ * path. Used by pam_sudowhat so a missing or rerouted plugin entry fails
+ * sudo at the PAM stage.
  */
 
-#ifndef TSUDO_SUDO_CONF_CHECKER_H
-#define TSUDO_SUDO_CONF_CHECKER_H
+#ifndef SUDOWHAT_SUDO_CONF_CHECKER_H
+#define SUDOWHAT_SUDO_CONF_CHECKER_H
 
 #import <Foundation/Foundation.h>
 
-@interface TSudoSudoConfChecker : NSObject
+@interface SudoWhatConfChecker : NSObject
 
 + (BOOL)verifyConfPath:(NSString *)confPath
         expectedSymbol:(NSString *)symbol

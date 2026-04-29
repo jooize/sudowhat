@@ -1,17 +1,17 @@
-# tsudo: integrity-check PAM module. The Touch ID prompt itself is rendered
-# post-PAM by the sudo approval plugin loaded from /etc/sudo.conf.
+# sudowhat: integrity-check PAM module. The Touch ID prompt itself is
+# rendered post-PAM by the sudo approval plugin loaded from /etc/sudo.conf.
 #
 # Apple's openpam fork does not parse the Linux-PAM bracket-list syntax
 # `[success=done default=die]`, so the same fail-closed semantics are
 # expressed with two simple-flag lines:
 #
-#   requisite  pam_tsudo.so   - failure aborts sudo immediately
-#   sufficient pam_permit.so  - success terminates the auth chain so the
-#                                parent /etc/pam.d/sudo never falls back
-#                                to pam_smartcard / pam_opendirectory
+#   requisite  pam_sudowhat.so   - failure aborts sudo immediately
+#   sufficient pam_permit.so     - success terminates the auth chain so the
+#                                  parent /etc/pam.d/sudo never falls back
+#                                  to pam_smartcard / pam_opendirectory
 #
-# If pam_tsudo.so returns failure, requisite dies before reaching
+# If pam_sudowhat.so returns failure, requisite dies before reaching
 # pam_permit. If it returns success, pam_permit's sufficient short-circuits
 # the chain. No password fallback path exists.
-auth    requisite     /usr/local/lib/pam/pam_tsudo.so
+auth    requisite     /usr/local/lib/pam/pam_sudowhat.so
 auth    sufficient    pam_permit.so

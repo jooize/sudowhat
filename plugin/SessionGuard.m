@@ -1,7 +1,7 @@
 #import "SessionGuard.h"
 #import <SystemConfiguration/SystemConfiguration.h>
 
-@implementation TSudoSessionGuard
+@implementation SudoWhatSessionGuard
 
 + (BOOL)isInvokingUserActiveConsole:(uid_t)invokingUid {
     uid_t consoleUid = (uid_t)-1;
