@@ -3,10 +3,6 @@
 #
 # On any failure after a partial change, rolls back so the system is left
 # with stock sudo behavior, never half-installed.
-#
-# Removes any leftover files from the project's prior name (tsudo) before
-# installing under the new name, so users upgrading from <= v0.2.0 do not
-# end up with both sets of bundles or a stale Plugin line in /etc/sudo.conf.
 
 set -euo pipefail
 
@@ -25,30 +21,11 @@ SUDO_CONF_LINE="Plugin sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat
 SUDOERS_D="/etc/sudoers.d/sudowhat"
 PAM_LOCAL="/etc/pam.d/sudo_local"
 
-# Pre-rename artifacts the project used to install under the "tsudo" brand.
-# Removed unconditionally before this run touches anything (no rollback for
-# legacy cleanup; if you had v0.2.0 working, the next legitimate install
-# replaces it anyway).
-LEGACY_PLUGIN="/usr/local/libexec/sudo/tsudo_approval.so"
-LEGACY_PAM="/usr/local/lib/pam/pam_tsudo.so"
-LEGACY_SUDOERS_D="/etc/sudoers.d/tsudo"
-LEGACY_PLUGIN_LABEL="tsudo_approval_plugin"
-
 if [ ! -f "$PLUGIN_SRC" ] || [ ! -f "$PAM_SRC" ]; then
     echo "install.sh: build artifacts missing; run 'make sign' first" >&2
     exit 1
 fi
 
-# --- Legacy cleanup (pre-rename tsudo_* artifacts) ---------------------------
-rm -f "$LEGACY_PLUGIN" "$LEGACY_PAM" "$LEGACY_SUDOERS_D"
-if [ -f "$SUDO_CONF" ] && grep -qF "$LEGACY_PLUGIN_LABEL" "$SUDO_CONF"; then
-    tmp="$(mktemp)"
-    grep -vF "$LEGACY_PLUGIN_LABEL" "$SUDO_CONF" > "$tmp" || true
-    cat "$tmp" > "$SUDO_CONF"
-    rm -f "$tmp"
-fi
-
-# --- New install (tracked for rollback) -------------------------------------
 ROLLBACK=()
 add_rollback() { ROLLBACK+=("$1"); }
 rollback() {
