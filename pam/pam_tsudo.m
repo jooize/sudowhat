@@ -53,7 +53,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags,
             return PAM_AUTH_ERR;
         }
 
-        if (![TSudoSignatureVerifier verifyPath:@TSUDO_PLUGIN_PATH error:&err]) {
+        if (![TSudoPamSigVerifier verifyPath:@TSUDO_PLUGIN_PATH error:&err]) {
             tsudo_log(LOG_ERR, "approval plugin signature check failed: %s",
                       utf8_or(err.localizedDescription, "unknown"));
             return PAM_AUTH_ERR;

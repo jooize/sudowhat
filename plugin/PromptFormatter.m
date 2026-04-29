@@ -62,8 +62,12 @@
 
     NSString *basename = [path lastPathComponent];
     NSUInteger startIdx = 0;
-    if (argv.count > 0 && basename.length > 0 && [argv[0] isEqualToString:basename]) {
-        startIdx = 1;
+    if (argv.count > 0) {
+        NSString *first = argv[0];
+        if ([first isEqualToString:path] ||
+            (basename.length > 0 && [first isEqualToString:basename])) {
+            startIdx = 1;
+        }
     }
     for (NSUInteger i = startIdx; i < argv.count; i++) {
         [parts addObject:[self quoteToken:argv[i]]];

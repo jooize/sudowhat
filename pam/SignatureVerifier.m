@@ -2,7 +2,7 @@
 #import <Security/Security.h>
 #import "Constants.h"
 
-@implementation TSudoSignatureVerifier
+@implementation TSudoPamSigVerifier
 
 + (BOOL)verifyPath:(NSString *)path error:(NSError **)error {
     if (path.length == 0) {

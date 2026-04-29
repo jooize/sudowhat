@@ -1,39 +1,53 @@
 #!/bin/bash
-# Post-install sanity check. Confirms:
-#   1. sudo can load the approval plugin (sudo -V succeeds and lists it).
-#   2. The plugin actually runs in the auth chain (sudo -n with no cached
-#      auth fails with our 'tsudo:' prefix in the error, not sudo's own
-#      "a password is required").
+# Post-install sanity check. We deliberately do NOT drive sudo through an
+# end-to-end auth here: tsudo's approval plugin pops a system-trusted
+# Touch ID dialog and forcing that during `make install` is hostile.
+#
+# The checks below confirm that all four placed files are in place with
+# expected content/permissions and that sudo can still parse its config.
+# The user is expected to verify the live workflow with a manual
+# `sudo /bin/echo hello` after install.
 
 set -euo pipefail
 
 PLUGIN_DST="/usr/local/libexec/sudo/tsudo_approval.so"
 PAM_DST="/usr/local/lib/pam/pam_tsudo.so"
+SUDO_CONF="/etc/sudo.conf"
+SUDOERS_D="/etc/sudoers.d/tsudo"
+PAM_LOCAL="/etc/pam.d/sudo_local"
 
-[ -f "$PLUGIN_DST" ] || { echo "self-test: $PLUGIN_DST missing" >&2; exit 1; }
-[ -f "$PAM_DST" ]    || { echo "self-test: $PAM_DST missing" >&2;    exit 1; }
+# (1) Files exist with expected modes.
+[ -x "$PLUGIN_DST" ]                || { echo "self-test: $PLUGIN_DST missing or not executable" >&2; exit 1; }
+[ -x "$PAM_DST" ]                   || { echo "self-test: $PAM_DST missing or not executable" >&2;    exit 1; }
+[ -f "$SUDO_CONF" ]                 || { echo "self-test: $SUDO_CONF missing" >&2;                    exit 1; }
+[ -f "$SUDOERS_D" ]                 || { echo "self-test: $SUDOERS_D missing" >&2;                    exit 1; }
+[ -f "$PAM_LOCAL" ]                 || { echo "self-test: $PAM_LOCAL missing" >&2;                    exit 1; }
 
-# (1) sudo -V loads the approval plugin during startup; non-zero exit means
-# sudo refused to load it.
-if ! sudo -V >/dev/null 2>&1; then
-    echo "self-test: 'sudo -V' failed; sudo refused to load the plugin" >&2
+# (2) /etc/sudo.conf names our approval plugin at the expected path.
+if ! grep -qF "tsudo_approval_plugin /usr/local/libexec/sudo/tsudo_approval.so" "$SUDO_CONF"; then
+    echo "self-test: $SUDO_CONF does not name tsudo_approval_plugin at the expected path" >&2
     exit 1
 fi
 
-# (2) Run a non-interactive sudo and look at its error output. We expect a
-# failure because there's no cached auth and -n disables prompting; the
-# important thing is the failure path runs through our plugin.
-out="$(sudo -n /bin/echo tsudo-self-test 2>&1 || true)"
-
-if printf '%s' "$out" | grep -qi 'tsudo:'; then
-    echo "tsudo: install verified"
-    exit 0
+# (3) /etc/pam.d/sudo_local references our PAM module at the expected path.
+if ! grep -qF "/usr/local/lib/pam/pam_tsudo.so" "$PAM_LOCAL"; then
+    echo "self-test: $PAM_LOCAL does not reference pam_tsudo.so at the expected path" >&2
+    exit 1
 fi
 
-# Acceptable alternative: our PAM module short-circuited and sudo exited
-# without invoking the approval plugin. In that case the message is sudo's
-# own "a password is required" — which is the stock behavior we DIDN'T
-# want. So treat that as failure.
-echo "self-test: sudo did not pass through our plugin; output was:" >&2
-printf '%s\n' "$out" >&2
-exit 1
+# (4) sudoers.d snippet parses (visudo run already validated it during
+# install; re-check is cheap insurance).
+if ! visudo -c -f "$SUDOERS_D" >/dev/null; then
+    echo "self-test: $SUDOERS_D failed visudo -c" >&2
+    exit 1
+fi
+
+# (5) sudo -V loads the approval plugin without erroring. Exit non-zero
+# from sudo -V usually means a malformed sudo.conf or a plugin sudo
+# refused to load.
+if ! sudo -V >/dev/null 2>&1; then
+    echo "self-test: 'sudo -V' failed; sudo refused to load its config" >&2
+    exit 1
+fi
+
+echo "tsudo: install verified (run 'sudo /bin/echo hello' to test the live prompt)"

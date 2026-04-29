@@ -60,18 +60,29 @@ if ! grep -qF "tsudo_approval_plugin" "$SUDO_CONF"; then
     printf '%s\n' "$SUDO_CONF_LINE" >> "$SUDO_CONF"
 fi
 
-# (4) sudoers.d entry — validated with visudo before the file is left in place.
-if [ ! -f "$SUDOERS_D" ]; then
+# (4) sudoers.d entry — validated with visudo before the file is left in
+# place. Always overwrite: this file is ours, idempotent reinstalls should
+# refresh it with current content.
+if [ -f "$SUDOERS_D" ]; then
+    cp "$SUDOERS_D" "$SUDOERS_D.tsudo-bak"
+    add_rollback "mv -f '$SUDOERS_D.tsudo-bak' '$SUDOERS_D'"
+else
     add_rollback "rm -f '$SUDOERS_D'"
-    install -m 0440 "$REPO_DIR/config/sudoers.d/tsudo.sample" "$SUDOERS_D"
-    visudo -c -f "$SUDOERS_D"
 fi
+install -m 0440 "$REPO_DIR/config/sudoers.d/tsudo.sample" "$SUDOERS_D"
+visudo -c -f "$SUDOERS_D"
 
 # (5) pam.d/sudo_local — Apple's stock /etc/pam.d/sudo includes this file.
-if [ ! -f "$PAM_LOCAL" ]; then
+# Always overwrite: a stale or recovery-stub sudo_local would leave sudo
+# in a permissive or broken state, so this file must reflect our current
+# fail-closed config.
+if [ -f "$PAM_LOCAL" ]; then
+    cp "$PAM_LOCAL" "$PAM_LOCAL.tsudo-bak"
+    add_rollback "mv -f '$PAM_LOCAL.tsudo-bak' '$PAM_LOCAL'"
+else
     add_rollback "rm -f '$PAM_LOCAL'"
-    install -m 0644 "$REPO_DIR/config/pam.d/sudo_local.sample" "$PAM_LOCAL"
 fi
+install -m 0644 "$REPO_DIR/config/pam.d/sudo_local.sample" "$PAM_LOCAL"
 
 # (6) Self-test. Failure here triggers rollback via trap.
 "$REPO_DIR/install/self-test.sh"

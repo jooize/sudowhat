@@ -166,12 +166,36 @@ static int tsudo_check(char * const command_info[],
                                               runasUser:runasUser
                                                    argv:argv];
 
-        /* (5) LAContext call. */
+        /* (5) LAContext call.
+         *
+         * sudo invokes us as root (real-uid is the user, effective is 0).
+         * Calling LAContext as root makes macOS route to Authorization
+         * Services and show a "System Administrator" password dialog
+         * because root has no biometric enrollment and the user's own
+         * password is not what root accepts. Drop EUID to the invoking
+         * user around evaluatePolicy so the dialog binds to that user:
+         * Touch ID matches their enrollment, and the password fallback
+         * accepts their account password. seteuid is reversible while
+         * the saved-set-uid is still 0 (which it is until exec).
+         *
+         * Policy is LAPolicyDeviceOwnerAuthentication so password
+         * fallback is available when biometric isn't (sensor unavailable,
+         * lid closed). */
+        if (seteuid(g_invoking_uid) != 0) {
+            int saved = errno;
+            close(preFd);
+            set_errstr(errstr, "tsudo: seteuid(%u) failed: %s",
+                       g_invoking_uid, strerror(saved));
+            return -1;
+        }
+
         LAContext *ctx = [[LAContext alloc] init];
         ctx.localizedFallbackTitle = @"Use Password";
         NSError *policyErr = nil;
-        if (![ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication
-                              error:&policyErr]) {
+        BOOL canEval = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication
+                                        error:&policyErr];
+        if (!canEval) {
+            (void)seteuid(0);
             close(preFd);
             set_errstr(errstr, "tsudo: cannot evaluate authentication policy: %s",
                        utf8_or(policyErr.localizedDescription, "unknown"));
@@ -189,6 +213,12 @@ static int tsudo_check(char * const command_info[],
             dispatch_semaphore_signal(sem);
         }];
         dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+
+        /* Restore root EUID. If this fails, sudo cannot exec the target,
+         * so abort hard rather than continuing in a degraded state. */
+        if (seteuid(0) != 0) {
+            _exit(1);
+        }
 
         if (!allowed) {
             close(preFd);
