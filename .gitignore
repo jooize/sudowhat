@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.dylib
+
+# macOS
+.DS_Store
+
+# Code signing local files
+*.p12
+*.cer
+.signing/
+
+# Editor scratch
+*.swp
+.vscode/
+.idea/
+
+# Tooling scratch
+.tmp/
+.trash/
+
+# Claude Code per-project settings (machine-specific paths)
+.claude/

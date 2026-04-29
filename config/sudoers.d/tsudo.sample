@@ -1,0 +1,2 @@
+# Disable sudo's auth cache so every sudo invocation re-prompts via tsudo.
+Defaults timestamp_timeout=0

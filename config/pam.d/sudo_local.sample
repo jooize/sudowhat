@@ -1,0 +1,4 @@
+# tsudo: integrity-check PAM module. On success terminates the auth chain
+# (no password fallback). Any other return aborts sudo. The Touch ID prompt
+# itself is rendered post-PAM by the sudo approval plugin.
+auth    [success=done default=die]    /usr/local/lib/pam/pam_tsudo.so
