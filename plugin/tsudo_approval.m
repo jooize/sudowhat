@@ -35,6 +35,13 @@ static char g_errbuf[512];
 static uid_t g_invoking_uid = (uid_t)-1;
 static int   g_have_invoking_uid = 0;
 
+/* Apple's sudo on macOS Tahoe does not surface approval-plugin errstr to
+ * the terminal: the user sees a silent non-zero exit on deny. Capture the
+ * plugin_printf callback at open() and use it from check() so the user
+ * always gets a diagnostic line on the same stderr sudo writes its own
+ * messages to. */
+static sudo_printf_t g_plugin_printf = NULL;
+
 static const char *utf8_or(NSString *s, const char *fallback) {
     const char *p = s.UTF8String;
     return (p && *p) ? p : fallback;
@@ -52,12 +59,22 @@ static const char *find_kv(char * const arr[], const char *key) {
 }
 
 static void set_errstr(const char **errstr, const char *fmt, ...) {
-    if (errstr == NULL) return;
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(g_errbuf, sizeof(g_errbuf), fmt, ap);
     va_end(ap);
-    *errstr = g_errbuf;
+    if (errstr) *errstr = g_errbuf;
+    /* macOS sudo on Tahoe does not surface approval-plugin errstr to the
+     * terminal on its own. Use sudo's plugin_printf if open() captured it
+     * (proper channel that respects sudo's output settings); fall back to
+     * direct stderr write if it wasn't, so the user always sees a
+     * diagnostic. */
+    if (g_plugin_printf) {
+        g_plugin_printf(SUDO_CONV_ERROR_MSG, "%s\n", g_errbuf);
+    } else {
+        fprintf(stderr, "%s\n", g_errbuf);
+        fflush(stderr);
+    }
 }
 
 static int tsudo_open(unsigned int version,
@@ -70,9 +87,11 @@ static int tsudo_open(unsigned int version,
                       char * const submit_envp[],
                       char * const plugin_options[],
                       const char **errstr) {
-    (void)conversation; (void)plugin_printf; (void)settings;
+    (void)conversation; (void)settings;
     (void)submit_optind; (void)submit_argv;
     (void)submit_envp; (void)plugin_options;
+
+    g_plugin_printf = plugin_printf;
 
     if (SUDO_API_VERSION_GET_MAJOR(version) != SUDO_API_VERSION_MAJOR) {
         set_errstr(errstr, "tsudo: unsupported sudo plugin API major version %u",
@@ -93,6 +112,7 @@ static int tsudo_open(unsigned int version,
 static void tsudo_close(void) {
     g_have_invoking_uid = 0;
     g_invoking_uid = (uid_t)-1;
+    g_plugin_printf = NULL;
 }
 
 static int tsudo_check(char * const command_info[],

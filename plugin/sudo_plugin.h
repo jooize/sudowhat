@@ -15,7 +15,12 @@
 
 #define SUDO_APPROVAL_PLUGIN    4
 
-#define SUDO_CONV_ERROR_MSG     0x0006
+#define SUDO_CONV_PROMPT_ECHO_OFF   0x0001
+#define SUDO_CONV_PROMPT_ECHO_ON    0x0002
+#define SUDO_CONV_ERROR_MSG         0x0003
+#define SUDO_CONV_INFO_MSG          0x0004
+#define SUDO_CONV_PROMPT_MASK       0x0005
+#define SUDO_CONV_PROMPT_ECHO_OK    0x1000
 
 struct sudo_conv_message {
     int msg_type;
