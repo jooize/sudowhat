@@ -12,6 +12,8 @@
 
 #import <Foundation/Foundation.h>
 #import <LocalAuthentication/LocalAuthentication.h>
+#include <Security/Authorization.h>
+#include <Security/AuthorizationTags.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -211,10 +213,26 @@ static int tsudo_check(char * const command_info[],
 
         LAContext *ctx = [[LAContext alloc] init];
         ctx.localizedFallbackTitle = @"Use Password";
+
+        /* Tiered policy selection. Prefer
+         * LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion
+         * (renamed from ...WithBiometricsOrWatch in macOS 15; covers
+         * Apple Watch and iPhone) so a wrist double-click works
+         * alongside Touch ID. That policy has no password fallback
+         * though, so when the user has neither biometric nor a
+         * companion device available (lid closed without external Touch
+         * ID, Watch off-wrist, iPhone locked), fall back to
+         * LAPolicyDeviceOwnerAuthentication, which adds password as a
+         * last resort. canEvaluatePolicy reports availability against
+         * the EUID we already dropped to, so the companion/biometric
+         * checks see the user's enrollments. */
+        LAPolicy chosen = LAPolicyDeviceOwnerAuthentication;
         NSError *policyErr = nil;
-        BOOL canEval = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication
-                                        error:&policyErr];
-        if (!canEval) {
+        if ([ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion
+                             error:&policyErr]) {
+            chosen = LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion;
+        } else if (![ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication
+                                     error:&policyErr]) {
             (void)seteuid(0);
             close(preFd);
             set_errstr(errstr, "tsudo: cannot evaluate authentication policy: %s",
@@ -225,7 +243,7 @@ static int tsudo_check(char * const command_info[],
         __block BOOL allowed = NO;
         __block NSError *replyErr = nil;
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthentication
+        [ctx evaluatePolicy:chosen
             localizedReason:promptText
                       reply:^(BOOL success, NSError *err) {
             allowed = success;
@@ -233,6 +251,79 @@ static int tsudo_check(char * const command_info[],
             dispatch_semaphore_signal(sem);
         }];
         dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+
+        /* "Use Password" fallback for the BiometricsOrCompanion path.
+         * BiometricsOrCompanion has no password support: clicking the
+         * fallback button or otherwise failing biometric/companion
+         * returns LAErrorUserFallback or LAErrorAuthenticationFailed.
+         *
+         * Re-prompting with LAPolicyDeviceOwnerAuthentication is awkward
+         * UX (the second dialog also defaults to biometric when biometric
+         * is available, requiring a second "Use Password" click), so use
+         * Authorization Services here instead: a password-only dialog
+         * that displays our command in the prompt body via
+         * kAuthorizationEnvironmentPrompt. We're already running with
+         * EUID dropped to the invoking user, so AS auths against that
+         * account.
+         *
+         * Skip on LAErrorUserCancel so an explicit "Cancel" still
+         * cancels (no second dialog). */
+        if (!allowed
+            && chosen == LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion
+            && replyErr != nil
+            && [replyErr.domain isEqualToString:LAErrorDomain]) {
+            NSInteger code = replyErr.code;
+            BOOL shouldRetry = (code == LAErrorUserFallback ||
+                                code == LAErrorAuthenticationFailed ||
+                                code == LAErrorBiometryLockout);
+            if (shouldRetry) {
+                const char *p = promptText.UTF8String;
+                const char *promptUtf8 = p ? p : "";
+                AuthorizationItem rightItem = {
+                    .name = "system.privilege.admin",
+                    .valueLength = 0,
+                    .value = NULL,
+                    .flags = 0,
+                };
+                AuthorizationRights rights = { .count = 1, .items = &rightItem };
+
+                AuthorizationItem envItem = {
+                    .name = kAuthorizationEnvironmentPrompt,
+                    .valueLength = strlen(promptUtf8),
+                    .value = (void *)promptUtf8,
+                    .flags = 0,
+                };
+                AuthorizationEnvironment env = { .count = 1, .items = &envItem };
+
+                AuthorizationFlags flags = kAuthorizationFlagDefaults
+                                         | kAuthorizationFlagInteractionAllowed
+                                         | kAuthorizationFlagExtendRights;
+
+                AuthorizationRef auth = NULL;
+                OSStatus asStatus = AuthorizationCreate(&rights, &env, flags, &auth);
+                if (auth) {
+                    AuthorizationFree(auth, kAuthorizationFlagDefaults);
+                }
+
+                if (asStatus == errAuthorizationSuccess) {
+                    allowed = YES;
+                    replyErr = nil;
+                } else {
+                    NSString *desc;
+                    if (asStatus == errAuthorizationCanceled) {
+                        desc = @"user cancelled";
+                    } else if (asStatus == errAuthorizationDenied) {
+                        desc = @"password authentication failed";
+                    } else {
+                        desc = [NSString stringWithFormat:@"AuthorizationCreate failed: %d",
+                                (int)asStatus];
+                    }
+                    replyErr = [NSError errorWithDomain:NSOSStatusErrorDomain
+                                                   code:asStatus
+                                               userInfo:@{NSLocalizedDescriptionKey: desc}];
+                }
+            }
+        }
 
         /* Restore root EUID. If this fails, sudo cannot exec the target,
          * so abort hard rather than continuing in a degraded state. */
