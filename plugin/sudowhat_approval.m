@@ -313,9 +313,9 @@ static int sudowhat_check(char * const command_info[],
                 } else {
                     NSString *desc;
                     if (asStatus == errAuthorizationCanceled) {
-                        desc = @"user cancelled";
+                        desc = @"Authentication canceled.";
                     } else if (asStatus == errAuthorizationDenied) {
-                        desc = @"password authentication failed";
+                        desc = @"Password authentication failed.";
                     } else {
                         desc = [NSString stringWithFormat:@"AuthorizationCreate failed: %d",
                                 (int)asStatus];
@@ -336,7 +336,7 @@ static int sudowhat_check(char * const command_info[],
         if (!allowed) {
             close(preFd);
             set_errstr(errstr, "sudowhat: authorization denied: %s",
-                       utf8_or(replyErr.localizedDescription, "user cancelled"));
+                       utf8_or(replyErr.localizedDescription, "user canceled"));
             return 0;
         }
 

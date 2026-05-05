@@ -163,6 +163,8 @@ These are documented design trade-offs, not bugs.
 
 **GUI session detached.** `LAContext.evaluatePolicy` may fail when the user's GUI session has been fast-user-switched out. The plugin denies in that case — fail-closed by design.
 
+**Generic icon on the Watch / companion confirmation.** macOS sources the icon shown in the Touch ID prompt and the Apple Watch confirmation notification from the **calling process's** main bundle. The calling process is `sudo` — a CLI binary with no app bundle and no `CFBundleIcon` — so the system falls back to a generic document icon. `LAContext` exposes no public API to override it, and adding an icon to the plugin bundle has no effect (the system queries `sudo`, not the loaded `.so`). Customizing the icon would require shipping a separate signed helper `.app` and IPC'ing the prompt to it, which would reintroduce the agent dependency the current architecture deliberately removes. Trade-off accepted.
+
 ## Verification matrix
 
 After install, smoke-test the security properties:
