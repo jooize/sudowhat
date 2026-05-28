@@ -150,6 +150,7 @@
      * indicator. */
     const NSUInteger kMaxUserDisplay = 32;
     const NSUInteger kMaxCwdDisplay  = 80;
+    const NSUInteger kMaxVerifyDisplay = 32;
 
     NSString *userEscaped = ([user length] > 0)
         ? [self escapeControlChars:user]
@@ -173,11 +174,26 @@
     /* Verify code. The plugin has already printed the same value to the
      * user's controlling terminal; the user compares the two before
      * approving. Lives above the command region so it remains visible
-     * even when the command region overflows the screen. */
-    NSString *verifyLine = ([verifyCode length] > 0)
-        ? [NSString stringWithFormat:@"Verify code: %@",
-           [self escapeControlChars:verifyCode]]
-        : @"Verify code: unavailable";
+     * even when the command region overflows the screen.
+     *
+     * Head-capped like userPart/cwdPart so EVERY variable component of
+     * fixedOverhead is bounded by a constant — that is what makes the
+     * kMaxTotal budget hold structurally for any input, rather than relying
+     * on the caller keeping the code short. The production nonce is 4 chars
+     * (well under the cap), so this only ever fires on a malformed code, in
+     * which case a truncated-but-bounded line beats silently clipping the
+     * command region below it. */
+    NSString *verifyLine;
+    if ([verifyCode length] > 0) {
+        NSString *verifyEscaped = [self escapeControlChars:verifyCode];
+        NSString *verifyPart = (verifyEscaped.length > kMaxVerifyDisplay)
+            ? [[verifyEscaped substringToIndex:kMaxVerifyDisplay]
+                stringByAppendingString:@"…"]
+            : verifyEscaped;
+        verifyLine = [NSString stringWithFormat:@"Verify code: %@", verifyPart];
+    } else {
+        verifyLine = @"Verify code: unavailable";
+    }
 
     /* LA caps the localizedReason string at ~510 chars total — anything
      * past the cap is a hard NSString cut, including newlines and content
@@ -193,7 +209,17 @@
      * command region, because anything below it can be silently clipped.
      *
      * Budget 480 chars gives ~30 chars of safety margin against the
-     * observed cap. */
+     * observed cap.
+     *
+     * CAVEAT (untested across locales): the ~510 figure was measured only
+     * with the English system prefix ("..." is trying to ...). sudowhat's
+     * own strings are English-only, so OUR content length does not vary by
+     * locale. But if macOS caps the TOTAL sheet text (system prefix + our
+     * reason) rather than our reason alone, a longer localized prefix would
+     * eat into this budget and could clip the tail. Not observed; ~80%
+     * confidence the cap is reason-only. To confirm: render a near-480-char
+     * command under a long-prefix locale (e.g. German, Japanese) and check
+     * the trailer is not truncated in the sheet. If it is, lower kMaxTotal. */
     const NSUInteger kMaxTotal = 480;
 
     /* Trailing trust statement. Two things at once: gives a home to the
