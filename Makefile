@@ -32,7 +32,12 @@ PAM_OBJS    = pam/pam_sudowhat.o \
               pam/SudoConfChecker.o \
               pam/SignatureVerifier.o
 
-.PHONY: all sign install install-force install-binaries print-install-binaries uninstall test clean
+.PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit clean
+
+TEST_CFLAGS = $(CFLAGS) -Itests
+TEST_FRAMEWORKS = -framework Foundation -framework CoreFoundation \
+                  -framework Security -framework SystemConfiguration \
+                  -framework LocalAuthentication
 
 all: build/sudowhat_approval.so build/pam_sudowhat.so
 
@@ -88,6 +93,26 @@ uninstall:
 
 test: install
 	./install/self-test.sh
+
+# test-unit: offline unit tests for the pure helpers (no root, no install).
+# Builds standalone test executables and runs them; non-zero exit on failure.
+test-unit: build/test_prompt_formatter build/test_plugin_internals
+	@build/test_prompt_formatter
+	@build/test_plugin_internals
+
+build/test_prompt_formatter: tests/test_prompt_formatter.m tests/sw_test.h \
+		plugin/PromptFormatter.m plugin/PromptFormatter.h | build
+	$(CC) $(TEST_CFLAGS) -framework Foundation -o $@ \
+	    tests/test_prompt_formatter.m plugin/PromptFormatter.m
+
+# Includes plugin/sudowhat_approval.m directly to reach its static helpers, so
+# that file is compiled into the binary - do NOT also pass it as a source.
+build/test_plugin_internals: tests/test_plugin_internals.m tests/sw_test.h \
+		plugin/sudowhat_approval.m plugin/PromptFormatter.m \
+		plugin/SignatureVerifier.m plugin/SessionGuard.m | build
+	$(CC) $(TEST_CFLAGS) $(TEST_FRAMEWORKS) -o $@ \
+	    tests/test_plugin_internals.m plugin/PromptFormatter.m \
+	    plugin/SignatureVerifier.m plugin/SessionGuard.m
 
 clean:
 	rm -rf build $(PLUGIN_OBJS) $(PAM_OBJS)
