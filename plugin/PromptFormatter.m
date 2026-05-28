@@ -39,8 +39,16 @@
             /* run of 1 or 2: fall through to literal emit */
         }
 
-        if (c < 0x20 || c == 0x7f) {
-            /* C0 controls and DEL. */
+        if (c == '\n') {
+            [out appendString:@"\\n"];
+        } else if (c == '\r') {
+            [out appendString:@"\\r"];
+        } else if (c == '\t') {
+            [out appendString:@"\\t"];
+        } else if (c == '\0') {
+            [out appendString:@"\\0"];
+        } else if (c < 0x20 || c == 0x7f) {
+            /* C0 controls and DEL not already handled above. */
             [out appendFormat:@"\\x%02x", (unsigned)c];
         } else if (c >= 0x80 && c <= 0x9f) {
             /* C1 control range, including U+0085 NEL which some text
