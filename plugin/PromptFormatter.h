@@ -13,11 +13,30 @@
 
 #import <Foundation/Foundation.h>
 
+/* SWPromptStyle picks between two display modes for the same prompt
+ * content:
+ *   SystemSheet    — LAContext Touch ID sheet. macOS prepends
+ *                    `"sudo" is trying to ` and appends a terminal
+ *                    period. Our text uses a lowercase verb and no
+ *                    trailing period so the surrounding sentence reads
+ *                    grammatically.
+ *   SelfContained  — Authorization Services password dialog. macOS
+ *                    shows our text verbatim with no wrapper, so we
+ *                    capitalize the verb and add our own terminal
+ *                    period. */
+typedef NS_ENUM(NSInteger, SWPromptStyle) {
+    SWPromptStyleSystemSheet = 0,
+    SWPromptStyleSelfContained,
+};
+
 @interface SudoWhatPromptFormatter : NSObject
 
 + (NSString *)formatWithCommandPath:(NSString *)path
                           runasUser:(NSString *)user
-                                argv:(NSArray<NSString *> *)argv;
+                                cwd:(NSString *)cwd
+                         verifyCode:(NSString *)verifyCode
+                                argv:(NSArray<NSString *> *)argv
+                              style:(SWPromptStyle)style;
 
 /* Exposed for unit tests. Public so a future test target can call it. */
 + (NSString *)quoteToken:(NSString *)token;
