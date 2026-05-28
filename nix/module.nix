@@ -36,14 +36,15 @@ in {
       Plugin sudowhat_approval_plugin ${cfg.package}/libexec/sudo/sudowhat_approval.so
     '';
 
-    environment.etc."sudoers.d/sudowhat" = {
-      mode = "0440";
-      text = ''
-        # Managed by the sudowhat nix-darwin module.
-        # Disable sudo's auth cache so every invocation re-prompts via sudowhat.
-        Defaults timestamp_timeout=0
-      '';
-    };
+    # nix-darwin's environment.etc has no `mode` attribute (unlike NixOS).
+    # The default symlink target in /nix/store is mode 0444 — not group/world
+    # writable, which is sudo's only hard requirement for sudoers.d files.
+    # The 0440 convention is convention, not enforcement.
+    environment.etc."sudoers.d/sudowhat".text = ''
+      # Managed by the sudowhat nix-darwin module.
+      # Disable sudo's auth cache so every invocation re-prompts via sudowhat.
+      Defaults timestamp_timeout=0
+    '';
 
     environment.etc."pam.d/sudo_local".text = ''
       # Managed by the sudowhat nix-darwin module.
