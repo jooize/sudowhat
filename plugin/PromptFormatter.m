@@ -90,18 +90,6 @@
         [parts addObject:[self quoteToken:argv[i]]];
     }
 
-    /* Cap displayed tokens. The LAContext sheet grows vertically without
-     * bound and can fall off the screen; trust-critical info lives above
-     * the command for that reason, but we still cap here so the command
-     * region itself doesn't go absurdly long. 50 tokens is generous for
-     * legitimate use and short enough to keep the prompt manageable. */
-    const NSUInteger kMaxDisplayedTokens = 50;
-    NSUInteger totalParts = parts.count;
-    NSArray<NSString *> *shownParts = (totalParts > kMaxDisplayedTokens)
-        ? [parts subarrayWithRange:NSMakeRange(0, kMaxDisplayedTokens)]
-        : parts;
-    NSString *commandLine = [shownParts componentsJoinedByString:@" "];
-
     /* Header. SystemSheet uses a lowercase verb so the surrounding
      * sentence `"sudo" is trying to <header>` reads grammatically.
      * SelfContained is the entire rendered message, so a capitalized verb
@@ -127,32 +115,114 @@
            [self escapeControlChars:verifyCode]]
         : @"Verify code: unavailable";
 
-    /* Footer ONLY when we truncated — when the full command fits, an
-     * always-on count line is just noise. Trade-off: without a footer,
-     * the SystemSheet auto-period falls on the last character of the
-     * command region, which can look weird depending on the last token.
-     * Accepted because the no-truncation case is the common one and
-     * cleaner-but-occasionally-ugly beats always-noisy. */
-    BOOL truncated = shownParts.count < totalParts;
-    NSString *footer = nil;
-    if (truncated) {
-        footer = [NSString stringWithFormat:@"Showing %lu of %lu arguments",
-                  (unsigned long)shownParts.count,
-                  (unsigned long)totalParts];
-        if (style == SWPromptStyleSelfContained) {
-            footer = [footer stringByAppendingString:@"."];
+    /* LA caps the localizedReason string at ~510 chars total — anything
+     * past the cap is a hard NSString cut, including newlines and content
+     * intended to live on subsequent lines. Empirically verified by
+     * rendering a 1040-char marker arg and confirming a "Showing N of M"
+     * line emitted past the cap never appeared in the sheet. AS has a
+     * much larger budget (rendered the full 1040 chars + footer), but we
+     * apply the same conservative char budget to both styles so the
+     * truncation indicator looks identical in Touch ID and password
+     * fallback flows.
+     *
+     * Practical consequence: the truncation indicator MUST live ABOVE the
+     * command region, because anything below it can be silently clipped.
+     *
+     * Budget 480 chars gives ~30 chars of safety margin against the
+     * observed cap. */
+    const NSUInteger kMaxTotal = 480;
+
+    /* Pass 1: try to fit everything with no truncation indicator.
+     * Layout overhead: header + "\n\n" + verifyLine + "\n\n\n" */
+    NSUInteger noTruncOverhead = header.length + 2 + verifyLine.length + 3;
+    NSUInteger budget1 = (kMaxTotal > noTruncOverhead)
+        ? kMaxTotal - noTruncOverhead : 0;
+
+    NSUInteger allPartsLen = 0;
+    for (NSString *p in parts) {
+        allPartsLen += p.length + (allPartsLen > 0 ? 1 : 0); /* space sep */
+    }
+
+    NSString *const kTruncLabel = @"Display truncated to fit";
+    NSArray<NSString *> *shownParts = nil;
+    BOOL truncationAbove = NO;     /* indicator on its own line above command */
+    /* (When neither flag is set and shownParts == parts, no truncation
+     * happened. When middle-break fires, the indicator is embedded inside
+     * the partial arg's text via "\n\nLABEL\n\n" so it appears between
+     * head and tail in the rendered command region.) */
+
+    if (allPartsLen <= budget1) {
+        shownParts = parts;
+    } else {
+        /* Greedily fit whole parts. The first part that doesn't fit
+         * either:
+         *   - triggers a middle-break (if it's the LAST part): render its
+         *     head + "\n\nLABEL\n\n" + tail inline. The double newlines
+         *     above and below the label make the break impossible to
+         *     miss visually, which is the point.
+         *   - or, falls back to the "above command" indicator (if there
+         *     are later parts we'd otherwise drop silently, or if no room
+         *     for a meaningful partial). Trailing parts are dropped. */
+        NSMutableArray<NSString *> *fitted = [NSMutableArray array];
+        NSUInteger used = 0;
+        for (NSUInteger i = 0; i < parts.count; i++) {
+            NSString *p = parts[i];
+            NSUInteger sep = (used > 0 ? 1 : 0);
+            if (used + sep + p.length <= budget1) {
+                [fitted addObject:p];
+                used += sep + p.length;
+                continue;
+            }
+            BOOL isLast = (i == parts.count - 1);
+            BOOL didMiddleBreak = NO;
+            if (isLast) {
+                /* Middle-break overhead: " " (sep) + head + "\n\n" + label
+                 * + "\n\n" + tail.  We've already subtracted `sep` above;
+                 * inside the partial: 2 + label.length + 2 = label+4. */
+                NSUInteger blockOverhead = kTruncLabel.length + 4;
+                NSUInteger available = 0;
+                if (budget1 > used + sep + blockOverhead) {
+                    available = budget1 - used - sep - blockOverhead;
+                }
+                /* Require at least this many content chars to bother
+                 * splitting; otherwise the head/tail fragments are too
+                 * short to be useful. */
+                const NSUInteger kMinPartial = 24;
+                if (available >= kMinPartial && p.length > available) {
+                    NSUInteger headLen = available / 2;
+                    NSUInteger tailLen = available - headLen;
+                    NSString *withBreak = [NSString stringWithFormat:
+                                            @"%@\n\n%@\n\n%@",
+                                            [p substringToIndex:headLen],
+                                            kTruncLabel,
+                                            [p substringFromIndex:p.length - tailLen]];
+                    [fitted addObject:withBreak];
+                    didMiddleBreak = YES;
+                }
+            }
+            if (!didMiddleBreak) {
+                truncationAbove = YES;
+            }
+            break;
         }
+        shownParts = fitted;
+    }
+
+    NSString *commandLine = [shownParts componentsJoinedByString:@" "];
+
+    /* SelfContained renders the entire prompt itself, so it ends with a
+     * period. SystemSheet relies on macOS auto-appending one. */
+    if (style == SWPromptStyleSelfContained) {
+        commandLine = [commandLine stringByAppendingString:@"."];
     }
 
     /* Layout. Blank lines are the structural separator; argv tokens are
-     * joined with spaces (not newlines) and escapeControlChars above
-     * scrubs Unicode line separators from every displayed string, so a
-     * blank line in the rendered prompt is unambiguously ours and not
-     * argv content. Two blank lines around the command region give it
-     * extra visual breathing room without needing a visible marker. */
-    if (footer != nil) {
-        return [NSString stringWithFormat:@"%@\n\n%@\n\n\n%@\n\n\n%@",
-                header, verifyLine, commandLine, footer];
+     * joined with spaces and escapeControlChars above scrubs Unicode line
+     * separators from every displayed string, so a blank line in the
+     * rendered prompt is unambiguously ours and not argv content. */
+    if (truncationAbove) {
+        return [NSString stringWithFormat:@"%@\n\n%@\n\n\n%@\n%@",
+                header, verifyLine, kTruncLabel, commandLine];
     }
     return [NSString stringWithFormat:@"%@\n\n%@\n\n\n%@",
             header, verifyLine, commandLine];
