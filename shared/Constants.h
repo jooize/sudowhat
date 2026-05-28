@@ -8,8 +8,11 @@
  * team-identifier requirement. In release builds, the team-ID requirement
  * is enforced.
  *
- * Both bundles must agree on the absolute install paths and the symbol name
- * sudo's dlsym call expects.
+ * SUDOWHAT_PLUGIN_PATH and SUDOWHAT_PAM_PATH default to /usr/local for the
+ * stock make/install flow, but can be overridden at build time via
+ * -DSUDOWHAT_PLUGIN_PATH=... / -DSUDOWHAT_PAM_PATH=... so a Nix derivation
+ * can bake its own $out store paths in. Both bundles must agree on these
+ * paths and on the symbol name sudo's dlsym call expects.
  */
 
 #ifndef SUDOWHAT_CONSTANTS_H
@@ -24,8 +27,14 @@
 /* Macro form so callers can embed at compile time. */
 #define SUDOWHAT_IS_DEV_BUILD() (strcmp(SUDOWHAT_TEAM_ID, "-") == 0)
 
+#ifndef SUDOWHAT_PLUGIN_PATH
 #define SUDOWHAT_PLUGIN_PATH    "/usr/local/libexec/sudo/sudowhat_approval.so"
+#endif
+
+#ifndef SUDOWHAT_PAM_PATH
 #define SUDOWHAT_PAM_PATH       "/usr/local/lib/pam/pam_sudowhat.so"
+#endif
+
 #define SUDOWHAT_PLUGIN_SYMBOL  "sudowhat_approval_plugin"
 #define SUDOWHAT_SUDO_CONF      "/etc/sudo.conf"
 

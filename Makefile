@@ -32,7 +32,7 @@ PAM_OBJS    = pam/pam_sudowhat.o \
               pam/SudoConfChecker.o \
               pam/SignatureVerifier.o
 
-.PHONY: all sign install install-force uninstall test clean
+.PHONY: all sign install install-force install-binaries print-install-binaries uninstall test clean
 
 all: build/sudowhat_approval.so build/pam_sudowhat.so
 
@@ -71,6 +71,17 @@ install: sign
 # /nix/store). Use only when you know the override is what you want.
 install-force: sign
 	./install/install.sh --force
+
+# install-binaries: install only the .so bundles to /usr/local; leaves
+# /etc alone and prints the snippets the user must add themselves. For
+# users managing /etc declaratively (nix-darwin, home-manager, Ansible).
+install-binaries: sign
+	./install/install-binaries.sh
+
+# print-install-binaries: print the install-binaries commands and /etc
+# snippets without running anything. Does not require root.
+print-install-binaries: all
+	./install/install-binaries.sh --print
 
 uninstall:
 	./install/uninstall.sh

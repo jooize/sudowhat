@@ -76,12 +76,15 @@ EOF
         cat >&2 <<EOF
 
 Options:
-  1. Manage these files in your configuration. For nix-darwin, use
-     the sudowhat module (see flake.nix in this repo, when shipped),
-     or copy the contents of config/{sudoers.d,pam.d}/*.sample into
-     your nix-darwin config and remove sudowhat's /etc writes.
+  1. Use the nix-darwin module. Add this repo's flake to your
+     darwin configuration and set 'services.sudowhat.enable = true;'
+     (see README.md and flake.nix). The module installs the .so
+     bundles from the Nix store and writes the three /etc files
+     declaratively, so there is no conflict to resolve.
   2. Run 'sudo make install-binaries' to install only the .so
-     bundles to /usr/local and manage the /etc files yourself.
+     bundles to /usr/local and manage the /etc files yourself
+     (or 'make print-install-binaries' to just print the commands
+     and snippets without running anything).
   3. Re-run with 'sudo make install-force' to override this check
      and clobber the symlinks anyway. Your configuration manager's
      next rebuild may then conflict or revert the change.

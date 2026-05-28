@@ -4,6 +4,10 @@ build/
 *.so
 *.dylib
 
+# Nix build symlink
+result
+result-*
+
 # macOS
 .DS_Store
 

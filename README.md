@@ -69,6 +69,39 @@ sudo make uninstall
 
 This restores stock sudo behavior, removing all four files sudowhat installs.
 
+### nix-darwin
+
+If you manage your Mac with nix-darwin, install everything declaratively — the binaries live in the Nix store, and the three `/etc` files are owned by nix-darwin, rotated atomically with the package. Add the flake to your darwin configuration:
+
+```nix
+{
+  inputs.sudowhat.url = "github:jooize/sudowhat";
+
+  outputs = { self, nixpkgs, nix-darwin, sudowhat, ... }: {
+    darwinConfigurations."<host>" = nix-darwin.lib.darwinSystem {
+      modules = [
+        sudowhat.darwinModules.default
+        { services.sudowhat.enable = true; }
+      ];
+    };
+  };
+}
+```
+
+To audit before depending, pin to a local clone (`git+file:///path/to/clone`) or a reviewed commit (`github:jooize/sudowhat/<sha>`).
+
+### Other configuration managers
+
+If you manage `/etc` with something else (home-manager, Ansible, Chef), use:
+
+```sh
+sudo make install-binaries       # installs only the .so bundles to /usr/local
+make print-install-binaries      # prints what install-binaries would do plus
+                                 # the /etc snippets you need to add yourself
+```
+
+`install.sh` refuses to overwrite `/etc` files that are symlinks into `/nix/store` (nix-darwin's signature), pointing you at one of the above flows. Override with `make install-force` if you really mean to clobber them.
+
 ## How it works
 
 Two signed Mach-O bundles loaded into sudo's process, mutually verifying each other's code signature. No daemon, no agent, no IPC.
