@@ -39,7 +39,14 @@
             /* run of 1 or 2: fall through to literal emit */
         }
 
-        if (c == '\n') {
+        if (c == '\\') {
+            /* Escape literal backslashes so the prompt is unambiguous
+             * about what the source bytes were. Without this, a literal
+             * two-char `\n` in argv would render identically to our
+             * escape for a real 0x0a newline, letting an attacker spoof
+             * the "this contained a newline" signal with plain text. */
+            [out appendString:@"\\\\"];
+        } else if (c == '\n') {
             [out appendString:@"\\n"];
         } else if (c == '\r') {
             [out appendString:@"\\r"];

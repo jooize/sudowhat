@@ -27,7 +27,7 @@ alias unlock='sudo chown attacker:wheel /etc/sudoers'
 
 You think you're unlocking your own file. The prompt looks identical. You biometrically approve a sudoers takeover.
 
-**sudowhat closes that wedge.** The system-trusted Touch ID dialog displays the resolved command path and arguments — the same bytes sudo will pass to `execve` — *before* you authorize. Argv tokens are shell-quoted; control characters (newlines, terminal escapes) are rendered as `\xNN` escapes so an attacker cannot smuggle hidden lines into the prompt.
+**sudowhat closes that wedge.** The system-trusted Touch ID dialog displays the resolved command path and arguments — the same bytes sudo will pass to `execve` — *before* you authorize. Argv tokens are shell-quoted; backslashes and control characters are escaped (named — `\n`, `\r`, `\t`, `\0`, `\\` — or hex — `\xNN`, `\uNNNN`) so the rendered prompt is unambiguous about its source bytes. An attacker cannot smuggle hidden lines into the prompt, nor can a literal `\n` in argv pose as a real newline.
 
 ## Authentication methods
 
