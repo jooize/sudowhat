@@ -32,7 +32,7 @@ PAM_OBJS    = pam/pam_sudowhat.o \
               pam/SudoConfChecker.o \
               pam/SignatureVerifier.o
 
-.PHONY: all sign install uninstall test clean
+.PHONY: all sign install install-force uninstall test clean
 
 all: build/sudowhat_approval.so build/pam_sudowhat.so
 
@@ -65,6 +65,12 @@ sign: all
 
 install: sign
 	./install/install.sh
+
+# install-force: bypass the preflight that refuses to clobber /etc files
+# owned by another configuration manager (e.g. nix-darwin symlinks into
+# /nix/store). Use only when you know the override is what you want.
+install-force: sign
+	./install/install.sh --force
 
 uninstall:
 	./install/uninstall.sh

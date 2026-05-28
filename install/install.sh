@@ -3,8 +3,22 @@
 #
 # On any failure after a partial change, rolls back so the system is left
 # with stock sudo behavior, never half-installed.
+#
+# Flags:
+#   --force   Bypass the preflight check that refuses to clobber /etc files
+#             managed by another configuration manager (e.g. nix-darwin
+#             symlinks into /nix/store). Without --force the install aborts
+#             with a clear message so the user can decide how to proceed.
 
 set -euo pipefail
+
+FORCE=0
+for arg in "$@"; do
+    case "$arg" in
+        --force) FORCE=1 ;;
+        *) echo "install.sh: unknown arg '$arg'" >&2; exit 2 ;;
+    esac
+done
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "install.sh: must run as root" >&2
@@ -24,6 +38,56 @@ PAM_LOCAL="/etc/pam.d/sudo_local"
 if [ ! -f "$PLUGIN_SRC" ] || [ ! -f "$PAM_SRC" ]; then
     echo "install.sh: build artifacts missing; run 'make sign' first" >&2
     exit 1
+fi
+
+# Preflight: refuse to clobber /etc files that another configuration
+# manager owns. Detection is "is the path a symlink whose target is
+# inside /nix/store" — that's the nix-darwin signature; same pattern
+# would catch other store-based managers if they appear. Without this
+# guard, a 'make install' on nix-darwin would silently replace the
+# nix-darwin symlink with a regular file, and the next 'darwin-rebuild
+# switch' aborts (or worse, the user's nix-darwin config and the
+# installed file drift out of sync). --force bypasses for users who
+# really mean it.
+if [ "$FORCE" -ne 1 ]; then
+    CONFLICTS=()
+    for path in "$SUDO_CONF" "$SUDOERS_D" "$PAM_LOCAL"; do
+        if [ -L "$path" ]; then
+            target="$(readlink "$path")"
+            case "$target" in
+                /nix/store/*) CONFLICTS+=("$path -> $target") ;;
+            esac
+        fi
+    done
+    if [ "${#CONFLICTS[@]}" -gt 0 ]; then
+        cat >&2 <<EOF
+install.sh: refusing to overwrite /etc files managed by another tool.
+
+The following paths are symlinks into /nix/store, which means a
+configuration manager (nix-darwin, home-manager, or similar) owns
+them. Overwriting them with regular files would break that
+ownership and the next rebuild would either revert sudowhat's
+changes or abort with a conflict.
+
+EOF
+        for c in "${CONFLICTS[@]}"; do
+            printf '  %s\n' "$c" >&2
+        done
+        cat >&2 <<EOF
+
+Options:
+  1. Manage these files in your configuration. For nix-darwin, use
+     the sudowhat module (see flake.nix in this repo, when shipped),
+     or copy the contents of config/{sudoers.d,pam.d}/*.sample into
+     your nix-darwin config and remove sudowhat's /etc writes.
+  2. Run 'sudo make install-binaries' to install only the .so
+     bundles to /usr/local and manage the /etc files yourself.
+  3. Re-run with 'sudo make install-force' to override this check
+     and clobber the symlinks anyway. Your configuration manager's
+     next rebuild may then conflict or revert the change.
+EOF
+        exit 1
+    fi
 fi
 
 ROLLBACK=()
