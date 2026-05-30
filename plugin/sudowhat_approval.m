@@ -34,17 +34,22 @@
 static char g_errbuf[512];
 
 /* The sudo plugin API only delivers user_info[] to open(), not to check().
- * Stash what check() needs at open-time. */
-static uid_t g_invoking_uid = (uid_t)-1;
-static int   g_have_invoking_uid = 0;
-static char  g_invoking_tty[256];
-static int   g_have_invoking_tty = 0;
-static char  g_invoking_cwd[1024];
-static int   g_have_invoking_cwd = 0;
-static char  g_invoking_term_program[64];
-static int   g_have_invoking_term_program = 0;
-static char  g_invoking_term[64];
-static int   g_have_invoking_term = 0;
+ * Stash what check() needs at open-time. One snapshot of the invoking
+ * context; each have_* flag marks whether its field was populated. */
+typedef struct {
+    uid_t uid;
+    int   have_uid;
+    char  tty[256];
+    int   have_tty;
+    char  cwd[1024];
+    int   have_cwd;
+    char  term_program[64];
+    int   have_term_program;
+    char  term[64];
+    int   have_term;
+} sw_invoking_ctx;
+
+static sw_invoking_ctx g_inv = { .uid = (uid_t)-1 };
 
 /* Apple's sudo on macOS Tahoe does not surface approval-plugin errstr to
  * the terminal: the user sees a silent non-zero exit on deny. Capture the
@@ -131,8 +136,8 @@ static int sudowhat_open(unsigned int version,
         set_errstr(errstr, "sudowhat: missing uid in user_info");
         return -1;
     }
-    g_invoking_uid = (uid_t)strtoul(uidStr, NULL, 10);
-    g_have_invoking_uid = 1;
+    g_inv.uid = (uid_t)strtoul(uidStr, NULL, 10);
+    g_inv.have_uid = 1;
 
     /* tty is optional context for the prompt trailer; absence is not fatal.
      * Apple's sudo on Tahoe has been observed leaving tty= empty even when
@@ -146,24 +151,24 @@ static int sudowhat_open(unsigned int version,
      *      controlling tty still exists upstream. */
     const char *ttyStr = find_kv(user_info, "tty");
     if (ttyStr != NULL && ttyStr[0] != '\0') {
-        snprintf(g_invoking_tty, sizeof(g_invoking_tty), "%s", ttyStr);
-        g_have_invoking_tty = 1;
+        snprintf(g_inv.tty, sizeof(g_inv.tty), "%s", ttyStr);
+        g_inv.have_tty = 1;
     }
-    if (!g_have_invoking_tty) {
+    if (!g_inv.have_tty) {
         const char *t = ttyname(STDERR_FILENO);
         if (t == NULL) t = ttyname(STDIN_FILENO);
         if (t != NULL && t[0] != '\0') {
-            snprintf(g_invoking_tty, sizeof(g_invoking_tty), "%s", t);
-            g_have_invoking_tty = 1;
+            snprintf(g_inv.tty, sizeof(g_inv.tty), "%s", t);
+            g_inv.have_tty = 1;
         }
     }
-    if (!g_have_invoking_tty) {
+    if (!g_inv.have_tty) {
         int fd = open("/dev/tty", O_RDONLY | O_CLOEXEC);
         if (fd >= 0) {
             const char *t = ttyname(fd);
             if (t != NULL && t[0] != '\0') {
-                snprintf(g_invoking_tty, sizeof(g_invoking_tty), "%s", t);
-                g_have_invoking_tty = 1;
+                snprintf(g_inv.tty, sizeof(g_inv.tty), "%s", t);
+                g_inv.have_tty = 1;
             }
             close(fd);
         }
@@ -175,8 +180,8 @@ static int sudowhat_open(unsigned int version,
      * it just inherits the invoking cwd — this stash covers that case. */
     const char *cwdStr = find_kv(user_info, "cwd");
     if (cwdStr != NULL && cwdStr[0] != '\0') {
-        snprintf(g_invoking_cwd, sizeof(g_invoking_cwd), "%s", cwdStr);
-        g_have_invoking_cwd = 1;
+        snprintf(g_inv.cwd, sizeof(g_inv.cwd), "%s", cwdStr);
+        g_inv.have_cwd = 1;
     }
 
     /* TERM_PROGRAM is set by the terminal emulator (Ghostty, iTerm.app,
@@ -186,9 +191,9 @@ static int sudowhat_open(unsigned int version,
      * the trust signal is the channel-binding nonce, not this string. */
     const char *termProg = find_kv(submit_envp, "TERM_PROGRAM");
     if (termProg != NULL && termProg[0] != '\0') {
-        snprintf(g_invoking_term_program, sizeof(g_invoking_term_program),
+        snprintf(g_inv.term_program, sizeof(g_inv.term_program),
                  "%s", termProg);
-        g_have_invoking_term_program = 1;
+        g_inv.have_term_program = 1;
     }
     /* TERM is the secondary fallback: terminals like kitty and alacritty
      * don't set TERM_PROGRAM and only identify themselves via a
@@ -196,23 +201,16 @@ static int sudowhat_open(unsigned int version,
      * class as TERM_PROGRAM — env-set, spoofable. */
     const char *term = find_kv(submit_envp, "TERM");
     if (term != NULL && term[0] != '\0') {
-        snprintf(g_invoking_term, sizeof(g_invoking_term), "%s", term);
-        g_have_invoking_term = 1;
+        snprintf(g_inv.term, sizeof(g_inv.term), "%s", term);
+        g_inv.have_term = 1;
     }
     return 1;
 }
 
 static void sudowhat_close(void) {
-    g_have_invoking_uid = 0;
-    g_invoking_uid = (uid_t)-1;
-    g_have_invoking_tty = 0;
-    g_invoking_tty[0] = '\0';
-    g_have_invoking_cwd = 0;
-    g_invoking_cwd[0] = '\0';
-    g_have_invoking_term_program = 0;
-    g_invoking_term_program[0] = '\0';
-    g_have_invoking_term = 0;
-    g_invoking_term[0] = '\0';
+    /* Single struct-zero clears every field and resets the have_* flags, so
+     * adding a field to sw_invoking_ctx can't leave a stale value behind. */
+    g_inv = (sw_invoking_ctx){ .uid = (uid_t)-1 };
     g_plugin_printf = NULL;
 }
 
@@ -233,14 +231,14 @@ static int sudowhat_check(char * const command_info[],
         }
 
         /* (2) Console-UID guard. */
-        if (!g_have_invoking_uid) {
+        if (!g_inv.have_uid) {
             set_errstr(errstr, "sudowhat: invoking uid not captured at open()");
             return -1;
         }
-        if (![SudoWhatSessionGuard isInvokingUserActiveConsole:g_invoking_uid]) {
+        if (![SudoWhatSessionGuard isInvokingUserActiveConsole:g_inv.uid]) {
             set_errstr(errstr, "sudowhat: not in active GUI session "
                                "(invoking uid %u is not the console user)",
-                       g_invoking_uid);
+                       g_inv.uid);
             return 0;
         }
 
@@ -302,8 +300,8 @@ static int sudowhat_check(char * const command_info[],
         NSString *cwd = nil;
         if (cwdC && cwdC[0] != '\0') {
             cwd = [NSString stringWithUTF8String:cwdC];
-        } else if (g_have_invoking_cwd) {
-            cwd = [NSString stringWithUTF8String:g_invoking_cwd];
+        } else if (g_inv.have_cwd) {
+            cwd = [NSString stringWithUTF8String:g_inv.cwd];
         }
 
         /* Channel-binding nonce: print to the user's terminal via sudo's
@@ -359,11 +357,11 @@ static int sudowhat_check(char * const command_info[],
          * Policy is LAPolicyDeviceOwnerAuthentication so password
          * fallback is available when biometric isn't (sensor unavailable,
          * lid closed). */
-        if (seteuid(g_invoking_uid) != 0) {
+        if (seteuid(g_inv.uid) != 0) {
             int saved = errno;
             close(preFd);
             set_errstr(errstr, "sudowhat: seteuid(%u) failed: %s",
-                       g_invoking_uid, strerror(saved));
+                       g_inv.uid, strerror(saved));
             return -1;
         }
 
