@@ -23,14 +23,19 @@ LDFLAGS = -bundle \
           -framework SystemConfiguration \
           -framework LocalAuthentication
 
+# SignatureVerifier is one shared source (shared/SignatureVerifier.m) compiled
+# once per bundle with a distinct class name baked in via -DSW_SIGVERIFIER_CLASS
+# (see shared/SignatureVerifier.h). The two objects must stay separate so each
+# bundle registers its own class and sudo can load both without an Objective-C
+# duplicate-class collision.
 PLUGIN_OBJS = plugin/sudowhat_approval.o \
               plugin/PromptFormatter.o \
-              plugin/SignatureVerifier.o \
+              build/plugin_SignatureVerifier.o \
               plugin/SessionGuard.o
 
 PAM_OBJS    = pam/pam_sudowhat.o \
               pam/SudoConfChecker.o \
-              pam/SignatureVerifier.o
+              build/pam_SignatureVerifier.o
 
 .PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit clean
 
@@ -44,11 +49,26 @@ all: build/sudowhat_approval.so build/pam_sudowhat.so
 build:
 	mkdir -p build
 
+# Per-bundle class name for the shared SignatureVerifier. Target-specific
+# CFLAGS propagate to every prerequisite object, so the bundle's caller
+# (sudowhat_approval.o / pam_sudowhat.o) sees the same -D when it includes
+# SignatureVerifier.h - without it the header's #error guard fails the build.
+build/sudowhat_approval.so: CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier
+build/pam_sudowhat.so:      CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerifier
+
 build/sudowhat_approval.so: $(PLUGIN_OBJS) | build
 	$(CC) $(LDFLAGS) -o $@ $(PLUGIN_OBJS)
 
 build/pam_sudowhat.so: $(PAM_OBJS) | build
 	$(CC) $(LDFLAGS) -o $@ $(PAM_OBJS)
+
+# Two objects from one source, each with its own class name. The explicit -D
+# here keeps these rules correct even when built directly (not via a .so).
+build/plugin_SignatureVerifier.o: shared/SignatureVerifier.m shared/SignatureVerifier.h shared/Constants.h | build
+	$(CC) $(CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier -c shared/SignatureVerifier.m -o $@
+
+build/pam_SignatureVerifier.o: shared/SignatureVerifier.m shared/SignatureVerifier.h shared/Constants.h | build
+	$(CC) $(CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerifier -c shared/SignatureVerifier.m -o $@
 
 %.o: %.m
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -109,10 +129,11 @@ build/test_prompt_formatter: tests/test_prompt_formatter.m tests/sw_test.h \
 # that file is compiled into the binary - do NOT also pass it as a source.
 build/test_plugin_internals: tests/test_plugin_internals.m tests/sw_test.h \
 		plugin/sudowhat_approval.m plugin/PromptFormatter.m \
-		plugin/SignatureVerifier.m plugin/SessionGuard.m | build
-	$(CC) $(TEST_CFLAGS) $(TEST_FRAMEWORKS) -o $@ \
+		shared/SignatureVerifier.m plugin/SessionGuard.m | build
+	$(CC) $(TEST_CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier \
+	    $(TEST_FRAMEWORKS) -o $@ \
 	    tests/test_plugin_internals.m plugin/PromptFormatter.m \
-	    plugin/SignatureVerifier.m plugin/SessionGuard.m
+	    shared/SignatureVerifier.m plugin/SessionGuard.m
 
 clean:
 	rm -rf build $(PLUGIN_OBJS) $(PAM_OBJS)
