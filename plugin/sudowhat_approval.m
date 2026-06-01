@@ -21,6 +21,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <pwd.h>
+#include <syslog.h>
 
 #include "sudo_plugin.h"
 #include "Constants.h"
@@ -230,11 +231,42 @@ static int sudowhat_check(char * const command_info[],
             return 0;
         }
 
-        /* (2) Console-UID guard. */
+        /* (2) Caller classification.
+         *
+         * sudowhat gates *escalation* — an unprivileged principal reaching
+         * for root — behind the console user's biometric. A uid-0 caller is
+         * not escalating: it is already root. sudo grants it nothing it can't
+         * already do (root can run the command directly, rewrite
+         * /etc/sudo.conf, or unload this plugin), so the console gate is
+         * security-vacuous for root yet actively breaks legitimate
+         * root-context automation that shells out through sudo — notably
+         * nix-darwin / home-manager per-user activation, which runs as root
+         * and invokes `launchctl asuser <uid> sudo -u <user>` (invoking uid
+         * 0). Those calls are non-interactive, so prompting would fail-closed
+         * with no human to answer. Exempt root from the console gate and the
+         * prompt; syslog it so the bypass is auditable rather than silent.
+         * The mutual integrity check above still runs, so a tampered plugin
+         * cannot ride this path. */
         if (!g_inv.have_uid) {
             set_errstr(errstr, "sudowhat: invoking uid not captured at open()");
             return -1;
         }
+        if (g_inv.uid == 0) {
+            /* Log the decision, not the command. sudo's own log_allowed (on
+             * by default) already records the full command line to authpriv;
+             * repeating argv here would only leak potentially sensitive
+             * arguments into a second place. Record just the fact that the
+             * console-user guard was deliberately bypassed. */
+            syslog(LOG_AUTHPRIV | LOG_NOTICE,
+                   "sudowhat: console-user guard bypassed (root-initiated sudo)");
+            return 1;
+        }
+
+        /* Non-root caller: require the active console (GUI) user. A different
+         * non-root uid — an SSH session, a service account, another logged-in
+         * user — must not be able to pop a Touch ID dialog the console user
+         * reflexively approves, so a uid that isn't the console uid is
+         * denied without prompting. */
         if (![SudoWhatSessionGuard isInvokingUserActiveConsole:g_inv.uid]) {
             set_errstr(errstr, "sudowhat: not in active GUI session "
                                "(invoking uid %u is not the console user)",

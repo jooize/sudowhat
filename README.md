@@ -124,7 +124,8 @@ sudo /usr/bin/foo bar
 /etc/sudo.conf
   └── Plugin sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so
       • SecStaticCodeCheckValidity on pam_sudowhat.so (mutual)
-      • SCDynamicStoreCopyConsoleUser == invoking UID (SSH-attacker guard)
+      • uid 0 (root) caller: exempt — system automation, not escalation
+      • else SCDynamicStoreCopyConsoleUser == invoking UID (SSH-attacker guard)
       • formats the command with shell-quoting and control-char escapes
       • seteuid drops to the user
       • LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometricsOrCompanion)
@@ -141,7 +142,9 @@ sudo /usr/bin/foo bar
 
 **Fail-closed:** any failure of either component aborts sudo. No path leads to `pam_opendirectory`-style permissive defaults. Apple's stock `pam_tid.so` is the broken behavior we're fixing — falling back to it would be regression, not recovery.
 
-**SSH-attacker defense:** the plugin compares the invoking UID (from sudo's `user_info["uid"]`) to the active console UID (`SCDynamicStoreCopyConsoleUser`). Mismatch → deny without prompting. An SSH session cannot pop a Touch ID dialog the local user reflexively approves.
+**SSH-attacker defense:** the plugin compares the invoking UID (from sudo's `user_info["uid"]`) to the active console UID (`SCDynamicStoreCopyConsoleUser`). A non-root UID that isn't the console user → deny without prompting. An SSH session cannot pop a Touch ID dialog the local user reflexively approves.
+
+**Root callers are exempt — by design.** sudowhat gates *escalation*: an unprivileged principal reaching for root. A caller that is already root (uid 0) is not escalating, and a sudo plugin loaded inside a root process cannot meaningfully constrain root anyway — root can run the command directly, rewrite `/etc/sudo.conf`, or unload the plugin. Gating root would add no security while breaking legitimate root-context automation that shells out through sudo: nix-darwin / home-manager per-user activation runs as root and invokes `launchctl asuser <uid> sudo -u <user>` (invoking uid 0); the same pattern appears in launchd jobs and installer postinstall scripts, and these are non-interactive (no human to answer a prompt). So a uid-0 caller is allowed without a prompt, and the bypass is logged to the auth log (`syslog`/`LOG_AUTHPRIV`) so it is auditable rather than silent. The console gate still applies to every non-root caller — which is the entire population the gate can actually defend against.
 
 **Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache. Every privileged command re-prompts.
 
@@ -179,7 +182,7 @@ Bundles are signed with your Developer ID Application certificate. The team-iden
 
 | | |
 |---|---|
-| Latest release | `v0.4.1` |
+| Latest release | `v0.4.2` |
 | Tested on | macOS Tahoe (Darwin 25.4) |
 | Architecture | Apple silicon (arm64) |
 | Signing | ad-hoc dev mode shipped; Developer ID release planned |
@@ -210,6 +213,7 @@ sudo -k && sudo /bin/echo hello                  # cancel; expect "sudowhat: aut
 sudo -k && sudo /bin/echo $'hidden\nsudoers'    # control chars escape literally
 sudo /bin/echo first; sudo /bin/echo second      # no auth caching; two prompts
 ssh localhost 'sudo -n /bin/echo from-ssh' 2>&1 # SSH attacker guard
+sudo -k && sudo sudo /bin/echo nested-root      # inner sudo (caller=root) exempt: one prompt, then logged bypass
 sudo make uninstall                              # stock sudo behavior restored
 ```
 
