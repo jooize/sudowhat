@@ -1,5 +1,72 @@
 # Design note: legitimate non-console sudo
 
+**Status: implemented in v0.5.0.** This began as a design recommendation. The
+shipped design is summarized in "As built" immediately below; the longer
+"Original exploration" further down is kept for rationale but was superseded in
+two deliberate ways (a session-based console check, and three cut checks).
+
+## As built (v0.5.0)
+
+Goal: let a non-root, non-console caller — an SSH session, or unattended
+automation — use sudo without reopening the reflexive-approval hole the console
+guard exists to close, by **deferring to sudo's own machinery instead of
+rebuilding it inside the plugin.**
+
+- **Classification is by security session, not uid.** `SessionGuard` (moved to
+  `shared/`, compiled into both bundles) calls
+  `SessionGetInfo(callerSecuritySession, …)` and treats the caller as the local
+  console **iff** the session has graphic access, is not remote, and the console
+  uid equals the invoking uid. A uid comparison alone cannot tell "user 501 at
+  the Mac" from "user 501 over SSH" — and a hardware probe confirmed a same-uid
+  SSH session *does* render the LAContext sheet on the console. This swap also
+  closes a latent same-uid hole in the previous uid-only guard.
+- **The console-gate.** `pam_sudowhat` gains a second role: invoked as
+  `auth sufficient … console-gate`, it returns `PAM_SUCCESS` only for the local
+  console user (who is therefore never asked for a password — Touch ID in the
+  approval plugin is their gate) and `PAM_AUTH_ERR` otherwise, so a non-console
+  caller falls through the parent `/etc/pam.d/sudo` chain to sudo's native
+  `pam_smartcard` / `pam_opendirectory` password on their *own* terminal.
+  Integrity stays a separate `requisite` line; the same signed binary serves
+  both roles, branching on its module argument.
+- **The step-aside.** For a non-console caller the approval plugin returns
+  *allow before any `seteuid`/LAContext* — but only when `/etc/pam.d/sudo_local`
+  is the gate variant (a token check that the `console-gate` line is present at
+  the plugin's own module path). If it is not the gate variant (the default
+  `pam_permit` config), a non-console caller is denied exactly as before —
+  stepping aside over a `pam_permit` chain would grant passwordless root.
+- **One opt-in.** `services.sudowhat.allowNonConsole` (default `false`) selects
+  the gate variant of `sudo_local`. `timestampTimeout` is a separate option
+  (default `0`); the module never emits `timestamp_type=global`.
+
+The README's "Console vs. non-console callers" table gives the resulting
+behavior matrix.
+
+### Deliberately NOT built (cut from the exploration below)
+
+The exploration proposed three pre-step-aside config checks plus a hardened
+symlink reader. Two were cut as defense-in-depth against a *root* attacker, who
+is out of the threat model — anyone who can rewrite `/etc/pam.d/*` is already
+root:
+
+- **Scanning `/etc/pam.d/sudo`** for an unconditional-success `sufficient` line
+  (`pam_permit` / `pam_tid` / `pam_reattach`) after the include — **cut**.
+- **Scanning sudoers for `timestamp_type=global`** — **cut**; moot while
+  `timestamp_timeout` is 0, and the module never emits `global`.
+- **lstat-per-symlink-hop integrity reading** of the PAM files — **cut**;
+  content match at the plugin's own (signature-verified) module path is the
+  decisive signal, and ownership of a resolved `/nix/store` target is vacuous.
+
+The one kept check is the load-bearing one: *is the gate variant actually
+installed* before the plugin steps aside.
+
+---
+
+## Original exploration
+
+> The sections below are the original analysis. Where they describe the three
+> config checks, the lstat reader, the build-time gate-line equality test, or a
+> uid-based console comparison, "As built" above supersedes them.
+
 Status: design recommendation for the project author. Scope: how sudowhat should
 let a non-root, non-console caller use sudo without reopening the hole the console
 guard exists to close — by **deferring to sudo's own machinery instead of rebuilding

@@ -81,7 +81,13 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
     darwinConfigurations."<host>" = nix-darwin.lib.darwinSystem {
       modules = [
         sudowhat.darwinModules.default
-        { services.sudowhat.enable = true; }
+        {
+          services.sudowhat.enable = true;
+          # Let SSH / unattended callers sudo via a password on their own
+          # terminal (default false = local console Touch ID only). See
+          # "Console vs. non-console callers".
+          # services.sudowhat.allowNonConsole = true;
+        }
       ];
     };
   };
@@ -125,7 +131,10 @@ sudo /usr/bin/foo bar
   └── Plugin sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so
       • SecStaticCodeCheckValidity on pam_sudowhat.so (mutual)
       • uid 0 (root) caller: exempt — system automation, not escalation
-      • else SCDynamicStoreCopyConsoleUser == invoking UID (SSH-attacker guard)
+      • else: caller must be the LOCAL CONSOLE session — SessionGetInfo()
+        reports graphic access and is not remote, and the console UID equals
+        the invoking UID. A non-console caller is denied (or, with
+        allowNonConsole, allowed without a sheet — see below).
       • formats the command with shell-quoting and control-char escapes
       • seteuid drops to the user
       • LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometricsOrCompanion)
@@ -138,15 +147,38 @@ sudo /usr/bin/foo bar
   ▼  sudo execve("/usr/bin/foo", ["bar"], ...)
 ```
 
+With `services.sudowhat.allowNonConsole` enabled, the second `sudo_local` line
+becomes `auth sufficient pam_sudowhat.so console-gate` instead of `pam_permit.so`.
+That console-gate succeeds (no password) **only** for the local console user, and
+fails for everyone else — so a non-console caller falls through the parent
+`/etc/pam.d/sudo` chain to sudo's native `pam_smartcard` / `pam_opendirectory`
+password on the caller's *own* terminal, and the approval plugin steps aside for
+them (no sheet) once sudo has authenticated them.
+
 **Trust root:** Apple Developer ID code signing. In a release build, `SignatureVerifier` enforces the team-identifier requirement `anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"`. Forging the integrity check requires forging your developer signature.
 
 **Fail-closed:** any failure of either component aborts sudo. No path leads to `pam_opendirectory`-style permissive defaults. Apple's stock `pam_tid.so` is the broken behavior we're fixing — falling back to it would be regression, not recovery.
 
-**SSH-attacker defense:** the plugin compares the invoking UID (from sudo's `user_info["uid"]`) to the active console UID (`SCDynamicStoreCopyConsoleUser`). A non-root UID that isn't the console user → deny without prompting. An SSH session cannot pop a Touch ID dialog the local user reflexively approves.
+**Non-console defense (SSH, automation).** Before prompting, the plugin classifies the caller by its **security session**, not by uid: a local GUI login has graphic access and is not remote, whereas an SSH session is remote and a non-graphical (system-daemon) session lacks graphic access (`SessionGetInfo`). A uid comparison alone cannot tell them apart — the same user, logged in at the Mac and over SSH, shares one uid — and a same-uid SSH session can otherwise render a Touch ID sheet on the console screen. A non-console caller therefore never reaches the biometric / Authorization Services path. By default it is **denied without a prompt**. With `services.sudowhat.allowNonConsole` enabled it is instead routed to sudo's own password / smartcard factor on the caller's *own* terminal — never a sheet on the console — and the plugin steps aside once sudo has authenticated it. This separates *local-GUI* callers from *remote/headless* ones; it does **not** separate the human from another process inside the same GUI login (a background gui-domain agent is treated as console — see [Known limitations](#known-limitations)). See [Console vs. non-console callers](#console-vs-non-console-callers).
 
 **Root callers are exempt — by design.** sudowhat gates *escalation*: an unprivileged principal reaching for root. A caller that is already root (uid 0) is not escalating, and a sudo plugin loaded inside a root process cannot meaningfully constrain root anyway — root can run the command directly, rewrite `/etc/sudo.conf`, or unload the plugin. Gating root would add no security while breaking legitimate root-context automation that shells out through sudo: nix-darwin / home-manager per-user activation runs as root and invokes `launchctl asuser <uid> sudo -u <user>` (invoking uid 0); the same pattern appears in launchd jobs and installer postinstall scripts, and these are non-interactive (no human to answer a prompt). So a uid-0 caller is allowed without a prompt, and the bypass is logged to the auth log (`syslog`/`LOG_AUTHPRIV`) so it is auditable rather than silent. The console gate still applies to every non-root caller — which is the entire population the gate can actually defend against.
 
-**Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache. Every privileged command re-prompts.
+**Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache, so every privileged command re-prompts. The value is configurable via `services.sudowhat.timestampTimeout`; the module never sets `timestamp_type=global`.
+
+## Console vs. non-console callers
+
+sudowhat decides *where* a caller may authenticate by its security session — a local GUI login versus a remote or headless one — not by uid. A caller running as the same user as the console login but over SSH is still treated as non-console.
+
+| Caller | Default (`allowNonConsole = false`) | With `allowNonConsole = true` |
+|---|---|---|
+| Local console (GUI) user | Touch ID prompt showing the command | Touch ID prompt showing the command |
+| Interactive remote session (e.g. SSH) | Denied without a prompt | Password / smartcard on the caller's own terminal; no prompt on the console |
+| Unattended job (launchd / cron, no GUI) | Denied without a prompt | Runs if a sudoers rule authorizes it (e.g. `NOPASSWD`); no prompt on the console |
+| Root (uid 0) | Allowed, logged to the auth log | Allowed, logged to the auth log |
+
+In every case a non-console caller authenticates (if at all) through sudo's own machinery on its own session — it is never shown a biometric / Authorization Services sheet, which would render on the console user's screen. `allowNonConsole` grants no authority on its own: sudoers still decides who may run what.
+
+"Non-console" here means a *remote or non-graphical* session. A background process inside your **local GUI login** — e.g. a gui-domain `LaunchAgent` — shares that login's session and is classified as **console**, so it can raise a Touch ID sheet like any process in your session; see [Known limitations](#known-limitations).
 
 ## What gets installed
 
@@ -182,7 +214,7 @@ Bundles are signed with your Developer ID Application certificate. The team-iden
 
 | | |
 |---|---|
-| Latest release | `v0.4.2` |
+| Latest release | `v0.5.0` |
 | Tested on | macOS Tahoe (Darwin 25.4) |
 | Architecture | Apple silicon (arm64) |
 | Signing | ad-hoc dev mode shipped; Developer ID release planned |
@@ -190,6 +222,8 @@ Bundles are signed with your Developer ID Application certificate. The team-iden
 ## Known limitations
 
 These are documented design trade-offs, not bugs.
+
+**A background process in your own GUI login can still prompt.** sudowhat classifies callers by their security session (local-GUI vs. remote / non-graphical), which keeps SSH and system-daemon callers off the console biometric. It cannot, from inside one process, distinguish *you at the keyboard* from another process running inside the *same* GUI login — a gui-domain `LaunchAgent`, a `nohup`/`setsid` job, or a helper of a compromised app all inherit the login session's attributes and are classified as console. Such a process can raise a Touch ID sheet on your screen. The defense against approving one you did not initiate is sudowhat's core design, not the session guard: the prompt shows the **exact command**, and a **verification code** is printed to the terminal that launched sudo — a prompt you did not start shows a command you do not expect and a code on no terminal you can see, so you can reject it. This is the reflexive-approval surface inherent to any in-session biometric; sudowhat narrows it (remote and headless callers are excluded outright) but does not eliminate it.
 
 **TOCTOU between approval and execve.** A residual window exists between sudowhat returning "approved" and sudo's `execve` of the resolved binary path. The plugin opens the file before the prompt, re-stats it after, and denies if the `(dev, inode)` pair changed — but a swap occurring after the final stat and before sudo's exec cannot be detected from inside a plugin. macOS lacks `fexecve`, so eliminating this window completely requires patching sudo itself. For binaries on root-only paths (`/bin`, `/usr/bin`, `/usr/sbin`), an attacker capable of writing there already has root and doesn't need TOCTOU.
 

@@ -106,6 +106,61 @@ static void test_nonce_alphabet_and_length(void) {
     OK(seen[0] == 0, "NUL never produced as a nonce char");
 }
 
+static void test_gate_variant_detection(void) {
+    /* sudowhat_text_is_gate_variant decides whether the non-console step-aside
+     * is safe: it must accept ONLY a /etc/pam.d/sudo_local that has both the
+     * integrity requisite line and the console-gate sufficient line, at our own
+     * baked module path (SUDOWHAT_PAM_PATH). Anything else -> deny. */
+    NSString *pam = @SUDOWHAT_PAM_PATH;
+
+    NSString *gate = [NSString stringWithFormat:
+        @"# managed by nix\nauth requisite %@\nauth sufficient %@ console-gate\n",
+        pam, pam];
+    OK(sudowhat_text_is_gate_variant(gate), "gate variant accepted");
+
+    /* The default console-only install: pam_permit, no password path. */
+    NSString *permit = [NSString stringWithFormat:
+        @"auth requisite %@\nauth sufficient pam_permit.so\n", pam];
+    OK(!sudowhat_text_is_gate_variant(permit), "pam_permit variant rejected");
+
+    /* A console-gate line pointing at some OTHER module must not count — this
+     * is the coupling to what the installer actually wrote. */
+    NSString *wrongPath = [NSString stringWithFormat:
+        @"auth requisite %@\n"
+        @"auth sufficient /usr/local/lib/pam/evil.so console-gate\n", pam];
+    OK(!sudowhat_text_is_gate_variant(wrongPath),
+       "console-gate at wrong module path rejected");
+
+    /* Both lines are required: gate line without the integrity requisite. */
+    NSString *gateOnly = [NSString stringWithFormat:
+        @"auth sufficient %@ console-gate\n", pam];
+    OK(!sudowhat_text_is_gate_variant(gateOnly),
+       "console-gate without integrity requisite rejected");
+
+    /* sufficient at our path but missing the console-gate argument: that is an
+     * unconditional pass for everyone (passwordless), must be rejected. */
+    NSString *noArg = [NSString stringWithFormat:
+        @"auth requisite %@\nauth sufficient %@\n", pam, pam];
+    OK(!sudowhat_text_is_gate_variant(noArg),
+       "sufficient at our path without console-gate arg rejected");
+
+    OK(!sudowhat_text_is_gate_variant(nil), "nil content rejected");
+    OK(!sudowhat_text_is_gate_variant(@""), "empty content rejected");
+
+    /* Whitespace-insensitive, comments and blank lines tolerated. */
+    NSString *spaced = [NSString stringWithFormat:
+        @"\n  auth\trequisite\t%@   \n# a comment\n"
+        @"   auth   sufficient    %@    console-gate  \n", pam, pam];
+    OK(sudowhat_text_is_gate_variant(spaced),
+       "tabs/extra spaces/blank lines/comments tolerated");
+
+    /* A commented-out gate line must NOT satisfy the check. */
+    NSString *commented = [NSString stringWithFormat:
+        @"auth requisite %@\n# auth sufficient %@ console-gate\n", pam, pam];
+    OK(!sudowhat_text_is_gate_variant(commented),
+       "commented-out console-gate line does not count");
+}
+
 static void test_nonce_edge_sizes(void) {
     char b1[1] = { '?' };
     generate_verify_nonce(b1, sizeof b1);
@@ -128,8 +183,9 @@ int main(void) {
         test_find_kv_empty_value();
         test_find_kv_first_match_wins();
         test_find_kv_value_with_equals();
+        test_gate_variant_detection();
         test_nonce_alphabet_and_length();
         test_nonce_edge_sizes();
-        SW_SUMMARY("plugin internals (find_kv, nonce)");
+        SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce)");
     }
 }

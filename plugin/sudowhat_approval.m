@@ -91,6 +91,55 @@ static const char *find_kv(char * const arr[], const char *key) {
     return NULL;
 }
 
+/* Classify /etc/pam.d/sudo_local content: is it the non-console GATE variant?
+ *
+ * The step-aside below is only safe when this file routes a non-console caller
+ * through sudo's real password / smartcard factor instead of the unconditional
+ * `pam_permit` the default console-only install ships. The gate variant has
+ * BOTH our integrity line and our console-gate line, at OUR own module path:
+ *   auth requisite  <SUDOWHAT_PAM_PATH>
+ *   auth sufficient <SUDOWHAT_PAM_PATH> console-gate
+ * Token-based and whitespace-insensitive (matching pam/SudoConfChecker);
+ * '#' comments and blank lines are skipped. Pinning the module to
+ * SUDOWHAT_PAM_PATH — the same store path the plugin already trusts for the
+ * mutual signature check — is what couples this check to what the installer
+ * wrote: a console-gate line pointing at some other module does not count.
+ * file-static so the offline unit test can exercise it directly. */
+static BOOL sudowhat_text_is_gate_variant(NSString *content) {
+    if (content == nil) return NO;
+    BOOL haveIntegrity = NO, haveGate = NO;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *rawLine in [content componentsSeparatedByString:@"\n"]) {
+        NSString *line = [rawLine stringByTrimmingCharactersInSet:ws];
+        if (line.length == 0 || [line hasPrefix:@"#"]) continue;
+        NSMutableArray<NSString *> *f = [NSMutableArray array];
+        for (NSString *tok in [line componentsSeparatedByCharactersInSet:ws]) {
+            if (tok.length > 0) [f addObject:tok];
+        }
+        if (f.count < 3) continue;
+        if (![f[0] isEqualToString:@"auth"]) continue;
+        if (![f[2] isEqualToString:@SUDOWHAT_PAM_PATH]) continue;
+        if (f.count == 3 && [f[1] isEqualToString:@"requisite"]) {
+            haveIntegrity = YES;
+        }
+        if (f.count >= 4 && [f[1] isEqualToString:@"sufficient"]
+            && [f[3] isEqualToString:@SUDOWHAT_GATE_ARG]) {
+            haveGate = YES;
+        }
+    }
+    return haveIntegrity && haveGate;
+}
+
+/* Reads /etc/pam.d/sudo_local and reports whether the non-console password
+ * path (the gate variant) is installed. Unreadable / absent / wrong shape ->
+ * NO, so the step-aside falls back to a deny. */
+static BOOL sudowhat_noncon_password_path_installed(void) {
+    NSString *content = [NSString stringWithContentsOfFile:@SUDOWHAT_SUDO_LOCAL
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+    return sudowhat_text_is_gate_variant(content);
+}
+
 static void set_errstr(const char **errstr, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -262,12 +311,45 @@ static int sudowhat_check(char * const command_info[],
             return 1;
         }
 
-        /* Non-root caller: require the active console (GUI) user. A different
-         * non-root uid — an SSH session, a service account, another logged-in
-         * user — must not be able to pop a Touch ID dialog the console user
-         * reflexively approves, so a uid that isn't the console uid is
-         * denied without prompting. */
+        /* Non-root caller: classify by the invoking SECURITY SESSION (see
+         * SessionGuard — a local GUI login vs. an SSH / launchd / headless
+         * session), NOT by uid alone. A non-console caller must never be able
+         * to pop a Touch ID dialog the console user reflexively approves —
+         * proven on hardware, a same-uid SSH session DOES render the sheet on
+         * the console — so a non-console caller never reaches the LAContext/AS
+         * block below. */
         if (![SudoWhatSessionGuard isInvokingUserActiveConsole:g_inv.uid]) {
+            /* sudo already authenticated this caller per the installed PAM
+             * chain (the approval plugin runs after PAM). If the non-console
+             * GATE variant of /etc/pam.d/sudo_local is installed, a real factor
+             * on the caller's OWN session was required: the console-gate line
+             * fails for a non-console caller, so the parent /etc/pam.d/sudo
+             * chain falls through to pam_smartcard / pam_opendirectory on the
+             * caller's own tty (or the caller matched an operator NOPASSWD
+             * rule). Either way, rendering a sheet here would put it on the
+             * CONSOLE user's screen, so we STEP ASIDE and allow.
+             *
+             * TRIPWIRE FOR MAINTAINERS: do NOT move this below the
+             * seteuid(g_inv.uid)+LAContext/AS block, and never raise a
+             * biometric/Authorization Services sheet for a non-console uid.
+             * BiometricsOrCompanion is a same-session SEP confirmation of a
+             * locally rendered sheet, not an out-of-band push — for a
+             * non-console caller it renders in the CONSOLE user's session,
+             * which is exactly the reflexive-approval hole this guard exists to
+             * close. Remote approval would need the rejected daemon design.
+             *
+             * If the gate variant is NOT installed (default console-only
+             * config: `sufficient pam_permit.so`), PAM authenticated nobody, so
+             * stepping aside would grant passwordless root — deny instead,
+             * exactly as before this feature existed. */
+            if (sudowhat_noncon_password_path_installed()) {
+                syslog(LOG_AUTHPRIV | LOG_NOTICE,
+                       "sudowhat: non-console caller allowed (invoking uid %u, "
+                       "tty %s); sudo required a factor on the caller's own "
+                       "session", g_inv.uid,
+                       g_inv.have_tty ? g_inv.tty : "unknown");
+                return 1;
+            }
             set_errstr(errstr, "sudowhat: not in active GUI session "
                                "(invoking uid %u is not the console user)",
                        g_inv.uid);

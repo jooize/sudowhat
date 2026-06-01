@@ -20,6 +20,46 @@ in {
         not the default flake output.
       '';
     };
+
+    allowNonConsole = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Allow non-console callers — SSH sessions, unattended automation — to
+        use sudo. When false (the default), only the local, physically present
+        console (GUI) user may sudo; every non-console caller is denied without
+        a prompt.
+
+        When true, the `sudo_local` gate variant is installed: the local
+        console user is still gated by the approval plugin's Touch ID prompt
+        (no password), while a non-console caller is routed to sudo's native
+        password / smartcard factor on their OWN terminal — never a biometric
+        sheet on the console — and the approval plugin steps aside for them
+        once sudo has authenticated them.
+
+        This grants no new authority: sudoers still decides who may run what.
+        It only changes whether an already-authorized non-console caller is
+        permitted to authenticate at all. The classification is by the caller's
+        security session (local GUI vs. remote/headless), not by uid, so an SSH
+        session running as the same user as the console login is correctly
+        treated as non-console.
+      '';
+    };
+
+    timestampTimeout = lib.mkOption {
+      type = lib.types.int;
+      default = 0;
+      description = ''
+        Value for sudo's `Defaults timestamp_timeout` (minutes). 0 (the
+        default) disables the credential cache, so every privileged command
+        re-prompts. A positive value re-enables sudo's normal per-tty grace
+        period; under the default per-tty scope a cached credential is only
+        ever reused on the same terminal that already authenticated a real
+        factor. The module never sets `timestamp_type=global` — the one mode
+        that would let a console credential be reused by a same-uid remote
+        session.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -42,27 +82,49 @@ in {
     # The 0440 convention is convention, not enforcement.
     environment.etc."sudoers.d/sudowhat".text = ''
       # Managed by the sudowhat nix-darwin module.
-      # Disable sudo's auth cache so every invocation re-prompts via sudowhat.
-      Defaults timestamp_timeout=0
+      # timestamp_timeout is services.sudowhat.timestampTimeout (default 0 =
+      # cache disabled, every invocation re-prompts). timestamp_type is left at
+      # sudo's default (per-tty) and never set to global.
+      Defaults timestamp_timeout=${toString cfg.timestampTimeout}
     '';
 
-    environment.etc."pam.d/sudo_local".text = ''
-      # Managed by the sudowhat nix-darwin module.
-      #
-      # sudowhat: integrity-check PAM module. The Touch ID prompt itself is
-      # rendered post-PAM by the sudo approval plugin loaded from
-      # /etc/sudo.conf.
-      #
-      # Apple's openpam fork does not parse the Linux-PAM bracket-list syntax
-      # `[success=done default=die]`, so the same fail-closed semantics are
-      # expressed with two simple-flag lines:
-      #
-      #   requisite  pam_sudowhat.so   - failure aborts sudo immediately
-      #   sufficient pam_permit.so     - success terminates the auth chain so the
-      #                                  parent /etc/pam.d/sudo never falls back
-      #                                  to pam_smartcard / pam_opendirectory
-      auth    requisite     ${cfg.package}/lib/pam/pam_sudowhat.so
-      auth    sufficient    pam_permit.so
-    '';
+    # /etc/pam.d/sudo_local — two variants. Apple's openpam fork does not parse
+    # the Linux-PAM bracket-list syntax `[success=done default=die]`, so the
+    # fail-closed semantics are expressed with simple control flags.
+    #
+    # The module path is the FULL store path, never a bare name: pam_sudowhat.so
+    # is not in openpam's /usr/lib/pam search dir, and a `sufficient` line whose
+    # module fails to load does not succeed — so a bare name would silently
+    # break the console short-circuit. The approval plugin checks for this exact
+    # path (SUDOWHAT_PAM_PATH, baked from the same package) before stepping
+    # aside, so the two always reference one store path.
+    environment.etc."pam.d/sudo_local".text =
+      if cfg.allowNonConsole then ''
+        # Managed by the sudowhat nix-darwin module (allowNonConsole = true).
+        #
+        #   requisite  pam_sudowhat.so                - integrity; aborts sudo on tamper
+        #   sufficient pam_sudowhat.so console-gate    - PAM_SUCCESS iff the caller is the
+        #                                                local console (GUI) user, so the
+        #                                                console user is never asked for a
+        #                                                password (Touch ID gates them in the
+        #                                                approval plugin). For a non-console
+        #                                                caller it fails, so the parent
+        #                                                /etc/pam.d/sudo chain falls through to
+        #                                                pam_smartcard / pam_opendirectory on
+        #                                                the caller's own terminal.
+        auth    requisite     ${cfg.package}/lib/pam/pam_sudowhat.so
+        auth    sufficient    ${cfg.package}/lib/pam/pam_sudowhat.so console-gate
+      '' else ''
+        # Managed by the sudowhat nix-darwin module.
+        #
+        #   requisite  pam_sudowhat.so   - integrity; failure aborts sudo immediately
+        #   sufficient pam_permit.so     - success terminates the auth chain so the
+        #                                  parent /etc/pam.d/sudo never falls back
+        #                                  to pam_smartcard / pam_opendirectory.
+        #                                  Non-console callers are denied by the
+        #                                  approval plugin (no password path here).
+        auth    requisite     ${cfg.package}/lib/pam/pam_sudowhat.so
+        auth    sufficient    pam_permit.so
+      '';
   };
 }

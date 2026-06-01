@@ -31,11 +31,12 @@ LDFLAGS = -bundle \
 PLUGIN_OBJS = plugin/sudowhat_approval.o \
               plugin/PromptFormatter.o \
               build/plugin_SignatureVerifier.o \
-              plugin/SessionGuard.o
+              build/plugin_SessionGuard.o
 
 PAM_OBJS    = pam/pam_sudowhat.o \
               pam/SudoConfChecker.o \
-              build/pam_SignatureVerifier.o
+              build/pam_SignatureVerifier.o \
+              build/pam_SessionGuard.o
 
 .PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit clean
 
@@ -53,14 +54,21 @@ build:
 # CFLAGS propagate to every prerequisite object, so the bundle's caller
 # (sudowhat_approval.o / pam_sudowhat.o) sees the same -D when it includes
 # SignatureVerifier.h - without it the header's #error guard fails the build.
-build/sudowhat_approval.so: CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier
-build/pam_sudowhat.so:      CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerifier
+build/sudowhat_approval.so: CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier \
+                                      -DSW_SESSIONGUARD_CLASS=SudoWhatSessionGuard
+build/pam_sudowhat.so:      CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerifier \
+                                      -DSW_SESSIONGUARD_CLASS=SudoWhatPamSessionGuard
 
 build/sudowhat_approval.so: $(PLUGIN_OBJS) | build
 	$(CC) $(LDFLAGS) -o $@ $(PLUGIN_OBJS)
 
+# -undefined dynamic_lookup: the PAM module calls back into the host's PAM
+# library (pam_get_user, …). Those symbols are provided by sudo (the PAM host)
+# at load time, so leave them undefined at link and bind them at dlopen — this
+# also avoids statically binding to nixpkgs' openpam libpam, which would risk
+# operating on a pam_handle_t the host created with a different PAM at runtime.
 build/pam_sudowhat.so: $(PAM_OBJS) | build
-	$(CC) $(LDFLAGS) -o $@ $(PAM_OBJS)
+	$(CC) $(LDFLAGS) -Wl,-undefined,dynamic_lookup -o $@ $(PAM_OBJS)
 
 # Two objects from one source, each with its own class name. The explicit -D
 # here keeps these rules correct even when built directly (not via a .so).
@@ -69,6 +77,16 @@ build/plugin_SignatureVerifier.o: shared/SignatureVerifier.m shared/SignatureVer
 
 build/pam_SignatureVerifier.o: shared/SignatureVerifier.m shared/SignatureVerifier.h shared/Constants.h | build
 	$(CC) $(CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerifier -c shared/SignatureVerifier.m -o $@
+
+# SessionGuard is one shared source compiled once per bundle with a distinct
+# class name (same rationale as SignatureVerifier above): both bundles load
+# into the same sudo process. The plugin's console guard and the PAM
+# console-gate therefore run identical session logic from one source.
+build/plugin_SessionGuard.o: shared/SessionGuard.m shared/SessionGuard.h shared/Constants.h | build
+	$(CC) $(CFLAGS) -DSW_SESSIONGUARD_CLASS=SudoWhatSessionGuard -c shared/SessionGuard.m -o $@
+
+build/pam_SessionGuard.o: shared/SessionGuard.m shared/SessionGuard.h shared/Constants.h | build
+	$(CC) $(CFLAGS) -DSW_SESSIONGUARD_CLASS=SudoWhatPamSessionGuard -c shared/SessionGuard.m -o $@
 
 %.o: %.m
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -129,11 +147,12 @@ build/test_prompt_formatter: tests/test_prompt_formatter.m tests/sw_test.h \
 # that file is compiled into the binary - do NOT also pass it as a source.
 build/test_plugin_internals: tests/test_plugin_internals.m tests/sw_test.h \
 		plugin/sudowhat_approval.m plugin/PromptFormatter.m \
-		shared/SignatureVerifier.m plugin/SessionGuard.m | build
+		shared/SignatureVerifier.m shared/SessionGuard.m | build
 	$(CC) $(TEST_CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier \
+	    -DSW_SESSIONGUARD_CLASS=SudoWhatSessionGuard \
 	    $(TEST_FRAMEWORKS) -o $@ \
 	    tests/test_plugin_internals.m plugin/PromptFormatter.m \
-	    shared/SignatureVerifier.m plugin/SessionGuard.m
+	    shared/SignatureVerifier.m shared/SessionGuard.m
 
 clean:
 	rm -rf build $(PLUGIN_OBJS) $(PAM_OBJS)

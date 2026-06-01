@@ -37,5 +37,15 @@
 
 #define SUDOWHAT_PLUGIN_SYMBOL  "sudowhat_approval_plugin"
 #define SUDOWHAT_SUDO_CONF      "/etc/sudo.conf"
+#define SUDOWHAT_SUDO_LOCAL     "/etc/pam.d/sudo_local"
+
+/* Module argument that selects pam_sudowhat's second role, the console-gate
+ * (vs. its default integrity role when invoked with no argument). The PAM
+ * gate-variant `sudo_local` passes it as
+ *   auth sufficient <pam_sudowhat.so> console-gate
+ * and the approval plugin looks for this exact token when deciding whether the
+ * non-console password path is installed. One definition, three readers
+ * (nix module emits it, pam_sudowhat branches on it, the plugin checks it). */
+#define SUDOWHAT_GATE_ARG       "console-gate"
 
 #endif
