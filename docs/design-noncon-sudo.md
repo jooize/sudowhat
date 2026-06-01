@@ -1,276 +1,442 @@
 # Design note: legitimate non-console sudo
 
 Status: design recommendation for the project author. Scope: how sudowhat should
-treat a non-root, non-console caller without reopening the hole the console guard exists
-to close.
+let a non-root, non-console caller use sudo without reopening the hole the console
+guard exists to close — by **deferring to sudo's own machinery instead of rebuilding
+it inside the plugin.**
+
+This note supersedes an earlier draft that proposed a signed grant table and a
+plugin-internal PAM password path. Both reinvented mechanisms sudo already ships. The
+design below was then adversarially red-teamed against this box (Tahoe / Darwin 25.4.0);
+the safety framing in particular changed as a result — see "What the plugin can and
+cannot know."
 
 ## Problem restated
 
 sudowhat's console guard (`SessionGuard isInvokingUserActiveConsole:`, the deny at
-`plugin/sudowhat_approval.m:270-275`) currently denies *every* non-root, non-console
-caller without prompting. That is correct and safe, but it strands two legitimate
-populations:
+`plugin/sudowhat_approval.m:270`) denies *every* non-root, non-console caller without
+prompting. That is correct and safe, but it strands two legitimate populations:
 
-- **Case 1 — remote interactive admin.** A human SSH'd into the box, sitting at a real
-  controlling tty (the SSH PTY), who needs per-command root. Today: hard deny.
-- **Case 2 — unattended automation.** A launchd job, CI runner, cron task, or service
-  account with *no human and possibly no tty*, that needs scoped root. Today: hard deny
-  (correctly — there is nobody to authenticate).
+- **Unattended automation.** A LaunchAgent / cron job / service account (e.g. uid 501)
+  that needs scoped root while no human is present — possibly with no tty.
+- **Remote-interactive admin.** A human SSH'd into their own Mac, at a real PTY,
+  who needs per-command root while logged out of (or away from) the GUI.
 
 The hard constraint that governs both: **no auth surface may ever render on the active
 console session's screen on behalf of a non-console caller.** That is the entire reason
-the guard exists, and nothing below is allowed to weaken it. Two further project
-invariants bound the solution space: no daemon, no agent, no IPC, no cloud; and every
-error path fails closed (deny).
+the guard exists. Two further project invariants bound the solution: no daemon / agent /
+IPC / cloud, and every error path fails closed (deny).
 
-## The key lever
+## The reframe: stop adding a layer
 
-The load-bearing insight across all four candidate designs is **auth-surface routing by
-caller class**: the *deny* in the guard is not a security primitive in itself — it is a
-proxy for "do not raise a GUI sheet for this caller." Once you separate *which surface*
-authenticates from *whether to authenticate*, the guard can become a fork instead of a
-wall.
+The original guard treats *every* non-console caller as untrusted because, with the
+default PAM config, sudowhat's biometric is the *only* real authentication — sudo's PAM
+stack is short-circuited (`sudo_local`: `requisite pam_sudowhat.so` then
+`sufficient pam_permit.so`), so PAM authenticates *nobody*. Under that config, letting a
+non-console caller past the guard would hand them root with no authentication at all.
+The guard is what prevents that.
 
-Why this is sound, grounded in the threat model:
+But sudo already has machinery for exactly these two populations, and it is more battle-
+tested than anything sudowhat would write:
 
-- **Reflexive approval is specifically a GUI-on-console threat.** Both GUI surfaces this
-  codebase uses — `LAContext.evaluatePolicy` (`sudowhat_approval.m:434`) and
-  `AuthorizationCreate(kAuthorizationFlagInteractionAllowed)` (`:491`) — route through
-  SecurityAgent / authd, which draw on the **active foreground GUI session regardless of
-  the triggering uid or the `seteuid` in effect** (the `seteuid(g_inv.uid)` at `:392`
-  binds the *account* the sheet authenticates, not the *screen* it renders on). So a
-  non-console caller that reaches either call can pop a sheet in front of the seated
-  user, who taps it out of habit. *That* is the hole.
-- **A tty-password surface is safe for a non-console caller.** `SUDO_CONV_PROMPT_ECHO_OFF`
-  delivered through sudo's own conversation function is plain terminal I/O on the *sudo
-  process's controlling tty* — for an SSH-launched sudo, the SSH PTY, **not** the console
-  tty. The console user never sees it and is never asked to approve anything. Design D's
-  red-team verified this directly: TIOCSTI is restricted on modern macOS and writing
-  another session's PTY needs privilege the attacker lacks, so a non-console caller
-  cannot redirect this prompt onto the console user's terminal.
-- **The AS / LAContext GUI surface is NOT safe for a non-console caller, and must never
-  be used for one.** Design C's analysis is the decisive negative result here: Apple's
-  BiometricsOrCompanion (Watch/iPhone) is a *same-session SEP-brokered confirmation of a
-  locally rendered sheet*, not an out-of-band push. Any attempt to "approve remotely" via
-  LAContext for a non-console caller either fails (no Aqua session) or, if a console
-  session happens to exist, renders the sheet **in the console user's session** and lets a
-  proximate device confirm it — i.e. it silently degenerates back into the exact reflexive
-  case. The companion factor cannot be repurposed as a non-console channel.
+- **Unattended automation → a sudoers `NOPASSWD` rule with an exact command.**
+  `automation ALL=(root) NOPASSWD: /usr/local/bin/backup --to /vol/snap` already gives
+  exact uid + exact path + exact argv + no prompt + authpriv logging. This is what a
+  "grant table" would have reinvented, minus the argv[0]/flag-injection footguns that
+  come free with sudoers' exact matching. No new sudowhat artifact.
 
-Where the red-team *qualified* the lever: it holds structurally (no candidate that keeps
-`rendersOnConsoleEver = false` was shown to reopen reflexive approval), but it is not
-free. Routing a non-console caller to a tty password **re-introduces a password-handling
-path into setuid-root sudo** — the class of code `docs/language-choice.md` calls "the
-genuinely dangerous code" — and the safety of *that* path depends entirely on getting the
-PAM verification semantics right. Design D's review found two concrete, shipping-blocking
-defects in the naive version (see Required fixes). So: the lever is correct, but the
-tty-password surface is only as safe as its verification, and the GUI surface is *never*
-an option for case 1.
+- **Remote-interactive admin → sudo's native `pam_opendirectory` password path.**
+  `/etc/pam.d/sudo` on this box already ends with `auth required pam_opendirectory.so`
+  — **no `nullok`** — preceded by `auth sufficient pam_smartcard.so`. That is sudo's
+  normal, decades-tested tty password conversation. Using it (a) inherits the no-`nullok`
+  hardening for free, (b) prompts on the *caller's own* PTY via sudo's native machinery —
+  the console user never sees it — and (c) means the plugin never collects the secret, so
+  the earlier draft's "can the plugin read a password off the tty/stdin?" blocker simply
+  evaporates.
 
-## Recommended design
+So sudowhat's job shrinks to one thing.
 
-**Combine surface-routing (Design A/D) for case 1 with a pre-authorization policy table
-(Design B) for case 2, both consulted strictly inside the existing would-deny branch,
-both fail-closed, both default-off.** Reject Design C's remote-companion channel outright.
+## The one sudowhat-specific problem
 
-The two mechanisms are disjoint and composable, mirroring the existing three-way split
-(root / console / else):
+For a non-console caller, sudo's own machinery already decides authorization (sudoers)
+and (for a password rule) authentication. But **the approval plugin runs on top of that
+decision and currently denies non-console regardless.**
+
+A NOPASSWD rule does **not** bypass the plugin. `sudo_plugin(8)` fixes the invocation
+order as *policy open → approval open/check/close → command runs*, and states the
+approval `check()` runs "after the policy plugin `check_policy()` function" and is called
+"if the policy plugin's `check_policy()` function has returned successfully." The trigger
+is **policy approval, not authentication.** NOPASSWD only tells sudoers to skip the PAM
+password step *inside* `check_policy`; sudoers still returns success, so sudo still calls
+the approval plugin. (This is exactly why 0.4.2 needed the root exemption: root-initiated
+sudo authenticates nobody either, yet the plugin still ran and denied it.) So the
+unattended NOPASSWD case genuinely requires the plugin to step aside.
+
+The only real work is:
+
+> Make the approval plugin **step aside** for a non-console caller that sudo has already
+> authorized — returning allow *without ever rendering a GUI/biometric sheet* — but only
+> when the configuration guarantees that a non-console caller cannot reach success without
+> a real authentication factor on its own session.
+
+Two open questions had to be resolved on real macOS before this was buildable. Both are
+answered from the authoritative on-box man pages and the existing shipped PAM behavior.
+
+### (a) Can the plugin tell from `command_info[]` how (or whether) the caller authenticated? — No.
+
+`sudo_plugin(8)` enumerates every `command_info` key sudo recognizes
+(`command`, `cwd`, `runas_*`, `noexec`, `iolog_*`, `set_utmp`, `sudoedit*`, `timeout`,
+`umask*`, `use_pty`, …). **None carries the authentication decision** — there is no
+`nopasswd`, `authenticated`, or `timestamp` key. (The only auth-adjacent keys —
+`ignore_ticket`, `update_ticket`, `noninteractive` — live in `settings[]`, which the
+approval plugin's `open()` does receive, but they reflect what the *user requested on the
+command line* (`-k`/`-N`/`-n`), not what PAM actually did.) So the plugin cannot
+distinguish, for a non-console caller: a fresh password, a cached sudo timestamp, or a
+NOPASSWD rule. They are identical at `check()` time.
+
+**Consequence — and this reshapes the whole safety argument:** step-aside cannot be an
+*authentication*-trust decision (the plugin has no signal that authentication happened
+this invocation). It is an **authorization**-trust decision: sudoers authorized the
+caller, and the plugin verifies the *configuration* makes a no-authentication success
+impossible for a non-console caller — except where the operator deliberately wrote a
+NOPASSWD rule. See "What the plugin can and cannot know."
+
+### (b) How does the PAM chain fall through to `pam_opendirectory` for non-console only?
+
+openpam has no Linux-PAM bracket syntax (`[success=done default=die]`) — confirmed:
+`pam.conf(5)` documents only the simple control flags `required`, `requisite`,
+`sufficient`, `binding`, `optional`. The fall-through is achieved with `sufficient`
+alone, using a property of openpam that Linux-PAM does *not* share. `pam.conf(5)` on this
+box states for `sufficient`:
+
+> "If this module succeeds, the chain is broken and the result is success. If it fails,
+> the rest of the chain still runs, but the final result will be failure **unless a later
+> module succeeds**."
+
+That last clause is the lever. Replace today's `sufficient pam_permit.so` with a
+`sufficient` **console-gate** that **succeeds iff the caller is the console user** and
+**fails otherwise**:
 
 ```
-sudowhat_check:
-  1. mutual SecStaticCode integrity of pam_sudowhat.so   (:226-232)  -> fail => deny
-  2. if g_inv.uid == 0:  root exemption, syslog, allow   (:254-263)
-  3. resolve command + run_argv + pre-stat (dev,inode)   (hoisted above the guard)
-  4. if isInvokingUserActiveConsole(g_inv.uid):
-         existing GUI path UNCHANGED                      (:277-549)
-  5. else  // non-root, non-console: today's hard deny
-         // ---- case 2 first: standing consent, no human ----
-         d = GrantTable.evaluateForUid(uid, abspath, argv, tty?, preStat)
-         if d == GRANT_ALLOW:
-             re-stat (dev,inode) == preStat else deny
-             syslog(LOG_AUTHPRIV) resolved argv + grant id
-             return allow
-         // ---- case 1: interactive remote admin ----
-         if remote_tty_opt_in_active()  AND g_inv.have_tty  AND g_conv != NULL:
-             plugin_printf(resolved command + verify nonce) -> caller's tty
-             if verify_admin_group(g_inv.uid)  // authorization, not just identity
-                AND verify_tty_password(g_conv, g_inv.uid)  // SUDO_CONV_PROMPT_ECHO_OFF
-                                                            // + EUID-dropped PAM authn
-                                                            // against a sudowhat-owned
-                                                            // service (NOT stock checkpw)
-                re-stat (dev,inode) == preStat else deny
-                syslog(LOG_AUTHPRIV) success, uid, tty
-                return allow
-             else:
-                syslog(LOG_AUTHPRIV) FAILURE, uid, tty   // brute-force visibility
-                rate-limit / backoff; deny
-         // ---- everything else ----
-         syslog(LOG_AUTHPRIV) denied uid
-         return deny   // == today's behavior
+# /etc/pam.d/sudo_local  (non-console-enabled variant)
+# NOTE: the module path is the FULL store path, never the bare name — pam_sudowhat.so is
+# not in openpam's /usr/lib/pam search dir, so a bare "pam_sudowhat.so" line would fail to
+# load (and a sufficient line whose module fails to load does not succeed → even console
+# users would fall through to a password prompt). The exact string is generated once and
+# shared by the installer and the plugin (see "What the plugin can and cannot know").
+auth  requisite   /nix/store/<hash>-sudowhat-<ver>/lib/pam/pam_sudowhat.so               # integrity; PAM_SUCCESS, or die on tamper
+auth  sufficient  /nix/store/<hash>-sudowhat-<ver>/lib/pam/pam_sudowhat.so  console-gate  # PAM_SUCCESS iff console; PAM_AUTH_ERR iff non-console
 ```
 
-Grant table is consulted *before* the tty prompt so that a standing, root-authored
-capability never forces a human prompt for a flow the operator already declared
-unattended.
+`/etc/pam.d/sudo` is the OS-managed parent and is **not** sudowhat's file. On this box
+(and in Apple's stock template) it reads:
 
-### Config surface
+```
+auth  include     sudo_local
+auth  sufficient  pam_smartcard.so
+auth  required    pam_opendirectory.so
+```
 
-Two independent, root-owned, default-off opt-ins under `/etc/sudowhat/` (directory
-`root:wheel 0755`, provisioned by the installer / nix-darwin module the same way the
-existing three `/etc` artifacts are, and store-owned under nix-darwin so it rotates
-atomically with the package):
+openpam's `include` splices inline — this is **already proven** by the shipped config,
+whose `sufficient pam_permit.so` inside `sudo_local` short-circuits the *parent* chain so
+sudo never falls through to `pam_opendirectory` (if it didn't splice inline, today's
+console users would be getting a password prompt — they aren't). So the effective auth
+chain is:
 
-- **Case 1 — `/etc/sudowhat/allow-remote-tty`** (Design D's minimal knob; nix-darwin
-  `services.sudowhat.allowRemoteTTY`, default `false`). Presence-and-ownership is the
-  entire signal; **no content, no parser, no attack surface.** Integrity check, exactly:
-  `lstat` (never `stat`), reject symlink, require `S_ISREG`, require `st_uid == 0`, reject
-  `S_IWGRP | S_IWOTH`, **and** apply the same checks to the parent `/etc/sudowhat`
-  directory. Any failure -> opt-in treated inactive -> deny.
-- **Case 2 — `/etc/sudowhat/policy.d/*.grant`** (Design B). Each grant is an *exact*
-  tuple: `uid`, absolute `path`, `argv-sha256` or literal argv array, optional
-  `not-before`/`not-after`, `require-tty`, `require-pristine`. Files `root:wheel 0644`,
-  dir `root:wheel 0755`; opened with `openat(O_NOFOLLOW)` + `fstat`-after-open (never
-  trust a path stat). In **release** builds each grant carries a detached signature (or an
-  HMAC manifest under a `root:wheel 0600` key) verified via the existing
-  `shared/SignatureVerifier` patterns; integrity failure => the *whole table* is treated
-  as empty => deny (never "fall back to perms-only"). **Wildcard / prefix argv matching is
-  not offered** — argv[0] and `--flag` injection are exactly the sudoers-NOPASSWD footguns
-  this is meant to beat. Authoring a grant runs through the *normal console-gated* sudo
-  path, so minting a grant requires a present console user's biometric — the bootstrap is
-  closed against an SSH-only attacker.
+```
+1. requisite   pam_sudowhat.so               (integrity)
+2. sufficient  pam_sudowhat.so  console-gate
+3. sufficient  pam_smartcard.so
+4. required    pam_opendirectory.so
+```
 
-### Auth surface, per case, and where it renders
+- **Tamper:** (1) `requisite` fails → chain broken → sudo aborts. *(fail-closed, unchanged)*
+- **Console caller:** (1) ok; (2) succeeds → chain broken, success → never reaches
+  smartcard/opendirectory → **no password**. LAContext in the approval plugin is the gate.
+  *(behavior unchanged, but see the configd caveat below — a console user MAY be downgraded
+  to a password prompt if the gate cannot reach configd to confirm console membership.)*
+- **Non-console caller:** (1) ok; (2) **fails** → "rest of the chain still runs". Now
+  exactly one of:
+  - (3) `sufficient pam_smartcard.so` **succeeds** → chain breaks with **success**;
+    `pam_opendirectory` is never reached. This is *not* a fall-through — `sufficient`
+    success is itself the terminal authentication, satisfied by the caller's own PIV/token
+    + PIN **on the caller's own session**. No console sheet. Acceptable: a smartcard is a
+    real factor, no weaker than the console biometric it replaces.
+  - (3) smartcard absent/declined → continue; (4) `required pam_opendirectory.so` prompts
+    for the **password on the caller's own PTY**. Correct → a later module succeeded →
+    overrides the gate's failure → **success**. Wrong/empty → `required` failure → deny.
 
-- **Case 1:** a masked `SUDO_CONV_PROMPT_ECHO_OFF` prompt on the **caller's own
-  controlling tty** (the SSH PTY), with the resolved command + verify nonce echoed there
-  immediately above it. No LAContext, no AuthorizationServices, nothing on the console.
-  The conversation pointer that `sudowhat_open` currently discards (`(void)conversation;`
-  at `:123`) is stashed in a file-scope `g_conv`, mirroring `g_plugin_printf`, and cleared
-  in `sudowhat_close`.
-- **Case 2:** **no live challenge at all.** The "authentication" happened out-of-band when
-  root authored the grant; the only rendering is a `LOG_AUTHPRIV` audit line (always) plus,
-  if a tty exists, a one-line `plugin_printf` notice to the caller's own stderr naming the
-  matched grant. Nothing is ever drawn on the GUI.
+  The invariant that makes the non-console path safe is therefore not "it always reaches
+  the password prompt" but: **every terminal-success path after the failed gate is a
+  genuine authentication factor satisfied on the caller's own session, never on the
+  console, and never weaker than the console factor.** Both `pam_smartcard` and no-`nullok`
+  `pam_opendirectory` meet that; an unauthenticated `sufficient` success (e.g. `pam_permit`)
+  does not, which is why the plugin must verify no such line exists (below).
 
-### Required fixes (incorporated, non-negotiable — from the Design D red-team)
+`console-gate` is the same `pam_sudowhat.so`, invoked a second time with a module
+argument; `pam_sm_authenticate` branches on `argv[0]`. Integrity must stay a separate
+`requisite` line (a single `sufficient` module returning failure-on-tamper would fall
+through to `pam_opendirectory` and a known password would defeat the integrity check —
+so integrity dies, the gate falls through; two lines, one signed binary).
 
-These are the difference between a defensible password path and a passwordless-root
-regression:
+**Console detection inside the PAM module is a hard prerequisite, not a soft check.** The
+gate calls `SCDynamicStoreCopyConsoleUser` — but that call is environment-sensitive:
+demonstrated on this box, the *same binary* returns `consoleUid = 501` when configd is
+reachable from its bootstrap namespace and `consoleUid = (uid_t)-1` ("no console user")
+when it is not, while a uid-501 GUI session is live the whole time. The gate's contract
+must therefore be **positive-match-only, failing toward non-console**: return
+`PAM_SUCCESS` *only* when `SCDynamicStoreCopyConsoleUser` returns a non-NULL user with a
+valid `consoleUid` that is non-zero and equals the invoking uid; on **any** NULL / `-1` /
+error, return `PAM_AUTH_ERR` (force the password fall-through). The failure modes:
+  - configd unreachable for a genuine console sudo → gate fails → console user is prompted
+    for a `pam_opendirectory` password instead of Touch ID. A UX regression, fail-closed.
+    (This is why "behavior identical to today" is **not** claimed.)
+  - The dangerous direction is a *split-brain* between this read and the plugin's own
+    `SessionGuard` read (two independent `SCDynamicStore` calls, two lifecycle phases): if
+    the PAM gate sees console (skips password) while the plugin sees non-console (steps
+    aside), the caller gets root with neither a password nor a sheet. Within a single sudo
+    process the two reads almost certainly see the same configd reachability, but this must
+    be **demonstrated on hardware** (open item), and if they can ever disagree the two
+    reads must be collapsed to a single source of truth.
 
-1. **Never use the stock `/etc/pam.d/checkpw` service.** Confirmed on this box it is
-   `auth required pam_opendirectory.so use_first_pass nullok` — `nullok` means an account
-   with an empty/unset password hash authenticates with an **empty string**. A reachable
-   empty-hash account (service account, never-set local account, attacker-created account)
-   would yield passwordless non-console root, which strict sudowhat blocks absolutely.
-   Ship a dedicated, signed-package, root-owned service file (`/etc/pam.d/sudowhat-tty`:
-   `auth required pam_opendirectory.so`, **no `nullok`**), and additionally reject any
-   empty supplied password before calling PAM. An empty password must never authenticate.
-2. **Feed the password the way the service reads it.** With `use_first_pass`,
-   pam_opendirectory reads `PAM_AUTHTOK`, *not* the conversation — so a conversation-only
-   implementation can silently fail to check the real password. Call
-   `pam_set_item(pamh, PAM_AUTHTOK, collected_pw)` before `pam_authenticate`. Test that a
-   wrong password and an empty password both fail.
-3. **Verify authorization, not just identity.** `checkpw`-style PAM proves who you are, not
-   that you may elevate. The console path inherits admin-gating from sudo's own PAM stack;
-   this branch must reproduce it — explicitly verify admin/wheel group membership for
-   `g_inv.uid` before accepting the password.
-4. **Rate-limit / backoff / lockout** on consecutive failures for a uid, and abort after N.
-   A raw PAM loop otherwise hands an attacker full-speed remote brute-force with root as
-   the prize; SecurityAgent gives the console path this for free.
-5. **Audit both success and failure** via `syslog(LOG_AUTHPRIV)` with uid and source tty,
-   so denials and brute-force attempts are visible — not just successes.
-6. **Implement the opt-in integrity check exactly as in Config surface above, with a test**
-   (lstat, symlink reject, `S_ISREG`, `st_uid==0`, no group/world write, parent-dir check).
-   A `stat`-instead-of-`lstat` or a missing parent check reopens a symlink-plant bypass.
+## What the plugin can and cannot know
 
-### Fail-closed behavior (every path)
+Because `command_info[]` carries no authentication signal (a), the plugin **cannot**
+confirm that this invocation authenticated. What it *can* do is verify that the live
+configuration makes an unauthenticated non-console success impossible — i.e. that the
+whole effective chain still terminates in a real factor. The password module lives in
+`/etc/pam.d/sudo`, **not** `sudo_local`, so checking `sudo_local` alone is insufficient
+(this was the red-team's blocker). Before stepping aside for a non-console caller, the
+plugin must verify the **complete effective chain**:
 
-Missing/malformed/wrong-owner/symlinked opt-in or grant file => inactive => deny.
-Opt-in active but `!g_inv.have_tty` or `g_conv == NULL` => deny with diagnostic (this is
-the unattended-no-human guard for case 1). Conversation returns non-zero / NULL reply
-(Ctrl-C / EOF / timeout) => deny. PAM anything but `PAM_SUCCESS`, `pam_start` failure, or
-OpenDirectory unreachable => deny. Empty supplied password => deny. Not in admin group =>
-deny. `seteuid(g_inv.uid)` fails before verification => error; `seteuid(0)` restore fails
-after => `_exit(1)`, identical to the existing invariant at `:518-519` — sudo must never
-exec with a non-root EUID. Grant integrity failure in release => table empty => deny.
-Post-auth `(dev,inode)` re-stat mismatch => deny (shared with the console path's TOCTOU
-narrowing, which now wraps *both* new surfaces). The mutual SecStaticCode check (`:226-232`)
-and the root exemption (`:254-263`) run before any of this.
+1. **`/etc/pam.d/sudo_local` is the gate variant** — contains the `requisite … pam_sudowhat.so`
+   integrity line and the `sufficient … pam_sudowhat.so console-gate` line, with the **exact
+   full store path** (see below). Absence → deny (today's behavior).
+2. **`/etc/pam.d/sudo` still has a safe shape** — `auth include sudo_local` appears first,
+   then **no unconditional-success `sufficient` module** (`pam_permit`, a `pam_tid`/
+   `pam_reattach`-style Touch-ID-over-SSH line, etc.) anywhere after the include, and the
+   chain terminates in `auth required pam_opendirectory.so` **without `nullok`**. This is
+   the file an admin, MDM profile, or third-party PAM tool is most likely to edit; a stray
+   `sufficient pam_permit.so` after the include would let a non-console caller short-circuit
+   to success with no factor. Any deviation → deny.
+3. **The credential cache is not cross-session** — `timestamp_type` is the default `tty`
+   (or `ppid`/`kernel`), **never `global`**. The timeout *value* is the operator's choice
+   (see below); only `global` is rejected, because it is the one mode that lets a timestamp
+   established in one session (e.g. a console Touch ID) be reused by another (an SSH session
+   of the same uid). Verify a root-owned, non-group/world-writable sudoers fragment does not
+   set `timestamp_type=global` and that no later-ordered file does either.
+
+If any check fails, is unreadable, or is untrusted → **deny** (fail-closed, == today).
+
+```
+sudowhat_check (non-console branch, replacing the deny at :270):
+  if NOT effective_chain_is_safe():     # the three checks above
+      syslog(LOG_AUTHPRIV) denied uid    # == today
+      return deny
+  # sudoers authorized this caller, and the configuration guarantees a non-console caller
+  # cannot reach success without a real factor on its own session (password / smartcard),
+  # OR via an operator-authored NOPASSWD rule. Either way, rendering a sheet here would put
+  # it on the console user. Step aside.
+  syslog(LOG_AUTHPRIV) non-console allow, uid, tty
+  return allow                           # BEFORE any seteuid/LAContext/AS call
+```
+
+Step-aside returns *before* the `seteuid(g_inv.uid)` + LAContext/AS block, so
+`rendersOnConsoleEver` stays `false` on every non-console path.
+
+### Three corrections this design makes to its own earlier claims
+
+- **Not "drift-proof by construction."** The plugin reads config *text* at `check()`-time;
+  PAM ran earlier (policy phase), in a separate read. Text is not proof of what PAM did.
+  The chain checks are **defense-in-depth against misconfiguration and composition
+  footguns**, not a guarantee. The residual trust is that *root-owned* PAM/sudoers files
+  have not been altered by someone with root — which is **out of the threat model** (an
+  attacker who can rewrite `/etc/pam.d/sudo` is already root and needs none of this). State
+  that boundary explicitly rather than claiming impossibility.
+
+- **The credential cache: `timestamp_type` is the real control, the timeout *value* is the
+  operator's choice.** sudo caches credentials for `timestamp_timeout` minutes (default 5);
+  a cache hit makes `check_policy()` succeed *without invoking PAM at all* — an
+  authentication short-circuit the plugin cannot see (no `command_info` signal). But this is
+  **not** a reason to force `timeout=0`; it splits cleanly by path:
+  - **Console:** the gate is the *approval plugin* (LAContext), which fires on every
+    `check_policy` success — including cache hits *(verify: open item #1)*. The timestamp
+    cache only skips the PAM *password*, which the console path doesn't use. So at any
+    timeout the console user still Touch-IDs every command; the cache gives console no
+    benefit and (if approval fires on cache hits) no harm. The "re-prompt every command"
+    guarantee comes from the approval plugin, **not** from `timeout=0`.
+  - **Non-console:** under the default `timestamp_type=tty` the record is *per terminal*
+    (`sudoers(5)`: "login sessions are authenticated separately"), and the only way
+    `check_policy` succeeds — and writes that tty's record — for a non-console caller is by
+    passing a **real factor on that tty** (`pam_smartcard`/`pam_opendirectory`). So any later
+    cache hit on that tty was always preceded by a real authentication on that same tty: the
+    plugin stepping aside on it is exactly stock-sudo grace after a real auth, no weaker than
+    stock sudo over SSH. The timeout value is therefore safe to leave to the operator.
+  - **The one genuinely unsafe mode is `timestamp_type=global`** ("a single record for all of
+    a user's login sessions, regardless of the terminal"): a *console* user authenticates
+    (sudo writes a global record), logs out, SSHes back as the same uid — now non-console,
+    hits the record, PAM is skipped, plugin steps aside → root with no factor the SSH caller
+    ever supplied. So the plugin **rejects `global`** (check 3) and otherwise leaves
+    `timestamp_timeout` to the operator. (This corrects the earlier draft, which forced
+    `timeout=0`; that conflated the console and non-console cases and denied a legitimate
+    convenience.) Cross-session reuse aside, the only no-authentication non-console path that
+    remains is a NOPASSWD rule — the operator's explicit exact-command grant.
+
+- **On NOPASSWD, `pam_sudowhat` never runs at all.** For a NOPASSWD rule sudo never enters
+  the PAM auth conversation, so *neither* `sudo_local` line executes. The approval plugin's
+  own `SecStaticCode` check of the `pam_sudowhat.so` file (`:228`) still runs (the plugin
+  always runs), but it only attests the binary on disk is signed — it does **not** attest
+  that PAM loaded or executed it. On the NOPASSWD path, sudowhat-side assurance rests
+  entirely on (i) sudoers exact-command matching and (ii) the chain checks above, which run
+  for every non-console caller including NOPASSWD jobs. Do not cite `:228` as the
+  authentication guarantee for NOPASSWD.
+
+### The gate-line string must be one generated source of truth
+
+Claim 5's whole value depends on the plugin's check matching what the installer writes —
+and the installer writes the **full store path** (`${cfg.package}/lib/pam/pam_sudowhat.so`,
+e.g. `…-sudowhat-0.4.2/…`), which changes on every version/hash bump. A bare-name check
+never matches (and a bare-name *config line* won't even load); a hard-coded full-path
+check silently stops matching after an upgrade (→ denies all non-console, i.e. it *does*
+drift); a loose substring check can be satisfied by a comment or stale file. Fix: derive
+the gate line from a single constant in `nix/module.nix` and compile the **same** resolved
+string into the plugin at build time (the package already bakes `SUDOWHAT_PAM_PATH`; add a
+`SUDOWHAT_GATE_LINE` from the same expression). Add a build-time test asserting the string
+the plugin checks for is byte-identical to the line `module.nix` emits. *That* test is what
+actually delivers the coupling the safety argument needs.
+
+### Verifying the config files without fooling yourself
+
+- **Content match is the primary, decisive signal** — exactly as the existing
+  `SudoConfChecker` does for `/etc/sudo.conf`. Ownership of the *resolved* target is
+  **vacuous** under nix-darwin (every `/nix/store` path is `root r--r--r--` by
+  construction), so do not lean on it.
+- **Path integrity is whole-chain, lstat-based, no dereference.** `/etc/pam.d/sudo_local`
+  is a symlink *chain* (here: `→ /etc/static/pam.d/sudo_local → /nix/store/…`, 2 hops, not
+  1). `lstat` each hop, require uid 0 and a root-owned, non-group/world-writable *parent
+  dir* at every hop, loop until a non-symlink leaf (cap iterations against cycles), and read
+  the content from an `O_NOFOLLOW` fd you `fstat` — never `realpath`-then-reopen, never stat
+  only the leaf. `SudoConfChecker` as written uses `stringWithContentsOfFile` (follows
+  symlinks, no stat at all), so it does **not** provide this — it must be extended.
+
+## Why this is safe (threat walk-throughs)
+
+- **SSH attacker (admin user, non-console), `allowNonConsole` on:** sudoers authorizes
+  (they are admin); the gate fails for non-console; the caller authenticates on their own
+  PTY via `pam_opendirectory` (password) or `pam_smartcard` (PIV + PIN) — never a console
+  sheet. Unknown factor → deny. Known factor → ordinary "an admin who proves a factor can
+  sudo over SSH," the stock sudo trust model; the *reflexive-approval* hole (a sheet the
+  seated user taps) is never engaged.
+- **Same attacker within the grace window:** if the operator runs a non-zero
+  `timestamp_timeout`, a second command on the *same tty* within the window skips the
+  password — but only after a real first authentication on that tty (default `tty` scope),
+  i.e. ordinary stock-sudo grace, not a new hole. The cross-session ride is closed by
+  rejecting `timestamp_type=global` (check 3). Operators wanting per-command re-auth set
+  `timestamp_timeout=0` (today's default).
+- **SSH attacker, `allowNonConsole` off (default):** plugin finds the `pam_permit` variant
+  (or any failed chain check) → denies non-console without prompting. Identical to today.
+- **Unattended NOPASSWD job (uid 501):** sudoers authorizes via the exact-command NOPASSWD
+  rule; PAM is not invoked (operator's explicit no-auth grant); the plugin verifies the
+  effective chain is safe and steps aside. No password, no sheet — stock NOPASSWD semantics,
+  scoped to one exact command by the operator.
+- **Admin adds Touch-ID-over-SSH (`pam_tid`/`pam_reattach`) to `/etc/pam.d/sudo`:** check 2
+  detects the unconditional-success `sufficient` line after the include and **denies** the
+  non-console step-aside — protecting the admin from a composition that would otherwise be
+  passwordless.
+- **Reflexive approval (the original threat):** unchanged for console callers (LAContext
+  with the command shown). For non-console callers, no LAContext/AS is ever reached.
 
 ## What we deliberately will NOT do
 
-- **No AS / LAContext / biometric / companion sheet for a non-console caller, ever.** This
-  is the one rule the whole project is built on; Design C demonstrates that "approve on the
-  phone" cannot be done without either rendering on the console session (reopening the hole)
-  or building the rejected daemon. `rendersOnConsoleEver` stays `false` on every non-console
-  branch, by construction.
-- **No daemon, no agent, no XPC helper, no APNs/cloud, no remote-companion approval
-  channel.** Out of scope — it requires a resident endpoint to terminate an async channel,
-  i.e. the `.trash/agent/` design already cut. A code comment must be left at the guard
-  deny site warning future maintainers that BiometricsOrCompanion is *not* an out-of-band
+- **No grant table.** A sudoers NOPASSWD rule is the grant table, with better matching
+  semantics and no new signed artifact, parser, or `sudowhat grant` CLI to attack.
+- **No plugin-internal PAM / password collection.** sudo's native `pam_opendirectory`
+  conversation does it, on the right tty, with no `nullok`. The plugin never touches the
+  secret.
+- **No custom no-`nullok` service file.** `/etc/pam.d/sudo`'s native `pam_opendirectory`
+  line already has no `nullok`. Do **not** authenticate against stock `/etc/pam.d/checkpw`
+  — it carries `nullok`. Nothing in this design touches `checkpw`.
+- **No forbidding of `pam_smartcard`.** A PIV/token + PIN on the caller's own session is a
+  legitimate non-console factor, no weaker than the console biometric. The design accepts
+  it; it does not special-case or block it.
+- **No AS / LAContext / biometric / companion sheet for a non-console caller, ever.**
+  `BiometricsOrCompanion` is a *same-session* SEP confirmation of a locally rendered
+  sheet, **not** an out-of-band push. "Approve on the phone" for a non-console caller
+  either fails (no Aqua session) or renders in the *console* user's session — reopening
+  the exact hole. True remote approval needs the rejected daemon. Out of scope. Leave a
+  code comment at the step-aside site stating this, so no future maintainer reuses
+  `seteuid` + LAContext/AS for a non-console uid.
+- **No per-command scoping promise on the interactive knob.** With `allowNonConsole` on,
+  every command from a non-console caller is elevatable with the admin's factor; that is
+  documented, coarse by design, and the reason NOPASSWD rules exist alongside it for the
+  fine-grained unattended case.
+
+## Recommended shape (config surface)
+
+A **single** opt-in, because the halves cannot be safely separated: allowing a non-console
+*password* rule requires the fall-through PAM variant (otherwise step-aside + short-circuit
+= passwordless root), and NOPASSWD rules work regardless. "Unattended-only, no interactive
+admin" is not a sudowhat knob — it is achieved in **sudoers** by writing only NOPASSWD
+rules for the specific automation and granting no broad sudo to remote users.
+
+- **nix-darwin:** `services.sudowhat.allowNonConsole` (default `false`) selects the gate
+  `sudo_local` variant. `timestamp_timeout` stays an independent operator setting (the
+  module may keep today's `0` as its *default* but must not force it); the module must never
+  emit `timestamp_type=global`. It does **not** manage `/etc/pam.d/sudo` (Apple's stock
+  template already provides the safe `include → smartcard → required opendirectory` shape);
+  the plugin verifies that file's shape at runtime instead.
+- **Approval plugin:** the three-check `effective_chain_is_safe()` gate above, fail-closed.
+
+## Open items to verify on real hardware before shipping
+
+The *mechanism* is grounded in this box's `sudo_plugin(8)` / `pam.conf(5)` and the
+already-shipped `include` short-circuit behavior. `sudo` is blocked under the agent
+sandbox, so the end-to-end behavior was not exercised here. Before shipping, confirm:
+
+1. **Live console-gate fall-through.** With the gate variant installed: (i) a console
+   `sudo` authenticates via LAContext with **no** password prompt; (ii) a non-console `sudo`
+   (second `ssh localhost`, logged out of the GUI, or `su - otheradmin` then `sudo`) prompts
+   for a password via `pam_opendirectory` **on that session's tty** and nowhere on the
+   console; (iii) wrong/empty password denies; (iv) a NOPASSWD rule runs with no prompt;
+   (v) the **full-path** gate line actually loads (a misload would silently break the
+   console short-circuit too). Pin the sudo version. **(vi) Pivotal — does the approval
+   plugin re-run on a timestamp cache hit?** With `timestamp_timeout` non-zero, run
+   `sudo cmd1` then `sudo cmd2` within the window on the same tty and confirm the LAContext
+   prompt fires for `cmd2`. If it does, the console guarantee is independent of the timeout,
+   so `timestamp_timeout` can be an operator knob; if it does **not**, a non-zero timeout
+   means later in-window commands run with no prompt at all — so neither of sudowhat's two
+   purposes (showing the exact command, and binding the prompt to the origin terminal)
+   applies to them — and `timeout=0` must stay for the console path. This determines whether
+   the timeout is freely user-configurable.
+2. **`pam_smartcard` for a non-console caller.** Confirm `pam_smartcard` matches the
+   credential to the **invoking uid**, not merely "a card in the locally attached reader,"
+   so a card inserted/unlocked for the console user cannot satisfy a non-console caller; and
+   that a non-admin cannot register a CTK/third-party token provider that forges a match.
+3. **Credential-cache scope.** Confirm `timestamp_type=global` is absent (no fragment sets
+   it, none re-sets it later). Confirm that for non-console under the default `tty` scope a
+   cache hit on a tty is always preceded by a real factor on that same tty. The timeout
+   *value* is an operator preference, gated by item 1(vi).
+4. **Console detection inside the PAM module.** Confirm `SCDynamicStoreCopyConsoleUser`
+   returns the correct `consoleUid` from inside `pam_sm_authenticate` under real macOS sudo
+   for (i) console login, (ii) SSH, (iii) launchd/cron-spawned sudo — and that the PAM-phase
+   read and the approval-phase (`SessionGuard`) read **agree** in all three. If they can
+   disagree, collapse them to a single source of truth. Confirm the positive-match-only,
+   fail-toward-non-console contract holds when configd is unreachable. (On this box the same
+   binary already returns `consoleUid=-1` vs `501` purely by bootstrap-namespace
+   reachability — so this is not hypothetical.)
+5. **Whole-chain config verification.** Implement and test the three `effective_chain_is_safe()`
+   checks, the lstat-per-hop symlink-chain integrity, and the build-time gate-line equality
+   test. Verify a `sufficient pam_permit.so` appended to `/etc/pam.d/sudo` after the include
+   causes the plugin to **deny** the non-console step-aside.
+6. **Audit-log line shape** for the new non-console-allow outcome, consistent with the
+   root-exemption line at `:260`.
+
+## Adjacent hygiene (independent of the above)
+
+- A tripwire comment at the step-aside site warning maintainers never to reuse
+  `seteuid` + LAContext/AS for a non-console uid (see "What we will NOT do").
+- The README (`:38`) and prior-art doc already describe `BiometricsOrCompanion`
+  accurately as a same-session / companion-confirmation factor (the prior-art table even
+  notes the PAM family "degrades to `pam_opendirectory` password over SSH" — the very
+  lever used here). Keep that wording; do not let it drift toward implying an out-of-band
   channel.
-- **No wildcard or prefix argv in pre-auth grants.** Exact path + exact-argv-or-argv-hash
-  only.
-- **No fail-open password fallback and no use of stock `checkpw`.** Every error denies;
-  empty passwords never authenticate.
-- **No headless credential path for case 2 that isn't a root-authored standing grant.**
-  Truly unattended non-root automation that needs ad-hoc root remains punted to the root
-  exemption (run it as root via `launchctl asuser <uid> sudo`, audited) — inventing a
-  non-interactive secret channel would reopen the unattended-escalation hole.
-- **No per-command scoping promise on the case-1 knob.** When `allow-remote-tty` is on,
-  every command from a non-console caller becomes elevatable with the admin password; that
-  is documented, coarse-by-design, and the reason case 2's fine-grained grants exist
-  alongside it.
-
-## Phasing
-
-- **Phase 1 — ship now (Design D, hardened): the minimal remote-tty knob for case 1.**
-  Stash `g_conv` at open(); add the sub-branch at `:270`; `allow-remote-tty` presence
-  check; `SUDO_CONV_PROMPT_ECHO_OFF` + EUID-dropped PAM against the sudowhat-owned service.
-  Must ship *with* all six Required fixes and a prominent default-off + threat-model note.
-  This is genuinely a week of work and is the correct minimal answer for interactive remote
-  admin.
-- **Phase 2 — next release (Design B): the pre-authorization grant table for case 2.**
-  Needs `GrantTable.{h,m}`, the signing/HMAC integrity tooling, and the `sudowhat grant`
-  CLI built and reviewed first. Do **not** ship the perms-only dev variant as the *only*
-  integrity story for a capability that grants passwordless root.
-- **Phase 2.5 — optional (Design A refinements over D).** If empirical testing favors it,
-  upgrade case 1 from the presence-only knob to A's stronger tty-ownership *proof*
-  (`open("/dev/tty", O_NOCTTY)`, `isatty`/`tcgetsid(fd)==getsid(0)`/`st_uid==uid` binding,
-  cross-checked against the tty captured at open()) and A's bounded `allow_uids` policy.
-  This narrows a leaked-knob from firing in an unexpected session. Treat as a hardening
-  delta on Phase 1, not a separate design.
-- **Future / out-of-scope (Design C).** Remote-companion approval. Only the second-factor
-  *verify-nonce display* sub-idea is ship-now-eligible, as a docs/UX note on the existing
-  nonce print (`:351`) — an eyeball aid, explicitly *not* a cryptographically bound
-  channel.
-
-## Open questions / things to verify on real hardware (macOS Tahoe)
-
-1. **tty password conversation from an *approval* plugin in `check()`.** The conversation
-   pointer is passed to `open()` (currently discarded at `:123`), but whether sudo cleanly
-   routes a `SUDO_CONV_PROMPT_ECHO_OFF` issued from the approval plugin's `check()` to the
-   controlling tty with proper echo-off termios handling is asserted from the API, not yet
-   exercised. **Verify before Phase 1 ships, with a documented sudo version pin.** Fallback
-   to verify: whether the password step must instead live in the PAM module (which already
-   owns a stack) rather than the approval plugin.
-2. **Exactly where AS/LAContext renders for a non-console, `seteuid`'d caller.** We assert
-   (and Design D's review confirms by source inspection) that SecurityAgent/authd draw on
-   the active GUI session regardless of `seteuid`. Confirm empirically that there is *no*
-   configuration in which a non-console seteuid'd caller's sheet renders anywhere the
-   triggering remote process can drive — this is the assumption that justifies the entire
-   guard, and it should be tested, not just reasoned about.
-3. **PAM verification semantics.** Confirm `pam_set_item(PAM_AUTHTOK, ...)` +
-   `pam_authenticate` against the no-`nullok` `sudowhat-tty` service rejects both wrong and
-   empty passwords, and that the admin-group authorization check matches the privilege the
-   console path actually grants.
-4. **`tcgetsid(fd) == getsid(0)` session binding under macOS sudo** (only if pursuing the
-   Phase 2.5 ownership proof). macOS sudo may detach or re-set the session; the proof must
-   be validated against real behavior or it spuriously denies legitimate sessions
-   (fail-closed, but a usability regression).
-5. **Audit-log format.** Settle the `LOG_AUTHPRIV` line shape for the three new outcomes
-   (tty success, tty failure, grant match) so it is greppable and consistent with the
-   existing root-exemption line at `:260`.
-6. **`require-pristine` staleness** (Phase 2). A content-hash recorded at grant-creation
-   goes stale when an OS update replaces the target binary, turning into a silent outage —
-   decide whether `require-pristine` defaults off and how operators re-bless after updates.
