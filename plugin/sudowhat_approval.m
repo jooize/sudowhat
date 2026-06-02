@@ -159,6 +159,27 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
     }
 }
 
+/* Emit the channel-binding verify code to the user's terminal.
+ *
+ * Uses SUDO_CONV_ERROR_MSG, NOT SUDO_CONV_INFO_MSG. sudo's conversation layer
+ * routes INFO_MSG to stdout and ERROR_MSG to stderr (sudo/src/conversation.c).
+ * The code is an out-of-band trust signal the user compares against the
+ * LAContext sheet, so it must survive the most common redirect there is:
+ * `sudo cmd >file` and the canonical `sudo tee file >/dev/null` heredoc idiom
+ * both send stdout elsewhere, which would silently swallow an INFO_MSG line and
+ * leave a bare Touch ID prompt with nothing to compare against — exactly the
+ * absent-minded-approval hole this code exists to close. stderr is the correct
+ * channel for a security signal anyway, and it is far rarer (and more
+ * conspicuous) for a caller to redirect 2> than 1>. The printf is passed in
+ * rather than read from g_plugin_printf so the offline unit test can capture
+ * the message type without a live sudo. */
+static void emit_verify_code(sudo_printf_t printf_fn, const char *code) {
+    if (printf_fn != NULL) {
+        printf_fn(SUDO_CONV_ERROR_MSG,
+                  "sudowhat: verify code %s in the prompt\n", code);
+    }
+}
+
 static int sudowhat_open(unsigned int version,
                          sudo_conv_t conversation,
                          sudo_printf_t plugin_printf,
@@ -418,23 +439,20 @@ static int sudowhat_check(char * const command_info[],
             cwd = [NSString stringWithUTF8String:g_inv.cwd];
         }
 
-        /* Channel-binding nonce: print to the user's terminal via sudo's
-         * plugin_printf (which goes to the same stderr the user typed
-         * 'sudo' on) BEFORE we put up the LAContext sheet, then embed the
-         * same value in the prompt body. A real sudo run originated from
-         * the user's foreground shell will show matching codes; a sudo
-         * spawned by a background process that the user didn't initiate
-         * will show a code in some other terminal (or nowhere), letting
-         * the user reject before authenticating. Not a defense against
-         * post-compromise, but a defense against absent-minded approval. */
+        /* Channel-binding nonce: print it to the user's terminal BEFORE we
+         * put up the LAContext sheet, then embed the same value in the prompt
+         * body. A real sudo run originated from the user's foreground shell
+         * shows matching codes; a sudo spawned by a background process the
+         * user didn't initiate shows a code in some other terminal (or
+         * nowhere), letting the user reject before authenticating. Not a
+         * defense against post-compromise, but a defense against absent-minded
+         * approval. emit_verify_code writes to stderr (see there) so the code
+         * survives a `sudo cmd >file` / `sudo tee file >/dev/null` redirect of
+         * stdout. */
         char nonceBuf[5];
         generate_verify_nonce(nonceBuf, sizeof(nonceBuf));
         NSString *verifyCode = [NSString stringWithUTF8String:nonceBuf];
-        if (g_plugin_printf) {
-            g_plugin_printf(SUDO_CONV_INFO_MSG,
-                            "sudowhat: verify code %s in the prompt\n",
-                            nonceBuf);
-        }
+        emit_verify_code(g_plugin_printf, nonceBuf);
 
         /* Two renderings of the same content: LAContext wraps our text in
          * a system-supplied sentence and appends a period, so we use the

@@ -13,6 +13,7 @@
  * shared/, swap this #include for a direct link against the extracted unit.
  */
 #import "sw_test.h"
+#include <stdarg.h>
 #include "../plugin/sudowhat_approval.m"
 
 static void test_find_kv_basic(void) {
@@ -161,6 +162,41 @@ static void test_gate_variant_detection(void) {
        "commented-out console-gate line does not count");
 }
 
+/* The verify code is a channel-binding security signal the user compares
+ * against the Touch ID sheet. sudo routes SUDO_CONV_INFO_MSG to stdout and
+ * SUDO_CONV_ERROR_MSG to stderr, so emitting it on INFO_MSG would let the
+ * ubiquitous `sudo cmd >file` / `sudo tee file >/dev/null` redirect swallow it,
+ * leaving a bare prompt with nothing to compare. emit_verify_code must pin the
+ * code to the error/stderr channel; this test fails if that regresses. */
+static int  g_cap_msg_type;
+static char g_cap_buf[512];
+static int capture_printf(int msg_type, const char *fmt, ...) {
+    g_cap_msg_type = msg_type;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(g_cap_buf, sizeof g_cap_buf, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+static void test_verify_code_on_error_channel(void) {
+    g_cap_msg_type = -1;
+    g_cap_buf[0] = '\0';
+    emit_verify_code(capture_printf, "3SNJ");
+    OK(g_cap_msg_type == SUDO_CONV_ERROR_MSG,
+       "verify code on ERROR_MSG/stderr (survives >/dev/null)");
+    OK(g_cap_msg_type != SUDO_CONV_INFO_MSG,
+       "verify code NOT on INFO_MSG/stdout");
+    OK(strstr(g_cap_buf, "3SNJ") != NULL, "verify code value present in the line");
+    OK(strstr(g_cap_buf, "verify code") != NULL, "line carries the 'verify code' label");
+
+    /* A NULL printf (sudo didn't hand open() a callback) must be a silent
+     * no-op, never a crash or a stray emission. */
+    g_cap_msg_type = -1;
+    emit_verify_code(NULL, "XXXX");
+    OK(g_cap_msg_type == -1, "NULL printf_fn is a no-op");
+}
+
 static void test_nonce_edge_sizes(void) {
     char b1[1] = { '?' };
     generate_verify_nonce(b1, sizeof b1);
@@ -186,6 +222,7 @@ int main(void) {
         test_gate_variant_detection();
         test_nonce_alphabet_and_length();
         test_nonce_edge_sizes();
-        SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce)");
+        test_verify_code_on_error_channel();
+        SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel)");
     }
 }
