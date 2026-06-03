@@ -163,11 +163,13 @@ static void test_gate_variant_detection(void) {
 }
 
 /* The verify code is a channel-binding security signal the user compares
- * against the Touch ID sheet. sudo routes SUDO_CONV_INFO_MSG to stdout and
- * SUDO_CONV_ERROR_MSG to stderr, so emitting it on INFO_MSG would let the
- * ubiquitous `sudo cmd >file` / `sudo tee file >/dev/null` redirect swallow it,
- * leaving a bare prompt with nothing to compare. emit_verify_code must pin the
- * code to the error/stderr channel; this test fails if that regresses. */
+ * against the Touch ID sheet. It must reach the human at the keyboard whatever
+ * the command does with its fds, so it is written to the controlling terminal
+ * (/dev/tty), which a shell's `>`/`2>`/`&>` cannot touch; only when there is no
+ * controlling terminal does emit_verify_code fall back to sudo's stderr
+ * (SUDO_CONV_ERROR_MSG, never INFO_MSG/stdout). These tests pin both branches:
+ * the tty path is parameterized so we can aim it at a temp file with no real
+ * tty, and the fallback is driven by an unopenable path. */
 static int  g_cap_msg_type;
 static char g_cap_buf[512];
 static int capture_printf(int msg_type, const char *fmt, ...) {
@@ -179,22 +181,64 @@ static int capture_printf(int msg_type, const char *fmt, ...) {
     return n;
 }
 
-static void test_verify_code_on_error_channel(void) {
-    g_cap_msg_type = -1;
-    g_cap_buf[0] = '\0';
-    emit_verify_code(capture_printf, "3SNJ");
-    OK(g_cap_msg_type == SUDO_CONV_ERROR_MSG,
-       "verify code on ERROR_MSG/stderr (survives >/dev/null)");
-    OK(g_cap_msg_type != SUDO_CONV_INFO_MSG,
-       "verify code NOT on INFO_MSG/stdout");
-    OK(strstr(g_cap_buf, "3SNJ") != NULL, "verify code value present in the line");
-    OK(strstr(g_cap_buf, "verify code") != NULL, "line carries the 'verify code' label");
+/* mkstemp template under $TMPDIR (falls back to /tmp). */
+static void sw_tmpl(char *buf, size_t n, const char *tag) {
+    const char *t = getenv("TMPDIR");
+    if (t == NULL || t[0] == '\0') t = "/tmp";
+    snprintf(buf, n, "%s/sw_verify_%s.XXXXXX", t, tag);
+}
 
-    /* A NULL printf (sudo didn't hand open() a callback) must be a silent
-     * no-op, never a crash or a stray emission. */
+static NSString *sw_read_utf8(const char *path) {
+    return [NSString stringWithContentsOfFile:[NSString stringWithUTF8String:path]
+                                     encoding:NSUTF8StringEncoding error:NULL];
+}
+
+static void test_verify_code_to_tty(void) {
+    /* The exact line the user matches against the sheet, written verbatim. */
+    char path[256];
+    sw_tmpl(path, sizeof path, "tty");
+    int fd = mkstemp(path);
+    OK(fd >= 0, "mkstemp created a temp file for the tty-write test");
+    if (fd >= 0) close(fd);
+
+    OK(write_verify_code_to_tty(path, "3SNJ"),
+       "write_verify_code_to_tty succeeds on a writable path");
+    EQ(sw_read_utf8(path), @"sudowhat: verify code 3SNJ in the prompt\n",
+       "the controlling-terminal channel gets the exact verify line");
+    unlink(path);
+
+    /* Unopenable path -> NO (this is what drives the stderr fallback). */
+    OK(!write_verify_code_to_tty("/no/such/dir/sw_tty", "3SNJ"),
+       "write_verify_code_to_tty fails closed on an unopenable path");
+}
+
+static void test_emit_prefers_tty_then_stderr(void) {
+    /* (a) tty path writable -> code goes to the tty, stderr fallback untouched. */
+    char path[256];
+    sw_tmpl(path, sizeof path, "emit");
+    int fd = mkstemp(path);
+    OK(fd >= 0, "mkstemp created a temp file for the emit test");
+    if (fd >= 0) close(fd);
+
+    g_cap_msg_type = -1; g_cap_buf[0] = '\0';
+    emit_verify_code(capture_printf, path, "3SNJ");
+    OK(g_cap_msg_type == -1, "stderr fallback NOT used when the tty write succeeds");
+    EQ(sw_read_utf8(path), @"sudowhat: verify code 3SNJ in the prompt\n",
+       "emit_verify_code wrote the line to the tty path");
+    unlink(path);
+
+    /* (b) tty unopenable -> fall back to sudo's stderr (ERROR_MSG), never stdout. */
+    g_cap_msg_type = -1; g_cap_buf[0] = '\0';
+    emit_verify_code(capture_printf, "/no/such/dir/sw_tty", "3SNJ");
+    OK(g_cap_msg_type == SUDO_CONV_ERROR_MSG,
+       "fallback uses ERROR_MSG/stderr (survives >), not INFO_MSG/stdout");
+    OK(g_cap_msg_type != SUDO_CONV_INFO_MSG, "fallback is not on stdout");
+    OK(strstr(g_cap_buf, "3SNJ") != NULL, "fallback line carries the code");
+
+    /* (c) tty unopenable AND no printf -> silent no-op, never a crash. */
     g_cap_msg_type = -1;
-    emit_verify_code(NULL, "XXXX");
-    OK(g_cap_msg_type == -1, "NULL printf_fn is a no-op");
+    emit_verify_code(NULL, "/no/such/dir/sw_tty", "XXXX");
+    OK(g_cap_msg_type == -1, "no tty + NULL printf is a silent no-op");
 }
 
 static void test_nonce_edge_sizes(void) {
@@ -222,7 +266,8 @@ int main(void) {
         test_gate_variant_detection();
         test_nonce_alphabet_and_length();
         test_nonce_edge_sizes();
-        test_verify_code_on_error_channel();
+        test_verify_code_to_tty();
+        test_emit_prefers_tty_then_stderr();
         SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel)");
     }
 }

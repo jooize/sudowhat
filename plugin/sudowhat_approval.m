@@ -159,24 +159,68 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
     }
 }
 
-/* Emit the channel-binding verify code to the user's terminal.
+/* The verify-code line. One definition so the /dev/tty path and the stderr
+ * fallback below can never drift apart. */
+#define SW_VERIFY_LINE_FMT "sudowhat: verify code %s in the prompt\n"
+
+/* Write the verify-code line straight to the controlling terminal.
  *
- * Uses SUDO_CONV_ERROR_MSG, NOT SUDO_CONV_INFO_MSG. sudo's conversation layer
- * routes INFO_MSG to stdout and ERROR_MSG to stderr (sudo/src/conversation.c).
  * The code is an out-of-band trust signal the user compares against the
- * LAContext sheet, so it must survive the most common redirect there is:
- * `sudo cmd >file` and the canonical `sudo tee file >/dev/null` heredoc idiom
- * both send stdout elsewhere, which would silently swallow an INFO_MSG line and
- * leave a bare Touch ID prompt with nothing to compare against — exactly the
- * absent-minded-approval hole this code exists to close. stderr is the correct
- * channel for a security signal anyway, and it is far rarer (and more
- * conspicuous) for a caller to redirect 2> than 1>. The printf is passed in
- * rather than read from g_plugin_printf so the offline unit test can capture
- * the message type without a live sudo. */
-static void emit_verify_code(sudo_printf_t printf_fn, const char *code) {
+ * LAContext sheet, so it has to reach the human at the keyboard regardless of
+ * how the command's I/O is wired. A shell only rewires fds 0-2, so every
+ * redirect there is — `sudo cmd >f`, `sudo tee f >/dev/null`, `2>/dev/null`,
+ * `&>f` — leaves the *controlling terminal* untouched. Writing to /dev/tty (the
+ * same channel sudo uses for its own "Password:" prompt) therefore survives all
+ * of them, where an earlier stdout/stderr write did not.
+ *
+ * O_NOCTTY: never acquire a controlling terminal as a side effect of the open.
+ * O_CLOEXEC: don't leak the fd into the execed target. The fd is opened with
+ * EUID still root (the seteuid drop happens later); root may write the user's
+ * tty, exactly as sudo's own prompt does.
+ *
+ * ttyPath is a parameter (always "/dev/tty" in production) so the offline unit
+ * test can point it at a temp file and read the bytes back. Returns YES iff the
+ * entire line was written. */
+static BOOL write_verify_code_to_tty(const char *ttyPath, const char *code) {
+    int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) return NO;
+
+    char line[96];
+    int n = snprintf(line, sizeof(line), SW_VERIFY_LINE_FMT, code);
+    if (n < 0 || (size_t)n >= sizeof(line)) { close(fd); return NO; }
+
+    ssize_t off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, line + off, (size_t)(n - off));
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            close(fd);
+            return NO;
+        }
+        off += w;
+    }
+    close(fd);
+    return YES;
+}
+
+/* Emit the channel-binding verify code. Prefer the controlling terminal so no
+ * fd redirect can hide it; fall back to sudo's stderr via plugin_printf only
+ * when open("/dev/tty") fails. By the time we reach here the caller is already
+ * classified active-console (root and non-console callers returned upstream, in
+ * sudowhat_check), so this fallback is NOT the detached/cron case — those never
+ * get here. It is the narrow one of an in-session process that happens to have
+ * no controlling terminal: launched by the Dock / Spotlight / a GUI agent
+ * rather than from a shell. stderr still beats staying silent there — a human
+ * in that session may see it — and we use SUDO_CONV_ERROR_MSG, never INFO_MSG,
+ * since sudo routes INFO to stdout (sudo/src/conversation.c) where a `>file`
+ * redirect would swallow it. The printf and ttyPath are passed in so the
+ * offline unit test can exercise both branches without a live sudo or real
+ * tty. */
+static void emit_verify_code(sudo_printf_t printf_fn, const char *ttyPath,
+                             const char *code) {
+    if (write_verify_code_to_tty(ttyPath, code)) return;
     if (printf_fn != NULL) {
-        printf_fn(SUDO_CONV_ERROR_MSG,
-                  "sudowhat: verify code %s in the prompt\n", code);
+        printf_fn(SUDO_CONV_ERROR_MSG, SW_VERIFY_LINE_FMT, code);
     }
 }
 
@@ -446,13 +490,12 @@ static int sudowhat_check(char * const command_info[],
          * user didn't initiate shows a code in some other terminal (or
          * nowhere), letting the user reject before authenticating. Not a
          * defense against post-compromise, but a defense against absent-minded
-         * approval. emit_verify_code writes to stderr (see there) so the code
-         * survives a `sudo cmd >file` / `sudo tee file >/dev/null` redirect of
-         * stdout. */
+         * approval. emit_verify_code targets /dev/tty (see there) so no
+         * redirect of the command's stdout or stderr can hide the code. */
         char nonceBuf[5];
         generate_verify_nonce(nonceBuf, sizeof(nonceBuf));
         NSString *verifyCode = [NSString stringWithUTF8String:nonceBuf];
-        emit_verify_code(g_plugin_printf, nonceBuf);
+        emit_verify_code(g_plugin_printf, "/dev/tty", nonceBuf);
 
         /* Two renderings of the same content: LAContext wraps our text in
          * a system-supplied sentence and appends a period, so we use the
