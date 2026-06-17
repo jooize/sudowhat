@@ -6,11 +6,16 @@
   darwinMinVersionHook,
   openpam,
   teamId ? "-",
+  # Emphasis preset for the verify-code tty echo. One of the names in the
+  # Makefile's SUDOWHAT_VALID_STYLES; the nix module validates this with an
+  # enum, so an out-of-set value is caught at eval time rather than reaching
+  # the Makefile's bold fallback. See services.sudowhat.verifyStyle.
+  verifyStyle ? "bold",
 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "sudowhat";
-  version = "0.5.3";
+  version = "0.5.4";
 
   src = lib.cleanSource ../.;
 
@@ -47,7 +52,10 @@ stdenv.mkDerivation (finalAttrs: {
                      "$out/lib/pam/pam_sudowhat.so"
   '';
 
-  makeFlags = [ "SUDOWHAT_TEAM_ID=${teamId}" ];
+  makeFlags = [
+    "SUDOWHAT_TEAM_ID=${teamId}"
+    "SUDOWHAT_VERIFY_STYLE=${verifyStyle}"
+  ];
 
   buildPhase = ''
     runHook preBuild

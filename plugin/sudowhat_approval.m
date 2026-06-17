@@ -167,19 +167,50 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
 #define SW_VERIFY_PREFIX "sudowhat: verify code "
 #define SW_VERIFY_SUFFIX " in the prompt\n"
 #define SW_VERIFY_LINE_FMT      SW_VERIFY_PREFIX "%s" SW_VERIFY_SUFFIX
-/* Bold (SGR 1) the code, then reset all (SGR 0). Bold rather than a specific
- * color because it is background-independent — a foreground color can vanish
- * against some terminal themes, defeating the very visibility this echo exists
- * for. Emphasis only, never a trust signal (see write_verify_code_to_tty). */
-#define SW_VERIFY_LINE_FMT_BOLD SW_VERIFY_PREFIX "\033[1m%s\033[0m" SW_VERIFY_SUFFIX
 
-/* Render the verify-code line into buf, wrapping the code in ANSI bold when
- * colorize is YES. Returns snprintf's count so callers can fail closed on
+/* Build-time emphasis preset for the tty echo, chosen by -DSW_VERIFY_STYLE
+ * (services.sudowhat.verifyStyle in the nix module; SUDOWHAT_VERIFY_STYLE in the
+ * Makefile). The style names one of the fixed SGR sequences below — never a
+ * free-form string — so the only escape bytes that can ever reach a terminal
+ * stay a small, reviewed set and a malformed escape cannot be expressed. Every
+ * color leads with "1;" (bold + color) so the emphasis still carries on a theme
+ * where the color washes out; "plain" is the empty SGR, which routes
+ * format_verify_line to its unstyled branch (a compile-time NO_COLOR). Bold is
+ * the default because it is background-independent. Emphasis only, never a trust
+ * signal (see write_verify_code_to_tty).
+ *
+ * The Makefile normalizes any unknown style to bold (with a warning), so in a
+ * supported build this token-paste only ever sees a known name; a raw -D that
+ * bypasses the Makefile with an unknown name yields an undefined identifier here
+ * and fails the compile — the intended fail-closed result for that unsupported
+ * path. */
+#ifndef SW_VERIFY_STYLE
+#define SW_VERIFY_STYLE bold
+#endif
+#define SW_SGR_plain   ""
+#define SW_SGR_bold    "1"
+#define SW_SGR_red     "1;31"
+#define SW_SGR_green   "1;32"
+#define SW_SGR_yellow  "1;33"
+#define SW_SGR_blue    "1;34"
+#define SW_SGR_magenta "1;35"
+#define SW_SGR_cyan    "1;36"
+#define SW_SGR_CAT(x)  SW_SGR_##x
+#define SW_SGR_SEL(x)  SW_SGR_CAT(x)
+#define SW_VERIFY_SGR  SW_SGR_SEL(SW_VERIFY_STYLE)
+/* Styled line: the selected SGR on the code, then reset all (SGR 0). */
+#define SW_VERIFY_LINE_FMT_STYLED \
+    SW_VERIFY_PREFIX "\033[" SW_VERIFY_SGR "m%s\033[0m" SW_VERIFY_SUFFIX
+
+/* Render the verify-code line into buf. Styled (the selected SGR wrapping only
+ * the code) when colorize is YES and the build style is not "plain" (empty SGR);
+ * unstyled otherwise. Returns snprintf's count so callers can fail closed on
  * truncation. Pure (no fd, no env) so it is unit-testable for both renderings. */
 static int format_verify_line(char *buf, size_t bufsz, const char *code,
                               BOOL colorize) {
+    BOOL styled = colorize && SW_VERIFY_SGR[0] != '\0';
     return snprintf(buf, bufsz,
-                    colorize ? SW_VERIFY_LINE_FMT_BOLD : SW_VERIFY_LINE_FMT,
+                    styled ? SW_VERIFY_LINE_FMT_STYLED : SW_VERIFY_LINE_FMT,
                     code);
 }
 

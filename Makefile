@@ -12,10 +12,24 @@
 
 SUDOWHAT_TEAM_ID ?= -
 
+# Build-time emphasis preset for the verify-code tty echo. One of a fixed set of
+# named styles (the nix module exposes the same names via
+# services.sudowhat.verifyStyle). Passed as a bare token to -DSW_VERIFY_STYLE,
+# where the plugin maps it to a reviewed SGR sequence. An unknown value
+# normalizes to bold — the safe, theme-independent baseline — with a warning,
+# rather than failing the build.
+SUDOWHAT_VERIFY_STYLE ?= bold
+SUDOWHAT_VALID_STYLES := plain bold red green yellow blue magenta cyan
+ifeq ($(filter $(SUDOWHAT_VERIFY_STYLE),$(SUDOWHAT_VALID_STYLES)),)
+  $(warning sudowhat: unknown SUDOWHAT_VERIFY_STYLE '$(SUDOWHAT_VERIFY_STYLE)', falling back to bold)
+  override SUDOWHAT_VERIFY_STYLE := bold
+endif
+
 CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
           -Iplugin -Ipam -Ishared \
-          -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"'
+          -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"' \
+          -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE)
 LDFLAGS = -bundle \
           -framework Foundation \
           -framework CoreFoundation \

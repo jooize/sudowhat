@@ -60,9 +60,40 @@ in {
         session.
       '';
     };
+
+    verifyStyle = lib.mkOption {
+      type = lib.types.enum [
+        "plain" "bold" "red" "green" "yellow" "blue" "magenta" "cyan"
+      ];
+      default = "bold";
+      description = ''
+        Emphasis applied to the verify code echoed to the controlling
+        terminal (the out-of-band code the user matches against the Touch ID
+        sheet). Each color is bold-plus-color, so the emphasis still carries
+        on a terminal theme where the color washes out; `bold` (the default)
+        is a background-independent emphasis with no color; `plain` emits no
+        escape sequence at all (a build-time equivalent of `NO_COLOR`).
+
+        This is purely cosmetic and never a trust signal: the anchor is the
+        code matching the system-rendered Touch ID sheet, which cannot be
+        colored. The value is baked into the signed bundle at build time and
+        selects from a fixed, reviewed set of SGR sequences, never a free-form
+        string, so no escape-injection surface is added. The runtime opt-outs
+        still apply: NO_COLOR or TERM=dumb in the invoking environment, a
+        non-tty target, or the stderr fallback always render plain regardless
+        of this setting.
+      '';
+    };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = lib.mkIf cfg.enable (let
+    # Bake the chosen emphasis into the bundle. The default verifyStyle ("bold")
+    # reproduces the package's own default, so default users get the same store
+    # path with no rebuild; any other value produces a distinct derivation whose
+    # embedded path and the /etc references below stay consistent (both come from
+    # `pkg`), preserving mutual signature verification.
+    pkg = cfg.package.override { inherit (cfg) verifyStyle; };
+  in {
     # The store-path approach: binaries live in /nix/store, /etc files
     # reference them by full path. nix-darwin owns these three /etc files
     # declaratively, so darwin-rebuild rotates the whole set atomically
@@ -73,7 +104,7 @@ in {
       # Managed by the sudowhat nix-darwin module. Disable the module to
       # restore stock /etc/sudo.conf (which on macOS does not exist by
       # default).
-      Plugin sudowhat_approval_plugin ${cfg.package}/libexec/sudo/sudowhat_approval.so
+      Plugin sudowhat_approval_plugin ${pkg}/libexec/sudo/sudowhat_approval.so
     '';
 
     # nix-darwin's environment.etc has no `mode` attribute (unlike NixOS).
@@ -112,8 +143,8 @@ in {
         #                                                /etc/pam.d/sudo chain falls through to
         #                                                pam_smartcard / pam_opendirectory on
         #                                                the caller's own terminal.
-        auth    requisite     ${cfg.package}/lib/pam/pam_sudowhat.so
-        auth    sufficient    ${cfg.package}/lib/pam/pam_sudowhat.so console-gate
+        auth    requisite     ${pkg}/lib/pam/pam_sudowhat.so
+        auth    sufficient    ${pkg}/lib/pam/pam_sudowhat.so console-gate
       '' else ''
         # Managed by the sudowhat nix-darwin module.
         #
@@ -123,8 +154,8 @@ in {
         #                                  to pam_smartcard / pam_opendirectory.
         #                                  Non-console callers are denied by the
         #                                  approval plugin (no password path here).
-        auth    requisite     ${cfg.package}/lib/pam/pam_sudowhat.so
+        auth    requisite     ${pkg}/lib/pam/pam_sudowhat.so
         auth    sufficient    pam_permit.so
       '';
-  };
+  });
 }
