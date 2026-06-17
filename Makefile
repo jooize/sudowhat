@@ -19,7 +19,7 @@ SUDOWHAT_TEAM_ID ?= -
 # normalizes to bold — the safe, theme-independent baseline — with a warning,
 # rather than failing the build.
 SUDOWHAT_VERIFY_STYLE ?= bold
-SUDOWHAT_VALID_STYLES := plain bold red green yellow blue magenta cyan
+SUDOWHAT_VALID_STYLES := plain bold red green yellow blue magenta cyan random
 ifeq ($(filter $(SUDOWHAT_VERIFY_STYLE),$(SUDOWHAT_VALID_STYLES)),)
   $(warning sudowhat: unknown SUDOWHAT_VERIFY_STYLE '$(SUDOWHAT_VERIFY_STYLE)', falling back to bold)
   override SUDOWHAT_VERIFY_STYLE := bold

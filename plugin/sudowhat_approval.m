@@ -175,8 +175,9 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * stay a small, reviewed set and a malformed escape cannot be expressed. Every
  * color leads with "1;" (bold + color) so the emphasis still carries on a theme
  * where the color washes out; "plain" is the empty SGR, which routes
- * format_verify_line to its unstyled branch (a compile-time NO_COLOR). Bold is
- * the default because it is background-independent. Emphasis only, never a trust
+ * format_verify_line to its unstyled branch (a compile-time NO_COLOR); "random"
+ * picks one of a curated color subset per invocation (sw_verify_sgr below). Bold
+ * is the default because it is background-independent. Emphasis only, never a trust
  * signal (see write_verify_code_to_tty).
  *
  * The Makefile normalizes any unknown style to bold (with a warning), so in a
@@ -197,21 +198,61 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
 #define SW_SGR_cyan    "1;36"
 #define SW_SGR_CAT(x)  SW_SGR_##x
 #define SW_SGR_SEL(x)  SW_SGR_CAT(x)
-#define SW_VERIFY_SGR  SW_SGR_SEL(SW_VERIFY_STYLE)
-/* Styled line: the selected SGR on the code, then reset all (SGR 0). */
-#define SW_VERIFY_LINE_FMT_STYLED \
-    SW_VERIFY_PREFIX "\033[" SW_VERIFY_SGR "m%s\033[0m" SW_VERIFY_SUFFIX
 
-/* Render the verify-code line into buf. Styled (the selected SGR wrapping only
- * the code) when colorize is YES and the build style is not "plain" (empty SGR);
- * unstyled otherwise. Returns snprintf's count so callers can fail closed on
- * truncation. Pure (no fd, no env) so it is unit-testable for both renderings. */
+/* "random" is the one style resolved at runtime: each invocation picks one of a
+ * curated color subset. Detected here so every other style stays compile-time.
+ * SW_VS_<name> is 0 for each fixed preset and 1 only for "random"; an undefined
+ * SW_VS_<name> (impossible in a Makefile build) evaluates to 0 in #if, i.e. a
+ * fixed style, and then fails to compile at SW_SGR_SEL below — the same
+ * fail-closed path as an unknown fixed name. */
+#define SW_VS_plain   0
+#define SW_VS_bold    0
+#define SW_VS_red     0
+#define SW_VS_green   0
+#define SW_VS_yellow  0
+#define SW_VS_blue    0
+#define SW_VS_magenta 0
+#define SW_VS_cyan    0
+#define SW_VS_random  1
+#define SW_VS_CAT(x)  SW_VS_##x
+#define SW_VS_SEL(x)  SW_VS_CAT(x)
+
+#if SW_VS_SEL(SW_VERIFY_STYLE)
+/* Curated subset, legible on both light and dark backgrounds. Every entry is
+ * bold+color, so even where the color washes out the bold still carries. The
+ * table is compile-time constant — only the index is runtime — so the bytes
+ * reaching the tty stay the same reviewed set as the fixed presets. blue (dim on
+ * common dark backgrounds even bolded) and yellow (washes out on light) are
+ * excluded. */
+static const char *const sw_sgr_random_set[] = {
+    SW_SGR_red, SW_SGR_green, SW_SGR_magenta, SW_SGR_cyan,
+};
+static const char *sw_verify_sgr(void) {
+    uint32_t n = (uint32_t)(sizeof sw_sgr_random_set / sizeof sw_sgr_random_set[0]);
+    return sw_sgr_random_set[arc4random_uniform(n)];
+}
+#else
+/* Fixed style: the SGR is a compile-time constant. An unknown name here is an
+ * undefined SW_SGR_<name>, which fails the compile (fail-closed). */
+static const char *sw_verify_sgr(void) { return SW_SGR_SEL(SW_VERIFY_STYLE); }
+#endif
+
+/* Render the verify-code line into buf. Styled (the resolved SGR wrapping only
+ * the code) when colorize is YES and the style is not "plain" (empty SGR);
+ * unstyled otherwise. The SGR comes only from the fixed table above, never from
+ * input, so substituting it via %s adds no more surface than the nonce already
+ * does. Returns snprintf's count so callers can fail closed on truncation.
+ * Deterministic for every fixed style (unit-testable); "random" is the sole
+ * non-deterministic case. */
 static int format_verify_line(char *buf, size_t bufsz, const char *code,
                               BOOL colorize) {
-    BOOL styled = colorize && SW_VERIFY_SGR[0] != '\0';
-    return snprintf(buf, bufsz,
-                    styled ? SW_VERIFY_LINE_FMT_STYLED : SW_VERIFY_LINE_FMT,
-                    code);
+    const char *sgr = sw_verify_sgr();
+    if (colorize && sgr[0] != '\0') {
+        return snprintf(buf, bufsz,
+                        SW_VERIFY_PREFIX "\033[%sm%s\033[0m" SW_VERIFY_SUFFIX,
+                        sgr, code);
+    }
+    return snprintf(buf, bufsz, SW_VERIFY_LINE_FMT, code);
 }
 
 /* Whether the invoking environment permits ANSI emphasis on the tty echo. This

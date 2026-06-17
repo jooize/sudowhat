@@ -88,7 +88,8 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
           # "Console vs. non-console callers".
           # services.sudowhat.allowNonConsole = true;
           # Emphasis on the verify code echoed to the terminal (default
-          # "bold"; "plain" disables it; colors are bold+color). Cosmetic only.
+          # "bold"; "plain" disables it; colors are bold+color; "random"
+          # rotates colors per invocation). Cosmetic only.
           # services.sudowhat.verifyStyle = "cyan";
         }
       ];
@@ -168,7 +169,7 @@ them (no sheet) once sudo has authenticated them.
 
 **Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache, so every privileged command re-prompts. The value is configurable via `services.sudowhat.timestampTimeout`; the module never sets `timestamp_type=global`.
 
-**Verify-code emphasis:** the code echoed to the controlling terminal is bold by default; `services.sudowhat.verifyStyle` selects a different emphasis (`plain`, `bold`, or a bold-plus-color — `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`) baked into the signed bundle at build time. It is purely cosmetic — never a trust signal, since the anchor is the code matching the system-rendered Touch ID sheet — and the value selects from a fixed, reviewed set of escape sequences rather than a free-form string, so it adds no injection surface. `NO_COLOR` or `TERM=dumb` in the invoking environment still force plain at runtime regardless of the build-time setting.
+**Verify-code emphasis:** the code echoed to the controlling terminal is bold by default; `services.sudowhat.verifyStyle` selects a different emphasis (`plain`, `bold`, a bold-plus-color — `red`, `green`, `yellow`, `blue`, `magenta`, `cyan` — or `random`, which rotates among a curated color subset per invocation) baked into the signed bundle at build time. It is purely cosmetic — never a trust signal, since the anchor is the code matching the system-rendered Touch ID sheet — and the value selects from a fixed, reviewed set of escape sequences rather than a free-form string, so it adds no injection surface. `NO_COLOR` or `TERM=dumb` in the invoking environment still force plain at runtime regardless of the build-time setting.
 
 ## Console vs. non-console callers
 
@@ -219,7 +220,7 @@ Bundles are signed with your Developer ID Application certificate. The team-iden
 
 | | |
 |---|---|
-| Latest release | `v0.5.4` |
+| Latest release | `v0.5.5` |
 | Tested on | macOS Tahoe (Darwin 25.4) |
 | Architecture | Apple silicon (arm64) |
 | Signing | ad-hoc dev mode shipped; Developer ID release planned |

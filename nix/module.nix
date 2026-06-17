@@ -63,7 +63,7 @@ in {
 
     verifyStyle = lib.mkOption {
       type = lib.types.enum [
-        "plain" "bold" "red" "green" "yellow" "blue" "magenta" "cyan"
+        "plain" "bold" "red" "green" "yellow" "blue" "magenta" "cyan" "random"
       ];
       default = "bold";
       description = ''
@@ -72,7 +72,10 @@ in {
         sheet). Each color is bold-plus-color, so the emphasis still carries
         on a terminal theme where the color washes out; `bold` (the default)
         is a background-independent emphasis with no color; `plain` emits no
-        escape sequence at all (a build-time equivalent of `NO_COLOR`).
+        escape sequence at all (a build-time equivalent of `NO_COLOR`);
+        `random` picks a different color per invocation from a curated subset
+        (red, green, magenta, cyan) — purely cosmetic novelty, and the only
+        style resolved at runtime rather than baked.
 
         This is purely cosmetic and never a trust signal: the anchor is the
         code matching the system-rendered Touch ID sheet, which cannot be
