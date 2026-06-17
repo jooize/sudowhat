@@ -48,6 +48,7 @@ typedef struct {
     int   have_term_program;
     char  term[64];
     int   have_term;
+    int   no_color;
 } sw_invoking_ctx;
 
 static sw_invoking_ctx g_inv = { .uid = (uid_t)-1 };
@@ -159,9 +160,43 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
     }
 }
 
-/* The verify-code line. One definition so the /dev/tty path and the stderr
- * fallback below can never drift apart. */
-#define SW_VERIFY_LINE_FMT "sudowhat: verify code %s in the prompt\n"
+/* The verify-code line. One set of pieces so the /dev/tty path and the stderr
+ * fallback below can never drift apart. The substituted code is the plugin's
+ * own nonce — no caller-controlled bytes reach this line — so it needs no
+ * escaping. */
+#define SW_VERIFY_PREFIX "sudowhat: verify code "
+#define SW_VERIFY_SUFFIX " in the prompt\n"
+#define SW_VERIFY_LINE_FMT      SW_VERIFY_PREFIX "%s" SW_VERIFY_SUFFIX
+/* Bold (SGR 1) the code, then reset all (SGR 0). Bold rather than a specific
+ * color because it is background-independent — a foreground color can vanish
+ * against some terminal themes, defeating the very visibility this echo exists
+ * for. Emphasis only, never a trust signal (see write_verify_code_to_tty). */
+#define SW_VERIFY_LINE_FMT_BOLD SW_VERIFY_PREFIX "\033[1m%s\033[0m" SW_VERIFY_SUFFIX
+
+/* Render the verify-code line into buf, wrapping the code in ANSI bold when
+ * colorize is YES. Returns snprintf's count so callers can fail closed on
+ * truncation. Pure (no fd, no env) so it is unit-testable for both renderings. */
+static int format_verify_line(char *buf, size_t bufsz, const char *code,
+                              BOOL colorize) {
+    return snprintf(buf, bufsz,
+                    colorize ? SW_VERIFY_LINE_FMT_BOLD : SW_VERIFY_LINE_FMT,
+                    code);
+}
+
+/* Whether the invoking environment permits ANSI emphasis on the tty echo. This
+ * is cosmetic, so reading it from the (spoofable) captured submit_envp is safe:
+ * the most an attacker gains by lying is the wrong emphasis, never a security
+ * effect — the trust anchor is the code matching the Touch ID sheet, which is
+ * system-rendered and cannot be colored. Off when NO_COLOR is present at any
+ * value (no-color.org) or TERM is absent/empty/"dumb". The authoritative gate
+ * is isatty() at the write site, so a redirect or the stderr fallback always
+ * stays plain. */
+static BOOL sw_color_allowed(void) {
+    if (g_inv.no_color) return NO;
+    if (!g_inv.have_term || g_inv.term[0] == '\0') return NO;
+    if (strcmp(g_inv.term, "dumb") == 0) return NO;
+    return YES;
+}
 
 /* Write the verify-code line straight to the controlling terminal.
  *
@@ -179,14 +214,21 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * tty, exactly as sudo's own prompt does.
  *
  * ttyPath is a parameter (always "/dev/tty" in production) so the offline unit
- * test can point it at a temp file and read the bytes back. Returns YES iff the
- * entire line was written. */
-static BOOL write_verify_code_to_tty(const char *ttyPath, const char *code) {
+ * test can point it at a temp file and read the bytes back. colorAllowed folds
+ * in the env opt-outs (NO_COLOR/TERM); the isatty() check below is the final
+ * gate, so escape bytes only ever reach a real terminal — never a file or pipe
+ * (e.g. a temp-file test path, or `2>/dev/tty` aimed at a regular file), where
+ * they would corrupt a captured log rather than emphasise anything. Returns YES
+ * iff the entire line was written. */
+static BOOL write_verify_code_to_tty(const char *ttyPath, const char *code,
+                                     BOOL colorAllowed) {
     int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
     if (fd < 0) return NO;
 
+    BOOL colorize = colorAllowed && isatty(fd);
+
     char line[96];
-    int n = snprintf(line, sizeof(line), SW_VERIFY_LINE_FMT, code);
+    int n = format_verify_line(line, sizeof(line), code, colorize);
     if (n < 0 || (size_t)n >= sizeof(line)) { close(fd); return NO; }
 
     ssize_t off = 0;
@@ -217,9 +259,11 @@ static BOOL write_verify_code_to_tty(const char *ttyPath, const char *code) {
  * offline unit test can exercise both branches without a live sudo or real
  * tty. */
 static void emit_verify_code(sudo_printf_t printf_fn, const char *ttyPath,
-                             const char *code) {
-    if (write_verify_code_to_tty(ttyPath, code)) return;
+                             const char *code, BOOL colorAllowed) {
+    if (write_verify_code_to_tty(ttyPath, code, colorAllowed)) return;
     if (printf_fn != NULL) {
+        /* The fallback is sudo's stderr, not a known terminal, so it is always
+         * plain — escape bytes here could land in a `2>file` capture. */
         printf_fn(SUDO_CONV_ERROR_MSG, SW_VERIFY_LINE_FMT, code);
     }
 }
@@ -319,6 +363,12 @@ static int sudowhat_open(unsigned int version,
         snprintf(g_inv.term, sizeof(g_inv.term), "%s", term);
         g_inv.have_term = 1;
     }
+    /* NO_COLOR (no-color.org): present at ANY value — including empty — means
+     * the user opted out of ANSI emphasis on the verify-code tty echo. Same
+     * spoofable env class as TERM above; only the echo's color depends on it.
+     * find_kv returns non-NULL for "NO_COLOR=" (empty value), so presence — not
+     * truthiness — is the test, exactly as the standard specifies. */
+    g_inv.no_color = (find_kv(submit_envp, "NO_COLOR") != NULL);
     return 1;
 }
 
@@ -495,7 +545,8 @@ static int sudowhat_check(char * const command_info[],
         char nonceBuf[5];
         generate_verify_nonce(nonceBuf, sizeof(nonceBuf));
         NSString *verifyCode = [NSString stringWithUTF8String:nonceBuf];
-        emit_verify_code(g_plugin_printf, "/dev/tty", nonceBuf);
+        emit_verify_code(g_plugin_printf, "/dev/tty", nonceBuf,
+                         sw_color_allowed());
 
         /* Two renderings of the same content: LAContext wraps our text in
          * a system-supplied sentence and appends a period, so we use the

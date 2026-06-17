@@ -201,14 +201,16 @@ static void test_verify_code_to_tty(void) {
     OK(fd >= 0, "mkstemp created a temp file for the tty-write test");
     if (fd >= 0) close(fd);
 
-    OK(write_verify_code_to_tty(path, "3SNJ"),
+    /* colorAllowed=YES, yet a regular file is not a tty -> isatty() gate keeps
+     * the bytes plain, so no escape sequence can ever corrupt a captured log. */
+    OK(write_verify_code_to_tty(path, "3SNJ", YES),
        "write_verify_code_to_tty succeeds on a writable path");
     EQ(sw_read_utf8(path), @"sudowhat: verify code 3SNJ in the prompt\n",
-       "the controlling-terminal channel gets the exact verify line");
+       "a non-tty stays plain even when color is allowed");
     unlink(path);
 
     /* Unopenable path -> NO (this is what drives the stderr fallback). */
-    OK(!write_verify_code_to_tty("/no/such/dir/sw_tty", "3SNJ"),
+    OK(!write_verify_code_to_tty("/no/such/dir/sw_tty", "3SNJ", YES),
        "write_verify_code_to_tty fails closed on an unopenable path");
 }
 
@@ -221,7 +223,7 @@ static void test_emit_prefers_tty_then_stderr(void) {
     if (fd >= 0) close(fd);
 
     g_cap_msg_type = -1; g_cap_buf[0] = '\0';
-    emit_verify_code(capture_printf, path, "3SNJ");
+    emit_verify_code(capture_printf, path, "3SNJ", YES);
     OK(g_cap_msg_type == -1, "stderr fallback NOT used when the tty write succeeds");
     EQ(sw_read_utf8(path), @"sudowhat: verify code 3SNJ in the prompt\n",
        "emit_verify_code wrote the line to the tty path");
@@ -229,16 +231,54 @@ static void test_emit_prefers_tty_then_stderr(void) {
 
     /* (b) tty unopenable -> fall back to sudo's stderr (ERROR_MSG), never stdout. */
     g_cap_msg_type = -1; g_cap_buf[0] = '\0';
-    emit_verify_code(capture_printf, "/no/such/dir/sw_tty", "3SNJ");
+    emit_verify_code(capture_printf, "/no/such/dir/sw_tty", "3SNJ", YES);
     OK(g_cap_msg_type == SUDO_CONV_ERROR_MSG,
        "fallback uses ERROR_MSG/stderr (survives >), not INFO_MSG/stdout");
     OK(g_cap_msg_type != SUDO_CONV_INFO_MSG, "fallback is not on stdout");
     OK(strstr(g_cap_buf, "3SNJ") != NULL, "fallback line carries the code");
+    OK(strstr(g_cap_buf, "\033[") == NULL,
+       "stderr fallback is always plain — no escape bytes for a >file capture");
 
     /* (c) tty unopenable AND no printf -> silent no-op, never a crash. */
     g_cap_msg_type = -1;
-    emit_verify_code(NULL, "/no/such/dir/sw_tty", "XXXX");
+    emit_verify_code(NULL, "/no/such/dir/sw_tty", "XXXX", YES);
     OK(g_cap_msg_type == -1, "no tty + NULL printf is a silent no-op");
+}
+
+/* The bold rendering wraps ONLY the code in SGR 1 / reset, and sw_color_allowed
+ * honours the env opt-outs. Color is a legibility aid on the tty echo, never a
+ * trust signal (the anchor is the code matching the system-rendered Touch ID
+ * sheet, which cannot be colored), so these only pin bytes and env logic. */
+static void test_verify_line_format_and_color(void) {
+    char buf[96];
+
+    int n = format_verify_line(buf, sizeof buf, "3SNJ", NO);
+    OK(n > 0 && strcmp(buf, "sudowhat: verify code 3SNJ in the prompt\n") == 0,
+       "plain rendering carries no escape bytes");
+
+    n = format_verify_line(buf, sizeof buf, "3SNJ", YES);
+    OK(n > 0 && strcmp(buf,
+       "sudowhat: verify code \033[1m3SNJ\033[0m in the prompt\n") == 0,
+       "bold rendering wraps only the code in SGR 1 / reset");
+
+    /* sw_color_allowed reads the captured invoking-context snapshot. */
+    sw_invoking_ctx saved = g_inv;
+
+    g_inv = (sw_invoking_ctx){ .have_term = 1, .no_color = 0 };
+    snprintf(g_inv.term, sizeof g_inv.term, "%s", "xterm-256color");
+    OK(sw_color_allowed(), "color allowed for a normal TERM with NO_COLOR unset");
+
+    g_inv.no_color = 1;
+    OK(!sw_color_allowed(), "NO_COLOR (any value) disables color");
+
+    g_inv = (sw_invoking_ctx){ .have_term = 1 };
+    snprintf(g_inv.term, sizeof g_inv.term, "%s", "dumb");
+    OK(!sw_color_allowed(), "TERM=dumb disables color");
+
+    g_inv = (sw_invoking_ctx){ .have_term = 0 };
+    OK(!sw_color_allowed(), "absent TERM disables color");
+
+    g_inv = saved;
 }
 
 static void test_nonce_edge_sizes(void) {
@@ -268,6 +308,7 @@ int main(void) {
         test_nonce_edge_sizes();
         test_verify_code_to_tty();
         test_emit_prefers_tty_then_stderr();
+        test_verify_line_format_and_color();
         SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel)");
     }
 }
