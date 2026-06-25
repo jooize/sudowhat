@@ -165,23 +165,13 @@ static void test_gate_variant_detection(void) {
 }
 
 /* The verify code is a channel-binding security signal the user compares
- * against the Touch ID sheet. It must reach the human at the keyboard whatever
- * the command does with its fds, so it is written to the controlling terminal
- * (/dev/tty), which a shell's `>`/`2>`/`&>` cannot touch; only when there is no
- * controlling terminal does emit_verify_code fall back to sudo's stderr
- * (SUDO_CONV_ERROR_MSG, never INFO_MSG/stdout). These tests pin both branches:
- * the tty path is parameterized so we can aim it at a temp file with no real
- * tty, and the fallback is driven by an unopenable path. */
-static int  g_cap_msg_type;
-static char g_cap_buf[512];
-static int capture_printf(int msg_type, const char *fmt, ...) {
-    g_cap_msg_type = msg_type;
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(g_cap_buf, sizeof g_cap_buf, fmt, ap);
-    va_end(ap);
-    return n;
-}
+ * against the Touch ID sheet. It is written to the controlling terminal
+ * (/dev/tty) — which a shell's `>`/`2>`/`&>` cannot touch — and to NOWHERE
+ * else: when there is no controlling terminal, emit_verify_code stays silent
+ * rather than fall back to sudo's stderr (which could clutter an error stream
+ * or be slurped into a `2>file`). That is structural — emit_verify_code takes
+ * no printf, so it has no channel but the tty. These tests pin the tty write
+ * and the silent-on-no-tty behavior via the parameterized path. */
 
 /* mkstemp template under $TMPDIR (falls back to /tmp). */
 static void sw_tmpl(char *buf, size_t n, const char *tag) {
@@ -216,35 +206,24 @@ static void test_verify_code_to_tty(void) {
        "write_verify_code_to_tty fails closed on an unopenable path");
 }
 
-static void test_emit_prefers_tty_then_stderr(void) {
-    /* (a) tty path writable -> code goes to the tty, stderr fallback untouched. */
+static void test_emit_verify_code_tty_only(void) {
+    /* (a) Writable tty path -> the code is written there, verbatim. */
     char path[256];
     sw_tmpl(path, sizeof path, "emit");
     int fd = mkstemp(path);
     OK(fd >= 0, "mkstemp created a temp file for the emit test");
     if (fd >= 0) close(fd);
 
-    g_cap_msg_type = -1; g_cap_buf[0] = '\0';
-    emit_verify_code(capture_printf, path, "3SNJ", YES);
-    OK(g_cap_msg_type == -1, "stderr fallback NOT used when the tty write succeeds");
+    emit_verify_code(path, "3SNJ", YES);
     EQ(sw_read_utf8(path), @"sudowhat: verify code 3SNJ in the prompt\n",
        "emit_verify_code wrote the line to the tty path");
     unlink(path);
 
-    /* (b) tty unopenable -> fall back to sudo's stderr (ERROR_MSG), never stdout. */
-    g_cap_msg_type = -1; g_cap_buf[0] = '\0';
-    emit_verify_code(capture_printf, "/no/such/dir/sw_tty", "3SNJ", YES);
-    OK(g_cap_msg_type == SUDO_CONV_ERROR_MSG,
-       "fallback uses ERROR_MSG/stderr (survives >), not INFO_MSG/stdout");
-    OK(g_cap_msg_type != SUDO_CONV_INFO_MSG, "fallback is not on stdout");
-    OK(strstr(g_cap_buf, "3SNJ") != NULL, "fallback line carries the code");
-    OK(strstr(g_cap_buf, "\033[") == NULL,
-       "stderr fallback is always plain — no escape bytes for a >file capture");
-
-    /* (c) tty unopenable AND no printf -> silent no-op, never a crash. */
-    g_cap_msg_type = -1;
-    emit_verify_code(NULL, "/no/such/dir/sw_tty", "XXXX", YES);
-    OK(g_cap_msg_type == -1, "no tty + NULL printf is a silent no-op");
+    /* (b) Unopenable path (no controlling terminal) -> silent no-op. There is
+     * no stderr fallback, and no printf parameter that could carry one, so
+     * nothing is emitted anywhere; the call must simply return without a crash. */
+    emit_verify_code("/no/such/dir/sw_tty", "3SNJ", YES);
+    OK(1, "no controlling terminal -> silent (no fallback), no crash");
 }
 
 /* The bold rendering wraps ONLY the code in SGR 1 / reset, and sw_color_allowed
@@ -319,13 +298,11 @@ static void test_emit_full_command_to_tty(void) {
     EQ(sw_read_utf8(path2), @"", "empty command line writes nothing");
     unlink(path2);
 
-    /* Unopenable path -> silent no-op, no crash, and (crucially) no fallback
-     * channel: the command never reaches sudo's stderr the way the verify code
-     * would. We assert it does not touch the capture_printf sink. */
-    g_cap_msg_type = -1; g_cap_buf[0] = '\0';
+    /* Unopenable path -> silent no-op, no crash, and no fallback channel: like
+     * the verify code, the command is tty-or-nothing (no printf parameter), so
+     * a possibly-confidential command can never reach a capturable stderr. */
     emit_full_command("/no/such/dir/sw_fullcmd", @"/bin/echo secret");
-    OK(g_cap_msg_type == -1,
-       "unopenable tty is a silent no-op — no stderr fallback for the command");
+    OK(1, "unopenable tty is a silent no-op for the command (no fallback, no crash)");
 }
 
 static void test_nonce_edge_sizes(void) {
@@ -354,7 +331,7 @@ int main(void) {
         test_nonce_alphabet_and_length();
         test_nonce_edge_sizes();
         test_verify_code_to_tty();
-        test_emit_prefers_tty_then_stderr();
+        test_emit_verify_code_tty_only();
         test_verify_line_format_and_color();
         test_echo_command_mode();
         test_emit_full_command_to_tty();

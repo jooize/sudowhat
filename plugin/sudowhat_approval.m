@@ -327,27 +327,31 @@ static BOOL write_verify_code_to_tty(const char *ttyPath, const char *code,
     return YES;
 }
 
-/* Emit the channel-binding verify code. Prefer the controlling terminal so no
- * fd redirect can hide it; fall back to sudo's stderr via plugin_printf only
- * when open("/dev/tty") fails. By the time we reach here the caller is already
- * classified active-console (root and non-console callers returned upstream, in
- * sudowhat_check), so this fallback is NOT the detached/cron case — those never
- * get here. It is the narrow one of an in-session process that happens to have
- * no controlling terminal: launched by the Dock / Spotlight / a GUI agent
- * rather than from a shell. stderr still beats staying silent there — a human
- * in that session may see it — and we use SUDO_CONV_ERROR_MSG, never INFO_MSG,
- * since sudo routes INFO to stdout (sudo/src/conversation.c) where a `>file`
- * redirect would swallow it. The printf and ttyPath are passed in so the
- * offline unit test can exercise both branches without a live sudo or real
- * tty. */
-static void emit_verify_code(sudo_printf_t printf_fn, const char *ttyPath,
-                             const char *code, BOOL colorAllowed) {
-    if (write_verify_code_to_tty(ttyPath, code, colorAllowed)) return;
-    if (printf_fn != NULL) {
-        /* The fallback is sudo's stderr, not a known terminal, so it is always
-         * plain — escape bytes here could land in a `2>file` capture. */
-        printf_fn(SUDO_CONV_ERROR_MSG, SW_VERIFY_LINE_FMT, code);
-    }
+/* Emit the channel-binding verify code to the controlling terminal — and ONLY
+ * there. /dev/tty is the one channel no fd redirect can hide (a shell rewires
+ * only fds 0-2; the controlling terminal is untouched), which is the whole
+ * reason the code lives there. When there is no controlling terminal at all —
+ * an in-session process launched by the Dock / Spotlight / a GUI agent / a tool
+ * like Claude Code rather than from a shell (root and non-console callers have
+ * already returned upstream in sudowhat_check, so this is never the cron/SSH
+ * case) — we emit NOTHING rather than fall back to sudo's stderr.
+ *
+ * Dropping that fallback is deliberate: in those contexts stderr is seldom a
+ * live terminal a human is watching, so the fallback rarely delivered its one
+ * benefit, while it would clutter the process's error stream and could be
+ * slurped into a `2>file` capture. And the security floor does not need it — a
+ * sheet the user did not initiate shows no matching code on the terminal they
+ * ARE watching, which is the entire signal; "no code on my terminal" is exactly
+ * the cue to distrust. So the rule is simply: the code appears on the terminal
+ * that launched sudo, or nowhere. (Genuine errors still reach the user via
+ * set_errstr/stderr; only this out-of-band convenience signal is tty-or-nothing.)
+ *
+ * Having no stderr channel here is structural, not merely a runtime choice:
+ * emit_verify_code takes no printf, so it CANNOT write anywhere but the tty.
+ * ttyPath is a parameter so the offline unit test can aim it at a temp file. */
+static void emit_verify_code(const char *ttyPath, const char *code,
+                             BOOL colorAllowed) {
+    write_verify_code_to_tty(ttyPath, code, colorAllowed);
 }
 
 /* Build-time policy for echoing the FULL (untruncated) command to the
@@ -730,8 +734,7 @@ static int sudowhat_check(char * const command_info[],
                                                      style:SWPromptStyleSelfContained
                                               wasTruncated:&truncatedAS];
 
-        emit_verify_code(g_plugin_printf, "/dev/tty", nonceBuf,
-                         sw_color_allowed());
+        emit_verify_code("/dev/tty", nonceBuf, sw_color_allowed());
 
         /* When the sheet truncated the command (or echoCommand=always), echo
          * the full command to the SAME controlling terminal, just below the
