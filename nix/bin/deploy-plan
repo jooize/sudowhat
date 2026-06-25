@@ -12,6 +12,14 @@ set -euo pipefail
 IFS=$'\n\t'
 shopt -s nullglob
 
+# Colour, but only when stdout is a terminal (piping/redirecting stays clean).
+if [[ -t 1 ]]; then
+  C_OFF=$'\033[0m'; C_B=$'\033[1m'; C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_CYN=$'\033[36m'
+else
+  C_OFF=; C_B=; C_DIM=; C_RED=; C_GRN=; C_YEL=; C_CYN=
+fi
+
 case "${1:-}" in
   -h|--help)
     cat <<'EOF'
@@ -33,7 +41,7 @@ FLAKE="${NIX_DARWIN_FLAKE:-/etc/nix-darwin/flake.nix}"
 REPO_MATCH='sudowhat?ref='   # identifies this repo's input line in the flake
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-  echo "error: not inside a git repository" >&2
+  printf '%serror: not inside a git repository%s\n' "$C_RED" "$C_OFF" >&2
   exit 1
 }
 cd "${repo_root}" || exit 1
@@ -43,7 +51,8 @@ head="$(git rev-parse HEAD)"
 # Deploy target = latest release tag reachable from HEAD (highest semver).
 target_tag="$(git tag --merged HEAD 2>/dev/null | grep -E '^v[0-9]' | sort -V | tail -n1 || true)"
 if [[ -z "${target_tag}" ]]; then
-  echo "error: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first" >&2
+  printf '%serror: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first%s\n' \
+    "$C_RED" "$C_OFF" >&2
   exit 1
 fi
 target_rev="$(git rev-list -n1 "${target_tag}")"
@@ -69,39 +78,56 @@ fi
 
 ahead="$(git rev-list --count "${target_rev}..HEAD" 2>/dev/null || echo '?')"
 
-printf 'Target:  %s  (%s)\n' "${target_tag}" "${target_rev:0:10}"
-printf 'HEAD:    %s' "${head:0:10}"
+# Target line: tag (cyan) + its rev (grey aside).
+printf '%sTarget:%s  %s%s%s  %s(%s)%s\n' \
+  "$C_DIM" "$C_OFF" "$C_CYN" "${target_tag}" "$C_OFF" \
+  "$C_DIM" "${target_rev:0:10}" "$C_OFF"
+
+# HEAD line: rev (cyan), then whether HEAD sits on the tag (green) or ahead of
+# it (yellow -- unreleased). C_DIM is the dim ATTRIBUTE and does not reset the
+# foreground, so reset with C_OFF before each colour switch, else it bleeds into
+# the parens.
+printf '%sHEAD:%s    %s%s%s' "$C_DIM" "$C_OFF" "$C_CYN" "${head:0:10}" "$C_OFF"
 if [[ "${head}" == "${target_rev}" ]]; then
-  printf '   (== %s)\n' "${target_tag}"
+  printf '   %s(%s== %s%s)%s\n' \
+    "$C_DIM" "$C_OFF$C_GRN" "${target_tag}" "$C_OFF$C_DIM" "$C_OFF"
 else
-  printf '   (%s commit(s) after %s -- unreleased)\n' "${ahead}" "${target_tag}"
+  printf '   %s(%s%s commit(s) after %s -- unreleased%s)%s\n' \
+    "$C_DIM" "$C_OFF$C_YEL" "${ahead}" "${target_tag}" "$C_OFF$C_DIM" "$C_OFF"
 fi
+
+# Pinned line: rev currently in the flake (cyan) + ref + path (grey aside).
 if [[ -n "${pinned_rev}" ]]; then
-  printf 'Pinned:  %s  ref %s  (%s)\n' "${pinned_rev:0:10}" "${pinned_ref:-?}" "${FLAKE}"
+  printf '%sPinned:%s  %s%s%s  %sref %s  (%s)%s\n' \
+    "$C_DIM" "$C_OFF" "$C_CYN" "${pinned_rev:0:10}" "$C_OFF" \
+    "$C_DIM" "${pinned_ref:-?}" "${FLAKE}" "$C_OFF"
 else
-  printf 'Pinned:  (unreadable -- set NIX_DARWIN_FLAKE or check %s)\n' "${FLAKE}"
+  printf '%sPinned:%s  %s(unreadable -- set NIX_DARWIN_FLAKE or check %s)%s\n' \
+    "$C_DIM" "$C_OFF" "$C_RED" "${FLAKE}" "$C_OFF"
 fi
 
 # Consistency warnings (non-fatal).
 if (( dirty )); then
-  printf 'WARNING: working tree is dirty -- uncommitted changes are in no tag.\n'
+  printf '%sWARNING: working tree is dirty -- uncommitted changes are in no tag.%s\n' \
+    "$C_RED$C_B" "$C_OFF"
 fi
 if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
-  printf 'WARNING: tag %s != its nix/package.nix version %s.\n' "${target_tag}" "${tag_version}"
+  printf '%sWARNING: tag %s != its nix/package.nix version %s.%s\n' \
+    "$C_YEL$C_B" "${target_tag}" "${tag_version}" "$C_OFF"
 fi
 printf '\n'
 
 if [[ -n "${pinned_rev}" && "${pinned_rev}" == "${target_rev}" ]]; then
-  printf 'Already in sync. Nothing to deploy.\n'
+  printf '%sAlready in sync. Nothing to deploy.%s\n' "$C_GRN$C_B" "$C_OFF"
   exit 0
 fi
 
-printf 'To deploy %s:\n' "${target_tag}"
+printf '%sTo deploy %s:%s\n' "$C_B" "${target_tag}" "$C_OFF"
 if [[ -n "${pinned_rev}" && -n "${pinned_ref}" ]]; then
-  printf "  sudo sed -i '' -e 's|ref=%s|ref=refs/tags/%s|' -e 's|rev=%s|rev=%s|' %s\n" \
-    "${pinned_ref}" "${target_tag}" "${pinned_rev}" "${target_rev}" "${FLAKE}"
+  printf "  %ssudo sed -i '' -e 's|ref=%s|ref=refs/tags/%s|' -e 's|rev=%s|rev=%s|' %s%s\n" \
+    "$C_CYN" "${pinned_ref}" "${target_tag}" "${pinned_rev}" "${target_rev}" "${FLAKE}" "$C_OFF"
 else
-  printf '  # edit %s: set the sudowhat input ref=refs/tags/%s and rev=%s\n' \
-    "${FLAKE}" "${target_tag}" "${target_rev}"
+  printf '  %s# edit %s: set the sudowhat input ref=refs/tags/%s and rev=%s%s\n' \
+    "$C_DIM" "${FLAKE}" "${target_tag}" "${target_rev}" "$C_OFF"
 fi
-printf '  sudo darwin-rebuild switch --flake %s\n' "$(dirname "${FLAKE}")"
+printf '  %ssudo darwin-rebuild switch --flake %s%s\n' "$C_CYN" "$(dirname "${FLAKE}")" "$C_OFF"
