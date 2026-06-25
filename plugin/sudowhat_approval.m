@@ -350,6 +350,82 @@ static void emit_verify_code(sudo_printf_t printf_fn, const char *ttyPath,
     }
 }
 
+/* Build-time policy for echoing the FULL (untruncated) command to the
+ * controlling terminal, chosen by -DSW_ECHO_COMMAND (services.sudowhat.echoCommand
+ * in the nix module; SUDOWHAT_ECHO_COMMAND in the Makefile). Mirrors the
+ * SW_VERIFY_STYLE machinery above: a bare token names one of three fixed modes,
+ * so the policy is baked into the signed bundle and no free-form value is
+ * possible.
+ *
+ *   never     - never echo; the Touch ID sheet is the sole command disclosure.
+ *   truncated - (default) echo only when the sheet had to truncate the command,
+ *               so a long command the prompt clipped is still readable in full.
+ *   always    - echo on every invocation.
+ *
+ * The Makefile normalizes an unknown value to "truncated" with a warning; a raw
+ * -D that bypasses it with an unknown name yields an undefined SW_EC_<name> and
+ * fails the compile - the intended fail-closed result for that path. */
+#ifndef SW_ECHO_COMMAND
+#define SW_ECHO_COMMAND truncated
+#endif
+#define SW_EC_never     0
+#define SW_EC_truncated 1
+#define SW_EC_always    2
+#define SW_EC_CAT(x)    SW_EC_##x
+#define SW_EC_SEL(x)    SW_EC_CAT(x)
+enum { sw_echo_command_mode = SW_EC_SEL(SW_ECHO_COMMAND) };
+
+/* Whether to echo the full command, given whether the sheet truncated it. */
+static BOOL sw_should_echo_command(BOOL sheetTruncated) {
+    if (sw_echo_command_mode == SW_EC_always) return YES;
+    if (sw_echo_command_mode == SW_EC_never)  return NO;
+    return sheetTruncated;   /* SW_EC_truncated */
+}
+
+/* Echo the full, untruncated command to the controlling terminal, on its own
+ * line below the verify code, so the user can read what the Touch ID sheet had
+ * to clip.
+ *
+ * tty-ONLY by design, and that is the answer to the confidentiality concern:
+ * unlike the verify code, this is NOT a trust signal that must reach the human
+ * at all costs - it is disclosure of a command the sheet could not show in
+ * full. So it has NO stderr/plugin_printf fallback. sudo's stderr can be
+ * captured by a `2>file` redirect, which would turn "show me the long command"
+ * into a leak of a possibly-confidential command into a file; /dev/tty cannot be
+ * redirected that way and is where the user already is. If there is no
+ * controlling terminal (a Dock/Spotlight launch), we simply skip it - the
+ * sheet's truncated view is exactly what it was before this feature.
+ *
+ * cmdLine is PromptFormatter's escaped + shell-quoted rendering, so it carries
+ * no raw control bytes; we add only our own fixed ASCII prefix and a trailing
+ * newline. We never wrap the command in SGR/color - it is attacker-influenced,
+ * and the only emphasis bytes that ever reach a terminal stay the verify code's
+ * reviewed set. ttyPath is a parameter so the offline unit test can aim it at a
+ * temp file. */
+static void emit_full_command(const char *ttyPath, NSString *cmdLine) {
+    if (cmdLine.length == 0) return;
+    int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) return;
+
+    NSString *line = [NSString stringWithFormat:@"sudowhat: full command: %@\n",
+                      cmdLine];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (data == nil) { close(fd); return; }
+
+    const char *bytes = data.bytes;
+    size_t total = data.length;
+    size_t off = 0;
+    while (off < total) {
+        ssize_t w = write(fd, bytes + off, total - off);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        off += (size_t)w;
+    }
+    close(fd);
+}
+
 static int sudowhat_open(unsigned int version,
                          sudo_conv_t conversation,
                          sudo_printf_t plugin_printf,
@@ -627,28 +703,48 @@ static int sudowhat_check(char * const command_info[],
         char nonceBuf[5];
         generate_verify_nonce(nonceBuf, sizeof(nonceBuf));
         NSString *verifyCode = [NSString stringWithUTF8String:nonceBuf];
-        emit_verify_code(g_plugin_printf, "/dev/tty", nonceBuf,
-                         sw_color_allowed());
 
         /* Two renderings of the same content: LAContext wraps our text in
          * a system-supplied sentence and appends a period, so we use the
          * SystemSheet style there. Authorization Services (password
          * fallback below) shows our text verbatim, so SelfContained gives
-         * it a capitalized verb and its own terminal period. */
+         * it a capitalized verb and its own terminal period. Capture whether
+         * either rendering had to truncate the command — that drives the
+         * full-command terminal echo below. (Formatting is pure and precedes
+         * the seteuid drop, so doing it before the tty writes is safe.) */
+        BOOL truncatedLA = NO, truncatedAS = NO;
         NSString *promptTextLA =
             [SudoWhatPromptFormatter formatWithCommandPath:commandPath
                                                  runasUser:runasUser
                                                        cwd:cwd
                                                 verifyCode:verifyCode
                                                       argv:argv
-                                                     style:SWPromptStyleSystemSheet];
+                                                     style:SWPromptStyleSystemSheet
+                                              wasTruncated:&truncatedLA];
         NSString *promptTextAS =
             [SudoWhatPromptFormatter formatWithCommandPath:commandPath
                                                  runasUser:runasUser
                                                        cwd:cwd
                                                 verifyCode:verifyCode
                                                       argv:argv
-                                                     style:SWPromptStyleSelfContained];
+                                                     style:SWPromptStyleSelfContained
+                                              wasTruncated:&truncatedAS];
+
+        emit_verify_code(g_plugin_printf, "/dev/tty", nonceBuf,
+                         sw_color_allowed());
+
+        /* When the sheet truncated the command (or echoCommand=always), echo
+         * the full command to the SAME controlling terminal, just below the
+         * verify code, so the user can still read what the sheet clipped. We
+         * echo if EITHER rendering truncated, since the user may see the LA
+         * sheet or its AS password fallback. tty-only, no stderr fallback —
+         * see emit_full_command for why that bounds the leak surface. */
+        if (sw_should_echo_command(truncatedLA || truncatedAS)) {
+            NSString *fullCmd =
+                [SudoWhatPromptFormatter fullCommandLineForCommandPath:commandPath
+                                                                  argv:argv];
+            emit_full_command("/dev/tty", fullCmd);
+        }
 
         /* (5) LAContext call.
          *

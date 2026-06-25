@@ -34,6 +34,17 @@ static NSString *fmt(NSString *path, NSString *user, NSString *cwd,
                                                       cwd:cwd verifyCode:verify
                                                      argv:argv style:style];
 }
+static NSString *fullcmd(NSString *path, NSArray *argv) {
+    return [SudoWhatPromptFormatter fullCommandLineForCommandPath:path argv:argv];
+}
+static BOOL fmt_trunc(NSString *path, NSArray *argv, SWPromptStyle style) {
+    BOOL t = NO;
+    [SudoWhatPromptFormatter formatWithCommandPath:path runasUser:@"root"
+                                               cwd:nil verifyCode:@"AB12"
+                                              argv:argv style:style
+                                      wasTruncated:&t];
+    return t;
+}
 
 /* unichar -> length-1 NSString (reliable for NUL and other controls, unlike
  * @"\0" literals whose handling is ambiguous). */
@@ -351,6 +362,64 @@ static void test_format_verifycode_bounded(void) {
     OK(![normal containsString:@"AB12…"], "short code not given a truncation ellipsis");
 }
 
+/* ---- fullCommandLineForCommandPath: and wasTruncated: (terminal echo) ---- */
+
+static void test_fullcmd_basic(void) {
+    /* Same dedup + quoting as the sheet's command region, joined with spaces. */
+    EQ(fullcmd(@"/bin/echo", @[@"echo", @"hello"]), @"/bin/echo hello",
+       "full command joins path + argv, dedup basename argv0");
+    EQ(fullcmd(@"/bin/echo", @[@"/bin/echo", @"hi"]), @"/bin/echo hi",
+       "full command dedups full-path argv0");
+    EQ(fullcmd(@"/bin/echo", @[@"notecho", @"hi"]), @"/bin/echo notecho hi",
+       "full command keeps non-matching argv0");
+    EQ(fullcmd(@"/bin/echo", @[]), @"/bin/echo", "full command path only when no argv");
+    EQ(fullcmd(@"/bin/echo", @[@"echo", @"a b"]), @"/bin/echo 'a b'",
+       "full command shell-quotes a spaced arg");
+}
+
+static void test_fullcmd_escapes_controls(void) {
+    /* The point of routing through PromptFormatter: a real newline / ESC in
+     * argv is rendered as escape TEXT, so writing the result to a terminal can
+     * inject no real control byte (no cursor moves, no ANSI). */
+    NSString *evil = [NSString stringWithFormat:@"a%@b%@c", uni(0x0a), uni(0x1b)];
+    NSString *out = fullcmd(@"/bin/echo", @[@"echo", evil]);
+    OK([out containsString:@"\\n"],   "newline in arg rendered as \\n text");
+    OK([out containsString:@"\\x1b"], "ESC in arg rendered as \\x1b text");
+    OK(charcount(out, 0x0a) == 0, "no real newline byte in the full command");
+    OK(charcount(out, 0x1b) == 0, "no real ESC byte in the full command");
+}
+
+static void test_fullcmd_untruncated(void) {
+    /* The terminal echo has NO budget cap: a command far longer than the
+     * sheet's 480-char budget comes back in full, with no truncation marker. */
+    NSString *bigArg = rep(@"x", 4000);
+    NSString *out = fullcmd(@"/bin/echo", @[@"echo", bigArg]);
+    OK(out.length >= 4000, "full command is not capped to the sheet budget");
+    OK([out containsString:bigArg], "full command preserves the entire long arg");
+    OK(![out containsString:@"COMMAND TRUNCATED"], "full command carries no truncation marker");
+}
+
+static void test_wastruncated_flag(void) {
+    /* The flag the plugin keys the terminal echo on. It must be YES exactly when
+     * the sheet shows a truncation marker (the existing length tests pin that the
+     * marker appears in these same cases). */
+    OK(!fmt_trunc(@"/bin/echo", @[@"echo", @"hi"], SWPromptStyleSystemSheet),
+       "wasTruncated NO for a short command");
+    OK(fmt_trunc(@"/bin/echo", @[@"echo", rep(@"x", 4000)], SWPromptStyleSystemSheet),
+       "wasTruncated YES for an over-long arg (middle-break)");
+    NSMutableArray *many = [NSMutableArray arrayWithObject:@"echo"];
+    for (NSUInteger i = 0; i < 200; i++) [many addObject:rep(@"y", 20)];
+    OK(fmt_trunc(@"/bin/echo", many, SWPromptStyleSystemSheet),
+       "wasTruncated YES for many args (above-indicator)");
+    OK(fmt_trunc(@"/bin/echo", many, SWPromptStyleSelfContained),
+       "wasTruncated YES holds for SelfContained too");
+    /* The 6-arg wrapper passes NULL; the formatter must tolerate it. */
+    NSString *out = [SudoWhatPromptFormatter formatWithCommandPath:@"/bin/echo"
+        runasUser:@"root" cwd:nil verifyCode:@"AB12" argv:@[@"echo", @"hi"]
+        style:SWPromptStyleSystemSheet wasTruncated:NULL];
+    OK(out != nil, "wasTruncated:NULL is tolerated");
+}
+
 int main(void) {
     @autoreleasepool {
         test_escape_named();
@@ -384,6 +453,11 @@ int main(void) {
         test_format_middle_break_preserves_ends();
         test_format_surrogate_boundary();
         test_format_verifycode_bounded();
+
+        test_fullcmd_basic();
+        test_fullcmd_escapes_controls();
+        test_fullcmd_untruncated();
+        test_wastruncated_flag();
 
         SW_SUMMARY("PromptFormatter");
     }

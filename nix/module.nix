@@ -87,15 +87,48 @@ in {
         of this setting.
       '';
     };
+
+    echoCommand = lib.mkOption {
+      type = lib.types.enum [ "never" "truncated" "always" ];
+      default = "truncated";
+      description = ''
+        Whether the full, untruncated command is echoed to the controlling
+        terminal, just below the verify code.
+
+        The Touch ID sheet caps the command it displays at a conservative
+        budget and marks a longer command truncated with an ellipsis. This
+        option recovers the clipped tail by printing the whole command to the
+        terminal that launched sudo:
+
+        - `truncated` (the default) echoes only when the sheet actually had to
+          truncate, so a short command fully shown in the sheet adds nothing to
+          the terminal.
+        - `always` echoes on every invocation.
+        - `never` disables the echo entirely; the sheet is the sole command
+          disclosure. Use this on shared, screen-recorded, or otherwise
+          sensitive terminals where you would rather a long command not land in
+          scrollback.
+
+        The echo is disclosure only, never a trust signal: any process that can
+        write your terminal can forge the same bytes, so the anchor stays the
+        verify code matching the system-rendered sheet. It is written to
+        /dev/tty only — never to sudo's stderr — so it cannot be captured by a
+        `2>file` redirect, and it is skipped when the caller has no controlling
+        terminal. The command is rendered with the same shell-quoting and
+        control-character escaping as the sheet, so it carries no raw escape
+        sequences. Baked into the signed bundle at build time.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable (let
-    # Bake the chosen emphasis into the bundle. The default verifyStyle ("bold")
-    # reproduces the package's own default, so default users get the same store
-    # path with no rebuild; any other value produces a distinct derivation whose
-    # embedded path and the /etc references below stay consistent (both come from
-    # `pkg`), preserving mutual signature verification.
-    pkg = cfg.package.override { inherit (cfg) verifyStyle; };
+    # Bake the chosen build-time presets into the bundle. The defaults
+    # (verifyStyle "bold", echoCommand "truncated") reproduce the package's own
+    # defaults, so default users get the same store path with no rebuild; any
+    # other value produces a distinct derivation whose embedded path and the
+    # /etc references below stay consistent (both come from `pkg`), preserving
+    # mutual signature verification.
+    pkg = cfg.package.override { inherit (cfg) verifyStyle echoCommand; };
   in {
     # The store-path approach: binaries live in /nix/store, /etc files
     # reference them by full path. nix-darwin owns these three /etc files

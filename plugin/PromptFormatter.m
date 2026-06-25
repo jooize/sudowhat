@@ -111,14 +111,13 @@
     return quoted;
 }
 
-+ (NSString *)formatWithCommandPath:(NSString *)path
-                          runasUser:(NSString *)user
-                                cwd:(NSString *)cwd
-                         verifyCode:(NSString *)verifyCode
-                                argv:(NSArray<NSString *> *)argv
-                              style:(SWPromptStyle)style {
-    /* Build the displayable token list: resolved path, then argv tokens
-     * minus argv[0] when it duplicates the path/basename. */
+/* Build the displayable token list: resolved path, then argv tokens minus
+ * argv[0] when it duplicates the path/basename. Each token is shell-quoted and
+ * control-char escaped. Shared by the sheet formatter below (which then applies
+ * the length budget) and the full-command terminal echo (which does not), so
+ * the two renderings can never disagree on how a token is quoted or escaped. */
++ (NSArray<NSString *> *)commandPartsForPath:(NSString *)path
+                                        argv:(NSArray<NSString *> *)argv {
     NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithCapacity:(argv.count + 1)];
     [parts addObject:[self quoteToken:path]];
 
@@ -134,6 +133,34 @@
     for (NSUInteger i = startIdx; i < argv.count; i++) {
         [parts addObject:[self quoteToken:argv[i]]];
     }
+    return parts;
+}
+
++ (NSString *)fullCommandLineForCommandPath:(NSString *)path
+                                       argv:(NSArray<NSString *> *)argv {
+    return [[self commandPartsForPath:path argv:argv]
+            componentsJoinedByString:@" "];
+}
+
++ (NSString *)formatWithCommandPath:(NSString *)path
+                          runasUser:(NSString *)user
+                                cwd:(NSString *)cwd
+                         verifyCode:(NSString *)verifyCode
+                                argv:(NSArray<NSString *> *)argv
+                              style:(SWPromptStyle)style {
+    return [self formatWithCommandPath:path runasUser:user cwd:cwd
+                            verifyCode:verifyCode argv:argv style:style
+                          wasTruncated:NULL];
+}
+
++ (NSString *)formatWithCommandPath:(NSString *)path
+                          runasUser:(NSString *)user
+                                cwd:(NSString *)cwd
+                         verifyCode:(NSString *)verifyCode
+                                argv:(NSArray<NSString *> *)argv
+                              style:(SWPromptStyle)style
+                       wasTruncated:(BOOL *)outTruncated {
+    NSArray<NSString *> *parts = [self commandPartsForPath:path argv:argv];
 
     /* Header. SystemSheet uses a lowercase verb so the surrounding
      * sentence `"sudo" is trying to <header>` reads grammatically.
@@ -251,6 +278,7 @@
     NSString *const kTruncLabel = @"… COMMAND TRUNCATED …";
     NSArray<NSString *> *shownParts = nil;
     BOOL truncationAbove = NO;     /* indicator on its own line above command */
+    BOOL truncated = NO;           /* command region clipped in any mode */
     /* (When neither flag is set and shownParts == parts, no truncation
      * happened. When middle-break fires, the indicator is embedded inside
      * the partial arg's text via "\n\nLABEL\n\n" so it appears between
@@ -259,6 +287,7 @@
     if (allPartsLen <= budget1) {
         shownParts = parts;
     } else {
+        truncated = YES;
         /* Greedily fit whole parts. The first part that doesn't fit
          * either:
          *   - triggers a middle-break (if it's the LAST part): render its
@@ -334,6 +363,8 @@
      * rendered prompt is unambiguously ours and not argv content. The
      * trailer sits below the command region so the auto-period (LA) or
      * our own period (AS) attaches to it instead of the last argv token. */
+    if (outTruncated) *outTruncated = truncated;
+
     if (truncationAbove) {
         return [NSString stringWithFormat:@"%@\n\n%@\n\n\n%@\n%@\n\n\n%@",
                 header, verifyLine, kTruncLabel, commandLine, trailer];

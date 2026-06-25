@@ -91,6 +91,10 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
           # "bold"; "plain" disables it; colors are bold+color; "random"
           # rotates colors per invocation). Cosmetic only.
           # services.sudowhat.verifyStyle = "cyan";
+          # Echo the full command to the terminal when the Touch ID sheet had
+          # to truncate it ("truncated", the default; "always"; or "never" to
+          # keep the sheet the sole disclosure on shared/recorded terminals).
+          # services.sudowhat.echoCommand = "always";
         }
       ];
     };
@@ -171,6 +175,8 @@ them (no sheet) once sudo has authenticated them.
 
 **Verify-code emphasis:** the code echoed to the controlling terminal is bold by default; `services.sudowhat.verifyStyle` selects a different emphasis (`plain`, `bold`, a bold-plus-color — `red`, `green`, `yellow`, `blue`, `magenta`, `cyan` — or `random`, which rotates among a curated color subset per invocation) baked into the signed bundle at build time. It is purely cosmetic — never a trust signal, since the anchor is the code matching the system-rendered Touch ID sheet — and the value selects from a fixed, reviewed set of escape sequences rather than a free-form string, so it adds no injection surface. `NO_COLOR` or `TERM=dumb` in the invoking environment still force plain at runtime regardless of the build-time setting.
 
+**Full-command echo on truncation:** the Touch ID sheet caps the command it shows at a conservative budget (~480 chars) and marks a longer one truncated with an ellipsis. When that happens, the full, untruncated command is also written to the controlling terminal — the same redirect-proof `/dev/tty` channel as the verify code, just below it — so the clipped tail stays readable. It is escaped and shell-quoted exactly as the sheet renders it, so no raw control bytes reach the terminal, and it is disclosure only, never a trust signal: the system-rendered sheet remains authoritative. `services.sudowhat.echoCommand` selects the policy — `truncated` (default, echo only when the sheet clipped), `always`, or `never`. The echo goes to `/dev/tty` only, never to sudo's stderr, so a `2>file` redirect cannot capture it; set `never` to keep a sensitive command out of scrollback on a shared or screen-recorded terminal.
+
 ## Console vs. non-console callers
 
 sudowhat decides *where* a caller may authenticate by its security session — a local GUI login versus a remote or headless one — not by uid. A caller running as the same user as the console login but over SSH is still treated as non-console.
@@ -243,7 +249,7 @@ These are documented design trade-offs, not bugs.
 
 **Generic icon on the Watch / companion confirmation.** macOS sources the icon shown in the Touch ID prompt and the Apple Watch confirmation notification from the **calling process's** main bundle. The calling process is `sudo` — a CLI binary with no app bundle and no `CFBundleIcon` — so the system falls back to a generic document icon. `LAContext` exposes no public API to override it, and adding an icon to the plugin bundle has no effect (the system queries `sudo`, not the loaded `.so`). Customizing the icon would require shipping a separate signed helper `.app` and IPC'ing the prompt to it, which would reintroduce the agent dependency the current architecture deliberately removes. Trade-off accepted.
 
-**Prompt budget measured in English only.** The prompt formatter keeps its rendered text under a conservative budget (480 chars, ~30 below the ~510-char limit at which `LAContext` silently truncates `localizedReason`). That limit was observed only with the English system prefix (`"sudo" is trying to …`). sudowhat's own prompt text is not localized, so its length is locale-invariant — but it has not been verified whether macOS caps our reason string alone or the *total* sheet text including a longer localized prefix. If you run macOS in another language, sanity-check that a near-maximal command's trailer is not clipped in the Touch ID sheet; if it is, the budget needs lowering.
+**Prompt budget measured in English only.** The prompt formatter keeps its rendered text under a conservative budget (480 chars, ~30 below the ~510-char limit at which `LAContext` silently truncates `localizedReason`). That limit was observed only with the English system prefix (`"sudo" is trying to …`). sudowhat's own prompt text is not localized, so its length is locale-invariant — but it has not been verified whether macOS caps our reason string alone or the *total* sheet text including a longer localized prefix. If you run macOS in another language, sanity-check that a near-maximal command's trailer is not clipped in the Touch ID sheet; if it is, the budget needs lowering. Whenever the sheet does truncate, the full command is echoed to the controlling terminal by default (`services.sudowhat.echoCommand`), so the clipped tail stays available regardless of how conservative the budget is.
 
 ## Verification matrix
 

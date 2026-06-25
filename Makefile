@@ -25,11 +25,25 @@ ifeq ($(filter $(SUDOWHAT_VERIFY_STYLE),$(SUDOWHAT_VALID_STYLES)),)
   override SUDOWHAT_VERIFY_STYLE := bold
 endif
 
+# Build-time policy for echoing the full (untruncated) command to the
+# controlling terminal: "truncated" (default - only when the Touch ID sheet had
+# to clip the command), "always", or "never". The nix module exposes the same
+# names via services.sudowhat.echoCommand. Passed as a bare token to
+# -DSW_ECHO_COMMAND, where the plugin maps it to a fixed mode. An unknown value
+# normalizes to "truncated" with a warning, rather than failing the build.
+SUDOWHAT_ECHO_COMMAND ?= truncated
+SUDOWHAT_VALID_ECHO := never truncated always
+ifeq ($(filter $(SUDOWHAT_ECHO_COMMAND),$(SUDOWHAT_VALID_ECHO)),)
+  $(warning sudowhat: unknown SUDOWHAT_ECHO_COMMAND '$(SUDOWHAT_ECHO_COMMAND)', falling back to truncated)
+  override SUDOWHAT_ECHO_COMMAND := truncated
+endif
+
 CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
           -Iplugin -Ipam -Ishared \
           -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"' \
-          -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE)
+          -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE) \
+          -DSW_ECHO_COMMAND=$(SUDOWHAT_ECHO_COMMAND)
 LDFLAGS = -bundle \
           -framework Foundation \
           -framework CoreFoundation \
