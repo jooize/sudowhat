@@ -42,7 +42,7 @@ The prompt binds to *your* user account, not "System Administrator", so your pas
 
 ## Quick start
 
-Build, sign, install. Requires macOS with Xcode Command Line Tools.
+Build, sign, install. Requires macOS 15 or later — the prompt uses a LocalAuthentication policy (`…BiometricsOrCompanion`) added in macOS 15 — and the Xcode Command Line Tools.
 
 ```sh
 git clone https://github.com/jooize/sudowhat
@@ -67,7 +67,7 @@ To remove:
 sudo make uninstall
 ```
 
-This restores stock sudo behavior, removing all four files sudowhat installs.
+This restores stock sudo behavior, reverting everything the install added — the two `.so` bundles, the two `/etc` files it creates (`/etc/sudoers.d/sudowhat`, `/etc/pam.d/sudo_local`), and the one line it appends to `/etc/sudo.conf`.
 
 ### nix-darwin
 
@@ -87,6 +87,10 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
           # terminal (default false = local console Touch ID only). See
           # "Console vs. non-console callers".
           # services.sudowhat.allowNonConsole = true;
+          # Re-enable sudo's per-tty credential cache, in minutes (default 0 =
+          # cache off, so every command re-prompts). Never sets
+          # timestamp_type=global. See "How it works".
+          # services.sudowhat.timestampTimeout = 5;
           # Emphasis on the verify code echoed to the terminal (default
           # "bold"; "plain" disables it; colors are bold+color; "random"
           # rotates colors per invocation). Cosmetic only.
@@ -227,7 +231,7 @@ Bundles are signed with your Developer ID Application certificate. The team-iden
 | | |
 |---|---|
 | Latest release | `v0.5.6` |
-| Tested on | macOS Tahoe (Darwin 25.4) |
+| Tested on | macOS Tahoe (Darwin 25.4–25.5) |
 | Architecture | Apple silicon (arm64) |
 | Signing | ad-hoc dev mode shipped; Developer ID release planned |
 
@@ -237,7 +241,7 @@ These are documented design trade-offs, not bugs.
 
 **A background process in your own GUI login can still prompt.** sudowhat classifies callers by their security session (local-GUI vs. remote / non-graphical), which keeps SSH and system-daemon callers off the console biometric. It cannot, from inside one process, distinguish *you at the keyboard* from another process running inside the *same* GUI login — a gui-domain `LaunchAgent`, a `nohup`/`setsid` job, or a helper of a compromised app all inherit the login session's attributes and are classified as console. Such a process can raise a Touch ID sheet on your screen. The defense against approving one you did not initiate is sudowhat's core design, not the session guard: the prompt shows the **exact command**, and a **verification code** is printed to the terminal that launched sudo — a prompt you did not start shows a command you do not expect and a code on no terminal you can see, so you can reject it. This is the reflexive-approval surface inherent to any in-session biometric; sudowhat narrows it (remote and headless callers are excluded outright) but does not eliminate it.
 
-**The verification code is shown on the controlling terminal.** The code is written directly to `/dev/tty` — the same channel `sudo` uses for its own `Password:` prompt — so no redirection of the command's I/O can hide it: a shell only rewires fds 0–2, leaving the controlling terminal untouched, so `sudo cmd > file`, the `sudo tee file > /dev/null` heredoc idiom, `2>/dev/null`, and `&>` / `>&` all still display the code. It is absent only when the invoking process has **no controlling terminal at all** — an in-session process launched by something other than a shell (the Dock, Spotlight, a GUI agent) — in which case it falls back to sudo's stderr. The exact-command display inside the Touch ID sheet is, as always, the redirect-proof primary signal. So treat the code as *positive confirmation* (a matching code means the prompt is the sudo you just launched), never as a gate: a missing code is a cue to read the command in the sheet, not to approve reflexively. For legibility the code is rendered in **bold** on an interactive terminal — bold rather than a color so it survives any terminal theme — but this is emphasis only, never a trust cue: any process that can write the terminal can forge the same bytes, so the anchor stays the code matching the sheet (which is system-rendered and cannot be colored). Set `NO_COLOR` (any value, per [no-color.org](https://no-color.org)) or run with an unset or `dumb` `TERM` to disable it; the echo is always plain when the destination is not a real terminal, including the stderr fallback.
+**The verification code is shown on the controlling terminal.** The code is written directly to `/dev/tty` — the same channel `sudo` uses for its own `Password:` prompt — so no redirection of the command's I/O can hide it: a shell only rewires fds 0–2, leaving the controlling terminal untouched, so `sudo cmd > file`, the `sudo tee file > /dev/null` heredoc idiom, `2>/dev/null`, and `&>` / `>&` all still display the code. It is absent only when the invoking process has **no controlling terminal at all** — an in-session process launched by something other than a shell (the Dock, Spotlight, a GUI agent, or a tool like Claude Code) — in which case the code is simply not printed: it goes to `/dev/tty` or nowhere, never to stderr, so it can neither clutter a captured error stream nor be slurped into a `2>file`. The exact-command display inside the Touch ID sheet is, as always, the redirect-proof primary signal. So treat the code as *positive confirmation* (a matching code means the prompt is the sudo you just launched), never as a gate: a missing code is a cue to read the command in the sheet, not to approve reflexively. For legibility the code is rendered in **bold** on an interactive terminal — bold rather than a color so it survives any terminal theme — but this is emphasis only, never a trust cue: any process that can write the terminal can forge the same bytes, so the anchor stays the code matching the sheet (which is system-rendered and cannot be colored). Set `NO_COLOR` (any value, per [no-color.org](https://no-color.org)) or run with an unset or `dumb` `TERM` to disable it; the echo is always plain when the destination is not a real terminal.
 
 **TOCTOU between approval and execve.** A residual window exists between sudowhat returning "approved" and sudo's `execve` of the resolved binary path. The plugin opens the file before the prompt, re-stats it after, and denies if the `(dev, inode)` pair changed — but a swap occurring after the final stat and before sudo's exec cannot be detected from inside a plugin. macOS lacks `fexecve`, so eliminating this window completely requires patching sudo itself. For binaries on root-only paths (`/bin`, `/usr/bin`, `/usr/sbin`), an attacker capable of writing there already has root and doesn't need TOCTOU.
 
