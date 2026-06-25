@@ -69,13 +69,14 @@ static void test_find_kv_value_with_equals(void) {
 }
 
 static int in_alphabet(char c) {
-    static const char *A = "123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    static const char *A = "3456789ACDEFHJKLMNPQRTVWXYZ";
     return strchr(A, c) != NULL;
 }
 
 static void test_nonce_alphabet_and_length(void) {
     /* Harsh: hammer it and assert every produced char is in the intended
-     * alphabet, the forbidden look-alikes (0 I L O U) never appear, length is
+     * alphabet, the forbidden look-alikes (0 1 2 B G I O S U) never appear
+     * (note L is now allowed — uppercase-only — while 1 is dropped), length is
      * exactly outsz-1, and the buffer is NUL-terminated. Also check every
      * alphabet symbol shows up at least once (no off-by-one truncating the
      * arc4random_uniform range). */
@@ -92,14 +93,15 @@ static void test_nonce_alphabet_and_length(void) {
             unsigned char c = (unsigned char)buf[j];
             seen[c] = 1;
             if (!in_alphabet((char)c)) bad++;
-            if (c=='0'||c=='I'||c=='L'||c=='O'||c=='U') forbidden++;
+            if (c=='0'||c=='1'||c=='2'||c=='B'||c=='G'||
+                c=='I'||c=='O'||c=='S'||c=='U') forbidden++;
         }
     }
     OK(bad == 0, "all nonce chars in alphabet");
-    OK(forbidden == 0, "no forbidden look-alike chars (0 I L O U)");
+    OK(forbidden == 0, "no forbidden look-alike chars (0 1 2 B G I O S U)");
     OK(badlen == 0, "nonce length always outsz-1");
     OK(notterm == 0, "nonce always NUL-terminated");
-    const char *A = "123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    const char *A = "3456789ACDEFHJKLMNPQRTVWXYZ";
     int allseen = 1;
     for (const char *p = A; *p; p++) if (!seen[(unsigned char)*p]) allseen = 0;
     OK(allseen, "every alphabet symbol appears across 200k draws");

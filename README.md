@@ -220,7 +220,7 @@ Bundles are signed with your Developer ID Application certificate. The team-iden
 
 | | |
 |---|---|
-| Latest release | `v0.5.5` |
+| Latest release | `v0.5.6` |
 | Tested on | macOS Tahoe (Darwin 25.4) |
 | Architecture | Apple silicon (arm64) |
 | Signing | ad-hoc dev mode shipped; Developer ID release planned |

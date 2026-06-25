@@ -65,14 +65,24 @@ static const char *utf8_or(NSString *s, const char *fallback) {
     return (p && *p) ? p : fallback;
 }
 
-/* Channel-binding nonce. Crockford base32 minus '0' — the alphabet drops
- * I, L, O, U for shape ambiguity, plus '0' because system fonts used in
- * the LAContext sheet render zero without a slash or dot, so a stray '0'
- * could still be misread (esp. against D/Q). 31 chars at 4 positions =
- * ~923k combos (~20 bits), ample for one-shot human comparison.
- * arc4random_uniform is cryptographically strong and avoids modulo bias. */
+/* Channel-binding nonce, uppercase only. Built from Crockford base32 (which
+ * already drops I, O, U) with edits for the two surfaces this code is compared
+ * across — the SF system font on the LAContext sheet and the monospace
+ * terminal:
+ *   - drop '0': SF renders zero with no slash or dot, misread vs D/Q.
+ *   - keep 'L', drop '1': Crockford drops L only because it folds case
+ *     (lowercase 'l' == '1'); uppercase-only, capital L's foot makes it
+ *     distinct from a bare bar. But '1' and 'L' share a vertical-stroke
+ *     silhouette, so keep one of the two, not both.
+ *   - break each surviving digit/letter homoglyph pair 2/Z 5/S 6/G 8/B by
+ *     dropping one side: drop 2 B G S, keep Z 5 6 8. Dropping one side ends
+ *     the confusion; dropping both would only shrink the keyspace (easier to
+ *     guess) for no added clarity.
+ * Net 27 symbols, no internal look-alike pair. 27^4 = 531441 ~= 19.0 bits,
+ * ample for one-shot human comparison. arc4random_uniform is cryptographically
+ * strong and avoids modulo bias. */
 static void generate_verify_nonce(char *out, size_t outsz) {
-    static const char alphabet[] = "123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    static const char alphabet[] = "3456789ACDEFHJKLMNPQRTVWXYZ";
     if (outsz == 0) return;
     size_t n = outsz - 1;
     for (size_t i = 0; i < n; i++) {
