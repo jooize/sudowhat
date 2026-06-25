@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# deploy-plan -- print the exact commands to deploy this repo via nix-darwin.
+#
+# sudowhat is pinned in the nix-darwin flake by release tag AND rev:
+#   sudowhat.url = "git+file://.../sudowhat?ref=refs/tags/vX.Y.Z&rev=<sha>";
+# The pin tracks tagged releases, so deploying a change means bumping BOTH the
+# tag ref and the rev to the latest release tag, then rebuilding. This script
+# does NOT mutate /etc or run darwin-rebuild (surface-the-command policy): it
+# reads the latest release tag, the pinned ref/rev, and HEAD, then prints
+# copy-paste-ready commands with the new values already filled in.
+set -euo pipefail
+IFS=$'\n\t'
+shopt -s nullglob
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+deploy-plan -- print the commands to deploy this repo via nix-darwin.
+
+Reads the latest release tag, the rev pinned in the nix-darwin flake, and HEAD,
+then prints copy-paste-ready sed + darwin-rebuild commands. Mutates nothing.
+
+Env:
+  NIX_DARWIN_FLAKE   path to the system flake (default /etc/nix-darwin/flake.nix)
+EOF
+    exit 0
+    ;;
+esac
+
+# macOS-only project (Touch ID / LAContext sudo plugin): the system flake is
+# always nix-darwin, edited with BSD sed. NIX_DARWIN_FLAKE overrides the path.
+FLAKE="${NIX_DARWIN_FLAKE:-/etc/nix-darwin/flake.nix}"
+REPO_MATCH='sudowhat?ref='   # identifies this repo's input line in the flake
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "error: not inside a git repository" >&2
+  exit 1
+}
+cd "${repo_root}" || exit 1
+
+head="$(git rev-parse HEAD)"
+
+# Deploy target = latest release tag reachable from HEAD (highest semver).
+target_tag="$(git tag --merged HEAD 2>/dev/null | grep -E '^v[0-9]' | sort -V | tail -n1 || true)"
+if [[ -z "${target_tag}" ]]; then
+  echo "error: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first" >&2
+  exit 1
+fi
+target_rev="$(git rev-list -n1 "${target_tag}")"
+
+# The tagged release's declared version, for a tag/version consistency check.
+tag_version="$(git show "${target_tag}:nix/package.nix" 2>/dev/null \
+  | grep -oE 'version *= *"[0-9.]+"' | head -n1 | grep -oE '[0-9]+(\.[0-9]+)*' || true)"
+
+dirty=0
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  dirty=1
+fi
+
+pinned_rev=""
+pinned_ref=""
+if [[ -r "${FLAKE}" ]]; then
+  pin_line="$(grep -F "${REPO_MATCH}" "${FLAKE}" 2>/dev/null | head -n1 || true)"
+  if [[ -n "${pin_line}" ]]; then
+    pinned_rev="$(printf '%s\n' "${pin_line}" | grep -oE 'rev=[0-9a-f]{40}' | head -n1 | cut -d= -f2 || true)"
+    pinned_ref="$(printf '%s\n' "${pin_line}" | grep -oE 'ref=refs/tags/[^&"]+' | head -n1 | cut -d= -f2 || true)"
+  fi
+fi
+
+ahead="$(git rev-list --count "${target_rev}..HEAD" 2>/dev/null || echo '?')"
+
+printf 'Target:  %s  (%s)\n' "${target_tag}" "${target_rev:0:10}"
+printf 'HEAD:    %s' "${head:0:10}"
+if [[ "${head}" == "${target_rev}" ]]; then
+  printf '   (== %s)\n' "${target_tag}"
+else
+  printf '   (%s commit(s) after %s -- unreleased)\n' "${ahead}" "${target_tag}"
+fi
+if [[ -n "${pinned_rev}" ]]; then
+  printf 'Pinned:  %s  ref %s  (%s)\n' "${pinned_rev:0:10}" "${pinned_ref:-?}" "${FLAKE}"
+else
+  printf 'Pinned:  (unreadable -- set NIX_DARWIN_FLAKE or check %s)\n' "${FLAKE}"
+fi
+
+# Consistency warnings (non-fatal).
+if (( dirty )); then
+  printf 'WARNING: working tree is dirty -- uncommitted changes are in no tag.\n'
+fi
+if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
+  printf 'WARNING: tag %s != its nix/package.nix version %s.\n' "${target_tag}" "${tag_version}"
+fi
+printf '\n'
+
+if [[ -n "${pinned_rev}" && "${pinned_rev}" == "${target_rev}" ]]; then
+  printf 'Already in sync. Nothing to deploy.\n'
+  exit 0
+fi
+
+printf 'To deploy %s:\n' "${target_tag}"
+if [[ -n "${pinned_rev}" && -n "${pinned_ref}" ]]; then
+  printf "  sudo sed -i '' -e 's|ref=%s|ref=refs/tags/%s|' -e 's|rev=%s|rev=%s|' %s\n" \
+    "${pinned_ref}" "${target_tag}" "${pinned_rev}" "${target_rev}" "${FLAKE}"
+else
+  printf '  # edit %s: set the sudowhat input ref=refs/tags/%s and rev=%s\n' \
+    "${FLAKE}" "${target_tag}" "${target_rev}"
+fi
+printf '  sudo darwin-rebuild switch --flake %s\n' "$(dirname "${FLAKE}")"
