@@ -62,6 +62,25 @@ static NSUInteger charcount(NSString *s, unichar target) {
     for (NSUInteger i = 0; i < s.length; i++) if ([s characterAtIndex:i] == target) n++;
     return n;
 }
+static NSString *color(NSString *s) { return [SudoWhatPromptFormatter colorizeEscaped:s]; }
+/* Strip CSI SGR sequences (ESC '[' ... 'm') so we can assert the round-trip
+ * invariant: colorizeEscaped adds only colour, never changes the bytes. */
+static NSString *strip_sgr(NSString *s) {
+    NSMutableString *o = [NSMutableString string];
+    NSUInteger i = 0, len = s.length;
+    while (i < len) {
+        unichar c = [s characterAtIndex:i];
+        if (c == 0x1b && i + 1 < len && [s characterAtIndex:i + 1] == '[') {
+            i += 2;
+            while (i < len && [s characterAtIndex:i] != 'm') i++;
+            if (i < len) i++;   /* skip the terminating 'm' */
+            continue;
+        }
+        [o appendFormat:@"%C", c];
+        i++;
+    }
+    return o;
+}
 
 static void test_escape_named(void) {
     /* The five named escapes. */
@@ -242,7 +261,7 @@ static void test_format_basic_exact_systemsheet(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", @"hello"], SWPromptStyleSystemSheet);
     NSString *expected =
-        @"run a command.\n\nVerify code: AB12\n\nUser: root\n"
+        @"run a command.\n\nVerify Code: AB12\n\nUser: root\n"
         @"Command: /bin/echo hello\n\nCode must match your terminal";
     EQ(out, expected, "basic SystemSheet exact layout (lowercase, period at top)");
 }
@@ -251,7 +270,7 @@ static void test_format_basic_exact_selfcontained(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", @"hello"], SWPromptStyleSelfContained);
     NSString *expected =
-        @"Run a command.\n\nVerify code: AB12\n\nUser: root\n"
+        @"Run a command.\n\nVerify Code: AB12\n\nUser: root\n"
         @"Command: /bin/echo hello\n\nCode must match your terminal";
     EQ(out, expected, "basic SelfContained exact layout (capital Run, period at top)");
 }
@@ -293,7 +312,7 @@ static void test_format_quoting_in_command(void) {
 
 static void test_format_verify_empty(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"", @[@"echo"], 0);
-    OK([out containsString:@"Verify code: unavailable"], "empty verify -> unavailable");
+    OK([out containsString:@"Verify Code: unavailable"], "empty verify -> unavailable");
 }
 
 static void test_format_user_overflow(void) {
@@ -419,13 +438,13 @@ static void test_format_verifycode_bounded(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, rep(@"V", 1000),
                         @[@"echo"], SWPromptStyleSystemSheet);
     OK(out.length <= kMaxTotal, "huge verifyCode stays within budget");
-    NSString *expectVerify = [NSString stringWithFormat:@"Verify code: %@\n", rep(@"V", 32)];
+    NSString *expectVerify = [NSString stringWithFormat:@"Verify Code: %@\n", rep(@"V", 32)];
     OK([out containsString:expectVerify], "long verifyCode capped at 32, no marker");
     OK(![out containsString:@"…"], "capped verifyCode adds no ellipsis");
     /* the normal production code (4 chars) must NOT be truncated */
     NSString *normal = fmt(@"/bin/echo", @"root", nil, @"AB12",
                            @[@"echo"], SWPromptStyleSystemSheet);
-    OK([normal containsString:@"Verify code: AB12\n"], "short code rendered verbatim");
+    OK([normal containsString:@"Verify Code: AB12\n"], "short code rendered verbatim");
 }
 
 /* ---- fullCommandLineForCommandPath: and wasTruncated: (terminal echo) ---- */
@@ -489,6 +508,64 @@ static void test_wastruncated_flag(void) {
     OK(out2 != nil, "overflow:NULL is tolerated");
 }
 
+/* ---- colorizeEscaped: (terminal echo emphasis) ---- */
+
+static void test_color_roundtrip(void) {
+    /* The security-load-bearing invariant: stripping the SGR must yield the
+     * exact escaped input back, for every category, so colour can never alter
+     * the bytes shown — only what is emphasised. */
+    NSString *inputs[] = {
+        @"/usr/bin/git status",
+        esc(@"a\nb\tc"),                 /* control escapes */
+        esc(uni(0x202E)),                /* ‮ bidi override */
+        q(@"a b"),                       /* quoted token: 'a b' */
+        q(@"weird\"`$"),                 /* metachars inside a quoted token */
+        @"  lead and  double  ",         /* leading / double / trailing runs */
+        esc(@"back\\slash"),             /* literal backslash -> \\ */
+        q(@"it's"),                      /* the '\'' quote idiom */
+    };
+    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+        EQ(strip_sgr(color(inputs[i])), inputs[i], "colorize round-trips to input");
+    }
+}
+
+static void test_color_categories(void) {
+    /* Deceptive Unicode escape \uNNNN -> red (1;31). */
+    OK([color(esc(uni(0x200B))) containsString:@"\033[1;31m\\u200b\033[0m"],
+       "\\uNNNN wrapped red");
+    /* Control-byte escapes -> magenta (1;35). */
+    OK([color(esc(@"\n")) containsString:@"\033[1;35m\\n\033[0m"],
+       "\\n wrapped magenta");
+    OK([color(esc(uni(0x01))) containsString:@"\033[1;35m\\x01\033[0m"],
+       "\\xNN wrapped magenta");
+    /* Shell metacharacters -> cyan (1;36). */
+    EQ(color(@"'"), @"\033[1;36m'\033[0m", "single quote wrapped cyan");
+    EQ(color(@"`"), @"\033[1;36m`\033[0m", "backtick wrapped cyan");
+    EQ(color(@"\""), @"\033[1;36m\"\033[0m", "double quote wrapped cyan");
+    /* Escaped literal backslash \\ -> cyan, consumed as ONE unit so its second
+     * '\' is not re-read as the start of a new escape. */
+    EQ(color(esc(@"\\")), @"\033[1;36m\\\\\033[0m", "\\\\ wrapped cyan as one unit");
+    /* The '\'' idiom's lone backslash renders plain; round-trip proves it. */
+    EQ(strip_sgr(color(q(@"it's"))), q(@"it's"), "quote idiom round-trips");
+}
+
+static void test_color_whitespace(void) {
+    /* Single interior space stays plain, so ordinary commands are unmarked. */
+    EQ(color(@"a b"), @"a b", "single interior space is not underlined");
+    /* A run of 2+ spaces is underlined. */
+    OK([color(@"a  b") containsString:@"\033[4m  \033[0m"], "double space underlined");
+    /* Leading and trailing single spaces are the invisible-padding cases. */
+    OK([color(@" x") hasPrefix:@"\033[4m \033[0m"], "leading space underlined");
+    OK([color(@"x ") hasSuffix:@"\033[4m \033[0m"], "trailing space underlined");
+}
+
+static void test_color_nil_empty_clean(void) {
+    OK(color(nil) == nil, "nil passes through");
+    EQ(color(@""), @"", "empty passes through");
+    /* No anomalies, only single-space separators -> byte-identical (no SGR). */
+    EQ(color(@"/usr/bin/git status"), @"/usr/bin/git status", "clean command unchanged");
+}
+
 int main(void) {
     @autoreleasepool {
         test_escape_named();
@@ -529,6 +606,11 @@ int main(void) {
         test_fullcmd_escapes_controls();
         test_fullcmd_untruncated();
         test_wastruncated_flag();
+
+        test_color_roundtrip();
+        test_color_categories();
+        test_color_whitespace();
+        test_color_nil_empty_clean();
 
         SW_SUMMARY("PromptFormatter");
     }

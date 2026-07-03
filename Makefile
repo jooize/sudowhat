@@ -39,12 +39,26 @@ ifeq ($(filter $(SUDOWHAT_ECHO_COMMAND),$(SUDOWHAT_VALID_ECHO)),)
   override SUDOWHAT_ECHO_COMMAND := truncated
 endif
 
+# Build-time policy for colouring the terminal context echo: "off" (default) or
+# "anomalies" (highlight deceptive Unicode / control-byte escapes, shell
+# metacharacters, and notable whitespace in a fixed reviewed palette). The nix
+# module exposes the same names via services.sudowhat.echoColor. Passed as a
+# bare token to -DSW_ECHO_COLOR, where the plugin maps it to a fixed mode. An
+# unknown value normalizes to "off" with a warning, rather than failing.
+SUDOWHAT_ECHO_COLOR ?= off
+SUDOWHAT_VALID_ECHO_COLOR := off anomalies
+ifeq ($(filter $(SUDOWHAT_ECHO_COLOR),$(SUDOWHAT_VALID_ECHO_COLOR)),)
+  $(warning sudowhat: unknown SUDOWHAT_ECHO_COLOR '$(SUDOWHAT_ECHO_COLOR)', falling back to off)
+  override SUDOWHAT_ECHO_COLOR := off
+endif
+
 CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
           -Iplugin -Ipam -Ishared \
           -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"' \
           -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE) \
-          -DSW_ECHO_COMMAND=$(SUDOWHAT_ECHO_COMMAND)
+          -DSW_ECHO_COMMAND=$(SUDOWHAT_ECHO_COMMAND) \
+          -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR)
 LDFLAGS = -bundle \
           -framework Foundation \
           -framework CoreFoundation \

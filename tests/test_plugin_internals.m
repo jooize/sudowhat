@@ -285,7 +285,7 @@ static void test_emit_full_context_to_tty(void) {
     if (fd >= 0) close(fd);
 
     /* All three items echoed -> three labelled lines, in order. */
-    emit_full_context(path, @"root", @"/tmp", @"/bin/echo 'a b'", YES, YES, YES);
+    emit_full_context(path, @"root", @"/tmp", @"/bin/echo 'a b'", YES, YES, YES, NO);
     EQ(sw_read_utf8(path),
        @"sudowhat: user: root\nsudowhat: path: /tmp\nsudowhat: command: /bin/echo 'a b'\n",
        "emit_full_context writes user/path/command lines in order");
@@ -297,7 +297,7 @@ static void test_emit_full_context_to_tty(void) {
     int fd2 = mkstemp(path2);
     OK(fd2 >= 0, "mkstemp created a second temp file");
     if (fd2 >= 0) close(fd2);
-    emit_full_context(path2, @"root", @"/tmp", @"/bin/echo hi", NO, NO, YES);
+    emit_full_context(path2, @"root", @"/tmp", @"/bin/echo hi", NO, NO, YES, NO);
     EQ(sw_read_utf8(path2), @"sudowhat: command: /bin/echo hi\n",
        "only the flagged item is written");
     unlink(path2);
@@ -308,14 +308,37 @@ static void test_emit_full_context_to_tty(void) {
     int fd3 = mkstemp(path3);
     OK(fd3 >= 0, "mkstemp created a third temp file");
     if (fd3 >= 0) close(fd3);
-    emit_full_context(path3, @"root", @"/tmp", @"/bin/echo", NO, NO, NO);
+    emit_full_context(path3, @"root", @"/tmp", @"/bin/echo", NO, NO, NO, NO);
     EQ(sw_read_utf8(path3), @"", "no flags set writes nothing");
     unlink(path3);
 
     /* Unopenable path -> silent no-op, no crash, no fallback channel. */
     emit_full_context("/no/such/dir/sw_fullctx", @"root", @"/tmp",
-                      @"/bin/echo secret", YES, YES, YES);
+                      @"/bin/echo secret", YES, YES, YES, NO);
     OK(1, "unopenable tty is a silent no-op (no fallback, no crash)");
+}
+
+/* The echoColor gate. The test binary is compiled with no -DSW_ECHO_COLOR, so
+ * it sees the header default ("off"). Even asking to colourise, a non-tty target
+ * (the temp file) must render plain — the isatty() gate in emit_full_context is
+ * authoritative, so a `2>file`-style redirect never gets escape sequences. */
+static void test_echo_color_gate(void) {
+    OK(sw_echo_color_mode == SW_ECOL_off,
+       "default build resolves echoColor to off");
+    OK(!sw_echo_color_allowed(),
+       "off mode never permits colour (short-circuits before sw_color_allowed)");
+
+    char path[256];
+    sw_tmpl(path, sizeof path, "colorgate");
+    int fd = mkstemp(path);
+    OK(fd >= 0, "mkstemp created a temp file for the colour-gate test");
+    if (fd >= 0) close(fd);
+    /* colorize=YES, but the temp file is not a tty -> plain, no SGR bytes. */
+    emit_full_context(path, @"root", @"/tmp", @"/bin/echo 'a b'", YES, YES, YES, YES);
+    EQ(sw_read_utf8(path),
+       @"sudowhat: user: root\nsudowhat: path: /tmp\nsudowhat: command: /bin/echo 'a b'\n",
+       "colorize=YES on a non-tty still renders plain (isatty gate)");
+    unlink(path);
 }
 
 static void test_nonce_edge_sizes(void) {
@@ -348,6 +371,7 @@ int main(void) {
         test_verify_line_format_and_color();
         test_echo_command_mode();
         test_emit_full_context_to_tty();
+        test_echo_color_gate();
         SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel, command-echo)");
     }
 }

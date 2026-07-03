@@ -225,9 +225,9 @@
     if (verifyCode.length > 0) {
         NSString *v = [self escapeControlChars:verifyCode];
         if (v.length > kMaxVerifyDisplay) v = [v substringToIndex:kMaxVerifyDisplay];
-        verifyLine = [NSString stringWithFormat:@"Verify code: %@", v];
+        verifyLine = [NSString stringWithFormat:@"Verify Code: %@", v];
     } else {
-        verifyLine = @"Verify code: unavailable";
+        verifyLine = @"Verify Code: unavailable";
     }
 
     /* Item values, fully escaped/quoted. Each is shown whole or, if over budget,
@@ -288,6 +288,87 @@
     [out appendFormat:@"%@\n\n%@\n\nUser: %@\n", header, verifyLine, userShown];
     if (pathShown) [out appendFormat:@"Path: %@\n", pathShown];
     [out appendFormat:@"Command: %@\n\n%@", cmdShown, bottom];
+    return out;
+}
+
+/* Fixed SGR palette for the terminal echo (see colorizeEscaped: in the header).
+ * Kept here, in one reviewed place, so the only escape bytes that can reach the
+ * terminal are this closed set — the classifier below is their sole producer.
+ * Every colour leads with "1;" (bold+colour) so it still carries where the
+ * colour washes out; whitespace uses underline alone so the byte is unchanged
+ * but the run is visible. */
+static NSString *const kSGRReset   = @"\033[0m";
+static NSString *const kSGRUnicode = @"\033[1;31m"; /* deceptive Unicode: \uNNNN   */
+static NSString *const kSGRControl = @"\033[1;35m"; /* control bytes: \n \r \t \0 \xNN */
+static NSString *const kSGRMeta    = @"\033[1;36m"; /* shell metachars: ' " ` and \\  */
+static NSString *const kSGRSpace   = @"\033[4m";    /* notable whitespace run          */
+
++ (NSString *)colorizeEscaped:(NSString *)s {
+    if (s == nil) return s;
+    NSUInteger len = s.length;
+    NSMutableString *out = [NSMutableString stringWithCapacity:len + 16];
+    NSUInteger i = 0;
+    while (i < len) {
+        unichar c = [s characterAtIndex:i];
+
+        /* Backslash escapes emitted by escapeControlChars:. Every '\' it
+         * produces is followed by one of {\ n r t 0 x u}; quoteToken: adds only
+         * the shell idiom '\'' (a '\' before a single quote). We classify by the
+         * second char and wrap the whole fixed-width sequence as one unit — so a
+         * "\\" is consumed together and its second '\' is never re-read as the
+         * start of another escape. A '\' before anything else (the quote idiom,
+         * or an input that cannot arise from our escapers) is emitted plain. */
+        if (c == '\\' && i + 1 < len) {
+            unichar n = [s characterAtIndex:i + 1];
+            NSString *color = nil;
+            NSUInteger span = 0;
+            if (n == 'u') { color = kSGRUnicode; span = 6; }        /* \uNNNN */
+            else if (n == 'x') { color = kSGRControl; span = 4; }   /* \xNN   */
+            else if (n == 'n' || n == 'r' || n == 't' || n == '0') {
+                color = kSGRControl; span = 2;                      /* \n \r \t \0 */
+            } else if (n == '\\') { color = kSGRMeta; span = 2; }   /* literal '\' */
+            if (color != nil && i + span <= len) {
+                [out appendFormat:@"%@%@%@", color,
+                     [s substringWithRange:NSMakeRange(i, span)], kSGRReset];
+                i += span;
+                continue;
+            }
+            [out appendFormat:@"%C", c];   /* lone backslash (e.g. the '\'' idiom) */
+            i++;
+            continue;
+        }
+
+        /* Shell metacharacters that survive into the displayed string: our
+         * wrapping single-quotes, and any ' " ` inside a quoted token. One
+         * colour = "shell-significant character" (distinguishing our structural
+         * quotes from literal ones would need quote-state tracking; deferred). */
+        if (c == '\'' || c == '"' || c == '`') {
+            [out appendFormat:@"%@%C%@", kSGRMeta, c, kSGRReset];
+            i++;
+            continue;
+        }
+
+        /* Whitespace runs. Underline a run of spaces that is >=2 long or touches
+         * the start/end of the string — the invisible-padding cases (a trailing
+         * space on a path, a hidden double space). A single interior space is a
+         * normal separator and stays plain, so ordinary commands are unmarked. */
+        if (c == ' ') {
+            NSUInteger j = i + 1;
+            while (j < len && [s characterAtIndex:j] == ' ') j++;
+            NSUInteger runLen = j - i;
+            NSString *run = [s substringWithRange:NSMakeRange(i, runLen)];
+            if (runLen >= 2 || i == 0 || j == len) {
+                [out appendFormat:@"%@%@%@", kSGRSpace, run, kSGRReset];
+            } else {
+                [out appendString:run];
+            }
+            i = j;
+            continue;
+        }
+
+        [out appendFormat:@"%C", c];
+        i++;
+    }
     return out;
 }
 

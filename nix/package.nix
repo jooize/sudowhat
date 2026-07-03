@@ -11,11 +11,14 @@
   # enum, so an out-of-set value is caught at eval time rather than reaching
   # the Makefile's bold fallback. See services.sudowhat.verifyStyle.
   verifyStyle ? "bold",
-  # Policy for echoing the full command to the controlling terminal: "never",
-  # "truncated" (default), or "always". One of the Makefile's
-  # SUDOWHAT_VALID_ECHO; validated by the nix module's enum. See
-  # services.sudowhat.echoCommand.
+  # Policy for echoing the full command to the controlling terminal:
+  # "truncated" (default) or "always". One of the Makefile's SUDOWHAT_VALID_ECHO;
+  # validated by the nix module's enum. See services.sudowhat.echoCommand.
   echoCommand ? "truncated",
+  # Colouring of the terminal context echo: "off" (default) or "anomalies".
+  # One of the Makefile's SUDOWHAT_VALID_ECHO_COLOR; validated by the nix
+  # module's enum. See services.sudowhat.echoColor.
+  echoColor ? "off",
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -61,6 +64,7 @@ stdenv.mkDerivation (finalAttrs: {
     "SUDOWHAT_TEAM_ID=${teamId}"
     "SUDOWHAT_VERIFY_STYLE=${verifyStyle}"
     "SUDOWHAT_ECHO_COMMAND=${echoCommand}"
+    "SUDOWHAT_ECHO_COLOR=${echoColor}"
   ];
 
   buildPhase = ''

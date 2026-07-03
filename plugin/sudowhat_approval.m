@@ -388,6 +388,37 @@ static BOOL sw_should_echo_command(BOOL itemOverflowed) {
     return sw_echo_command_mode == SW_EC_always || itemOverflowed;
 }
 
+/* Build-time policy for colouring the context echo, chosen by -DSW_ECHO_COLOR
+ * (services.sudowhat.echoColor in the nix module; SUDOWHAT_ECHO_COLOR in the
+ * Makefile). Mirrors the SW_ECHO_COMMAND machinery: a bare token names a fixed
+ * mode, baked into the signed bundle.
+ *
+ *   off       - (default) echo the context with no SGR at all.
+ *   anomalies - wrap anomaly spans (deceptive Unicode / control-byte escapes,
+ *               shell metacharacters, notable whitespace) in PromptFormatter's
+ *               fixed, reviewed colour palette, drawing the eye to the bytes
+ *               that matter. Additive only (stripping the SGR yields the same
+ *               bytes; see colorizeEscaped:), never a trust signal.
+ *
+ * An unknown token yields an undefined SW_ECOL_<name> and fails the compile —
+ * the intended fail-closed result for a raw -D that bypasses the Makefile. */
+#ifndef SW_ECHO_COLOR
+#define SW_ECHO_COLOR off
+#endif
+#define SW_ECOL_off       0
+#define SW_ECOL_anomalies 1
+#define SW_ECOL_CAT(x)    SW_ECOL_##x
+#define SW_ECOL_SEL(x)    SW_ECOL_CAT(x)
+enum { sw_echo_color_mode = SW_ECOL_SEL(SW_ECHO_COLOR) };
+
+/* Whether the context echo should be coloured: the build knob is "anomalies"
+ * AND the invoking environment permits colour. The authoritative isatty() gate
+ * is at the write site (emit_full_context), so a redirect always renders plain.
+ * The && short-circuits before sw_color_allowed() in the default "off" build. */
+static BOOL sw_echo_color_allowed(void) {
+    return sw_echo_color_mode == SW_ECOL_anomalies && sw_color_allowed();
+}
+
 /* Echo the full, untruncated invocation context to the controlling terminal, on
  * its own lines below the verify code, so the user can read whatever the Touch
  * ID sheet had to replace with "(see terminal)". Only the items whose echo* flag
@@ -402,15 +433,32 @@ static BOOL sw_should_echo_command(BOOL itemOverflowed) {
  * If there is no controlling terminal (a Dock/Spotlight launch), we skip it.
  *
  * Every value is PromptFormatter's escaped (user/path) or escaped+shell-quoted
- * (command) rendering, so it carries no raw control bytes; we add only our own
- * fixed ASCII prefixes and newlines. We never wrap any value in SGR/color - they
- * are attacker-influenced, and the only emphasis bytes that ever reach a
- * terminal stay the verify code's reviewed set. ttyPath is a parameter so the
- * offline unit test can aim it at a temp file. */
+ * (command) rendering, so it carries no raw control bytes. Under echoColor=off
+ * (the default) we add only our own fixed ASCII prefixes and newlines. Under
+ * echoColor=anomalies AND on a live tty, each value is additionally run through
+ * PromptFormatter's colorizeEscaped: — because the value is already escaped (no
+ * raw ESC), the colorizer can only add a fixed, reviewed SGR palette around
+ * inert bytes, never let an attacker byte become an escape, and stripping the
+ * SGR yields the exact same bytes (see colorizeEscaped:). Colour here is
+ * emphasis, never a trust signal — the anchor stays the verify code matching the
+ * system-rendered sheet — so colouring attacker-influenced content is safe. The
+ * fixed label word is bolded (our own bytes) purely for readability. ttyPath is
+ * a parameter so the offline unit test can aim it at a temp file. */
+static void append_ctx_line(NSMutableString *text, NSString *label,
+                            NSString *value, BOOL useColor) {
+    if (useColor) {
+        [text appendFormat:@"sudowhat: \033[1m%@:\033[0m %@\n",
+             label, [SudoWhatPromptFormatter colorizeEscaped:value]];
+    } else {
+        [text appendFormat:@"sudowhat: %@: %@\n", label, value];
+    }
+}
+
 static void emit_full_context(const char *ttyPath,
                               NSString *userLine, NSString *pathLine,
                               NSString *commandLine,
-                              BOOL echoUser, BOOL echoPath, BOOL echoCommand) {
+                              BOOL echoUser, BOOL echoPath, BOOL echoCommand,
+                              BOOL colorize) {
     BOOL wantUser = echoUser && userLine.length > 0;
     BOOL wantPath = echoPath && pathLine.length > 0;
     BOOL wantCmd  = echoCommand && commandLine.length > 0;
@@ -419,10 +467,15 @@ static void emit_full_context(const char *ttyPath,
     int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
     if (fd < 0) return;
 
+    /* Colour only a live terminal: this isatty() check is authoritative, so a
+     * redirected fd or a regular-file test path always renders plain even when
+     * the build knob and environment permit colour. */
+    BOOL useColor = colorize && isatty(fd);
+
     NSMutableString *text = [NSMutableString string];
-    if (wantUser) [text appendFormat:@"sudowhat: user: %@\n", userLine];
-    if (wantPath) [text appendFormat:@"sudowhat: path: %@\n", pathLine];
-    if (wantCmd)  [text appendFormat:@"sudowhat: command: %@\n", commandLine];
+    if (wantUser) append_ctx_line(text, @"user", userLine, useColor);
+    if (wantPath) append_ctx_line(text, @"path", pathLine, useColor);
+    if (wantCmd)  append_ctx_line(text, @"command", commandLine, useColor);
 
     NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
     if (data == nil) { close(fd); return; }
@@ -764,7 +817,8 @@ static int sudowhat_check(char * const command_info[],
         emit_full_context("/dev/tty", echoUser, echoPath, echoCmd,
                           sw_should_echo_command(ovLA.user || ovAS.user),
                           sw_should_echo_command(ovLA.path || ovAS.path),
-                          sw_should_echo_command(ovLA.command || ovAS.command));
+                          sw_should_echo_command(ovLA.command || ovAS.command),
+                          sw_echo_color_allowed());
 
         /* (5) LAContext call.
          *

@@ -118,16 +118,43 @@ in {
         sequences. Baked into the signed bundle at build time.
       '';
     };
+
+    echoColor = lib.mkOption {
+      type = lib.types.enum [ "off" "anomalies" ];
+      default = "off";
+      description = ''
+        Whether the terminal context echo (see `echoCommand`) is coloured to
+        draw the eye to the bytes that matter.
+
+        - `off` (the default) emits the echo with no colour at all.
+        - `anomalies` wraps only anomaly spans in a fixed, reviewed palette:
+          deceptive Unicode escapes (`\uNNNN` — bidi, zero-width, homoglyphs)
+          in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
+          metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
+          and notable whitespace runs (leading, trailing, or doubled spaces)
+          underlined. Ordinary command structure is left uncoloured.
+
+        This is emphasis, never a trust signal: the anchor stays the verify
+        code matching the system-rendered sheet, which cannot be coloured. The
+        echoed values are already control-character escaped, so the colouriser
+        only adds this fixed SGR set around inert bytes and can never let an
+        attacker byte become an escape sequence — stripping the colour yields
+        the exact same bytes. The runtime opt-outs still apply: NO_COLOR or
+        TERM=dumb in the invoking environment, or a non-tty target, always
+        render plain regardless of this setting. Baked into the signed bundle
+        at build time.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable (let
     # Bake the chosen build-time presets into the bundle. The defaults
-    # (verifyStyle "bold", echoCommand "truncated") reproduce the package's own
+    # (verifyStyle "bold", echoCommand "truncated", echoColor "off") reproduce the package's own
     # defaults, so default users get the same store path with no rebuild; any
     # other value produces a distinct derivation whose embedded path and the
     # /etc references below stay consistent (both come from `pkg`), preserving
     # mutual signature verification.
-    pkg = cfg.package.override { inherit (cfg) verifyStyle echoCommand; };
+    pkg = cfg.package.override { inherit (cfg) verifyStyle echoCommand echoColor; };
   in {
     # The store-path approach: binaries live in /nix/store, /etc files
     # reference them by full path. nix-darwin owns these three /etc files
