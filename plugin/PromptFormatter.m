@@ -69,13 +69,28 @@
              * TERM_PROGRAM (or any other shown string) could inject a
              * fake paragraph break and impersonate prompt structure. */
             [out appendFormat:@"\\u%04x", (unsigned)c];
-        } else if (c == 0x2026 || c == 0x22EF) {
-            /* U+2026 HORIZONTAL ELLIPSIS is our truncation marker; a path
-             * containing `…` would otherwise be indistinguishable from a
-             * truncated one. U+22EF MIDLINE HORIZONTAL ELLIPSIS renders
-             * visually identical in most fonts and is the obvious bypass.
-             * Escape both so only the formatter's added marker appears as
-             * a literal `…` in the rendered prompt. */
+        } else if (c == 0x2026 || c == 0x22EF || c == 0x2024 || c == 0x2025) {
+            /* Ellipsis / dot-leader homoglyphs. U+2026 HORIZONTAL ELLIPSIS and
+             * U+22EF MIDLINE HORIZONTAL ELLIPSIS render as `…`; U+2024 ONE DOT
+             * LEADER and U+2025 TWO DOT LEADER render as dots that read as `…`
+             * when repeated. Escaping them keeps the rendered dots honest — no
+             * displayed value can mimic a run of real periods it does not have. */
+            [out appendFormat:@"\\u%04x", (unsigned)c];
+        } else if ((c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069)
+                   || c == 0x200E || c == 0x200F || c == 0x061C) {
+            /* Bidirectional formatting / override characters (Trojan Source,
+             * CVE-2021-42574): LRE/RLE/PDF/LRO/RLO, the isolates LRI/RLI/FSI/PDI,
+             * the marks LRM/RLM, and ALM. They visually REORDER surrounding text,
+             * so the glyphs on the sheet can read as a different, innocuous
+             * command than the bytes execve runs — single-quoting does not
+             * neutralize them. Escape so rendered order matches byte order. */
+            [out appendFormat:@"\\u%04x", (unsigned)c];
+        } else if (c == 0x200B || c == 0x200C || c == 0x200D
+                   || c == 0x2060 || c == 0xFEFF) {
+            /* Zero-width / invisible format characters (ZWSP, ZWNJ, ZWJ, WORD
+             * JOINER, ZWNBSP/BOM): no visible glyph, so they can hide bytes or
+             * splice tokens with nothing shown. Escape so nothing in a displayed
+             * value is invisible. */
             [out appendFormat:@"\\u%04x", (unsigned)c];
         } else {
             [out appendFormat:@"%C", c];
@@ -150,7 +165,7 @@
                               style:(SWPromptStyle)style {
     return [self formatWithCommandPath:path runasUser:user cwd:cwd
                             verifyCode:verifyCode argv:argv style:style
-                          wasTruncated:NULL];
+                              overflow:NULL];
 }
 
 + (NSString *)formatWithCommandPath:(NSString *)path
@@ -160,217 +175,120 @@
                                 argv:(NSArray<NSString *> *)argv
                               style:(SWPromptStyle)style
                        wasTruncated:(BOOL *)outTruncated {
-    NSArray<NSString *> *parts = [self commandPartsForPath:path argv:argv];
+    SWPromptOverflow ov = { NO, NO, NO };
+    NSString *out = [self formatWithCommandPath:path runasUser:user cwd:cwd
+                                     verifyCode:verifyCode argv:argv style:style
+                                       overflow:&ov];
+    if (outTruncated) *outTruncated = (ov.user || ov.path || ov.command);
+    return out;
+}
 
-    /* Header. SystemSheet uses a lowercase verb so the surrounding
-     * sentence `"sudo" is trying to <header>` reads grammatically.
-     * SelfContained is the entire rendered message, so a capitalized verb
-     * fits. No trailing punctuation in either style — the header is a
-     * statement label, not the end of a sentence. */
-    NSString *runVerb = (style == SWPromptStyleSystemSheet) ? @"run" : @"Run";
++ (NSString *)formatWithCommandPath:(NSString *)path
+                          runasUser:(NSString *)user
+                                cwd:(NSString *)cwd
+                         verifyCode:(NSString *)verifyCode
+                                argv:(NSArray<NSString *> *)argv
+                              style:(SWPromptStyle)style
+                           overflow:(SWPromptOverflow *)outOverflow {
+    BOOL selfContained = (style == SWPromptStyleSelfContained);
 
-    /* Bound the variable parts of the header so a long cwd or weird-long
-     * username can't squeeze the command region out of view. Head-only
-     * truncation (not middle-break) because these labels are read
-     * left-to-right and the leading characters identify the value; the
-     * trailing ellipsis signals truncation without needing a structural
-     * indicator. */
-    const NSUInteger kMaxUserDisplay = 32;
-    const NSUInteger kMaxCwdDisplay  = 80;
+    /* LA caps the localizedReason at ~510 chars total — anything past the cap
+     * is a hard NSString cut, including newlines and any content meant for a
+     * later line. We render both styles within a conservative 480-char budget
+     * (~30 chars of margin) so the closing reminder is never the thing clipped,
+     * and so Touch ID and the AS password fallback look identical. Every
+     * component below is either a fixed string or a per-item value bounded by a
+     * cap, so this total holds structurally for any input.
+     *
+     * CAVEAT (~80% confidence, untested across locales): the ~510 was measured
+     * with the English system prefix. Our strings are English-only, so OUR
+     * length is locale-invariant; but if macOS caps the TOTAL sheet text
+     * (system prefix + our reason) a longer localized prefix could eat this
+     * budget. To confirm: render a near-480-char prompt under a long-prefix
+     * locale and check the closing line survives. If not, lower kMaxTotal. */
+    const NSUInteger kMaxTotal = 480;
+    const NSUInteger kMaxUserDisplay   = 64;
+    const NSUInteger kMaxCwdDisplay     = 160;
     const NSUInteger kMaxVerifyDisplay = 32;
 
-    NSString *userEscaped = ([user length] > 0)
-        ? [self escapeControlChars:user]
-        : @"root";
-    NSString *userPart = (userEscaped.length > kMaxUserDisplay)
-        ? [[userEscaped substringToIndex:kMaxUserDisplay]
-            stringByAppendingString:@"…"]
-        : userEscaped;
+    /* Opening line. macOS frames the biometric sheet as `"sudo" is trying to
+     * <this>` and appends a period, so SystemSheet is a lowercase continuation;
+     * the AS dialog shows our text verbatim, so it is capitalized. Either way
+     * the full stop lives here, at the top. */
+    NSString *header = selfContained ? @"Run a command." : @"run a command.";
 
-    NSMutableString *header = [NSMutableString stringWithCapacity:64];
-    [header appendFormat:@"%@ as user %@", runVerb, userPart];
-    if ([cwd length] > 0) {
-        NSString *cwdEscaped = [self escapeControlChars:cwd];
-        NSString *cwdPart = (cwdEscaped.length > kMaxCwdDisplay)
-            ? [[cwdEscaped substringToIndex:kMaxCwdDisplay]
-                stringByAppendingString:@"…"]
-            : cwdEscaped;
-        [header appendFormat:@" in directory %@", cwdPart];
-    }
-
-    /* Verify code. The plugin has already printed the same value to the
-     * user's controlling terminal; the user compares the two before
-     * approving. Lives above the command region so it remains visible
-     * even when the command region overflows the screen.
-     *
-     * Head-capped like userPart/cwdPart so EVERY variable component of
-     * fixedOverhead is bounded by a constant — that is what makes the
-     * kMaxTotal budget hold structurally for any input, rather than relying
-     * on the caller keeping the code short. The production nonce is 4 chars
-     * (well under the cap), so this only ever fires on a malformed code, in
-     * which case a truncated-but-bounded line beats silently clipping the
-     * command region below it. */
+    /* Verify code. The plugin has already echoed the same value to the user's
+     * controlling terminal; they compare the two before approving. Capped
+     * (plain cut, no marker) purely so the budget holds against a malformed
+     * code — the production nonce is 4 chars. */
     NSString *verifyLine;
-    if ([verifyCode length] > 0) {
-        NSString *verifyEscaped = [self escapeControlChars:verifyCode];
-        NSString *verifyPart = (verifyEscaped.length > kMaxVerifyDisplay)
-            ? [[verifyEscaped substringToIndex:kMaxVerifyDisplay]
-                stringByAppendingString:@"…"]
-            : verifyEscaped;
-        verifyLine = [NSString stringWithFormat:@"Verify code: %@", verifyPart];
+    if (verifyCode.length > 0) {
+        NSString *v = [self escapeControlChars:verifyCode];
+        if (v.length > kMaxVerifyDisplay) v = [v substringToIndex:kMaxVerifyDisplay];
+        verifyLine = [NSString stringWithFormat:@"Verify code: %@", v];
     } else {
         verifyLine = @"Verify code: unavailable";
     }
 
-    /* LA caps the localizedReason string at ~510 chars total — anything
-     * past the cap is a hard NSString cut, including newlines and content
-     * intended to live on subsequent lines. Empirically verified by
-     * rendering a 1040-char marker arg and confirming a "Showing N of M"
-     * line emitted past the cap never appeared in the sheet. AS has a
-     * much larger budget (rendered the full 1040 chars + footer), but we
-     * apply the same conservative char budget to both styles so the
-     * truncation indicator looks identical in Touch ID and password
-     * fallback flows.
-     *
-     * Practical consequence: the truncation indicator MUST live ABOVE the
-     * command region, because anything below it can be silently clipped.
-     *
-     * Budget 480 chars gives ~30 chars of safety margin against the
-     * observed cap.
-     *
-     * CAVEAT (untested across locales): the ~510 figure was measured only
-     * with the English system prefix ("..." is trying to ...). sudowhat's
-     * own strings are English-only, so OUR content length does not vary by
-     * locale. But if macOS caps the TOTAL sheet text (system prefix + our
-     * reason) rather than our reason alone, a longer localized prefix would
-     * eat into this budget and could clip the tail. Not observed; ~80%
-     * confidence the cap is reason-only. To confirm: render a near-480-char
-     * command under a long-prefix locale (e.g. German, Japanese) and check
-     * the trailer is not truncated in the sheet. If it is, lower kMaxTotal. */
-    const NSUInteger kMaxTotal = 480;
+    /* Item values, fully escaped/quoted. Each is shown whole or, if over budget,
+     * replaced by the marker — never partially truncated. A displayed cwd always
+     * starts with '/', so it can never collide with the parenthesised marker;
+     * the command region quotes any token with unsafe bytes, so a literal
+     * "(see terminal)" argument renders quoted and stays distinguishable. */
+    NSString *const kSeeTerminal = @"(see terminal)";
+    NSString *userVal = (user.length > 0) ? [self escapeControlChars:user] : @"root";
+    NSString *pathVal = (cwd.length > 0) ? [self escapeControlChars:cwd] : nil;
+    NSString *cmdVal  = [[self commandPartsForPath:path argv:argv]
+                          componentsJoinedByString:@" "];
 
-    /* Trailing trust statement. Two things at once: gives a home to the
-     * SystemSheet's auto-period (which would otherwise attach to the
-     * command's last token and look like part of the argv), and reminds
-     * the user what the verify code and command region actually mean —
-     * including spelling out the U+2026 ellipsis as the only truncation
-     * marker, so a path/arg containing a real `…` (which we escape to
-     * `…`) can't impersonate truncation. SelfContained renders the
-     * entire reason verbatim, so we add our own period; SystemSheet
-     * relies on macOS auto-appending one and must not double up. */
-    NSString *trailer = (style == SWPromptStyleSelfContained)
-        ? @"Code verifies origin. Command shown is what runs, unless marked truncated with ellipsis \"…\" (\\u2026)."
-        : @"Code verifies origin. Command shown is what runs, unless marked truncated with ellipsis \"…\" (\\u2026)";
+    /* Closing reminder. Bounded either way; reserve the larger for the budget
+     * so the fit holds before we know which one we will emit. */
+    NSString *bottomClean = @"Code must match your terminal";
+    NSString *bottomTrunc = @"⚠️ Long items are shown in your terminal";
+    NSUInteger bottomReserve = (bottomClean.length > bottomTrunc.length)
+        ? bottomClean.length : bottomTrunc.length;
 
-    /* Pass 1: try to fit everything with no truncation indicator.
-     * Layout overhead: header + "\n\n" + verifyLine + "\n\n\n"
-     *                + command + "\n\n\n" + trailer */
-    NSUInteger fixedOverhead = header.length + 2 + verifyLine.length + 3
-                             + 3 + trailer.length;
-    NSUInteger budget1 = (kMaxTotal > fixedOverhead)
-        ? kMaxTotal - fixedOverhead : 0;
+    /* Per-item all-or-nothing. user/path take fixed caps; the command gets
+     * whatever budget remains, so the star of the prompt keeps the largest
+     * share. Anything over its budget becomes "(see terminal)" and the caller
+     * echoes the full value to the controlling terminal. */
+    BOOL userOverflow = (userVal.length > kMaxUserDisplay);
+    NSString *userShown = userOverflow ? kSeeTerminal : userVal;
 
-    NSUInteger allPartsLen = 0;
-    for (NSString *p in parts) {
-        allPartsLen += p.length + (allPartsLen > 0 ? 1 : 0); /* space sep */
+    BOOL pathOverflow = (pathVal != nil && pathVal.length > kMaxCwdDisplay);
+    NSString *pathShown = pathVal ? (pathOverflow ? kSeeTerminal : pathVal) : nil;
+
+    /* Layout: header \n\n verify \n\n "User: "u \n ["Path: "p \n] "Command: "c
+     *         \n\n bottom. Fixed labels are 6/6/9 chars. */
+    NSUInteger overhead =
+        header.length + 2
+        + verifyLine.length + 2
+        + 6 + userShown.length + 1
+        + (pathShown ? (6 + pathShown.length + 1) : 0)
+        + 9
+        + 2 + bottomReserve;
+    NSUInteger cmdBudget = (kMaxTotal > overhead) ? kMaxTotal - overhead : 0;
+
+    BOOL cmdOverflow = (cmdVal.length > cmdBudget);
+    NSString *cmdShown = cmdOverflow ? kSeeTerminal : cmdVal;
+
+    if (outOverflow) {
+        outOverflow->user = userOverflow;
+        outOverflow->path = pathOverflow;
+        outOverflow->command = cmdOverflow;
     }
 
-    NSString *const kTruncLabel = @"… COMMAND TRUNCATED …";
-    NSArray<NSString *> *shownParts = nil;
-    BOOL truncationAbove = NO;     /* indicator on its own line above command */
-    BOOL truncated = NO;           /* command region clipped in any mode */
-    /* (When neither flag is set and shownParts == parts, no truncation
-     * happened. When middle-break fires, the indicator is embedded inside
-     * the partial arg's text via "\n\nLABEL\n\n" so it appears between
-     * head and tail in the rendered command region.) */
+    NSString *bottom = (userOverflow || pathOverflow || cmdOverflow)
+        ? bottomTrunc : bottomClean;
 
-    if (allPartsLen <= budget1) {
-        shownParts = parts;
-    } else {
-        truncated = YES;
-        /* Greedily fit whole parts. The first part that doesn't fit
-         * either:
-         *   - triggers a middle-break (if it's the LAST part): render its
-         *     head + "\n\nLABEL\n\n" + tail inline. The double newlines
-         *     above and below the label make the break impossible to
-         *     miss visually, which is the point.
-         *   - or, falls back to the "above command" indicator (if there
-         *     are later parts we'd otherwise drop silently, or if no room
-         *     for a meaningful partial). Trailing parts are dropped. */
-        NSMutableArray<NSString *> *fitted = [NSMutableArray array];
-        NSUInteger used = 0;
-        for (NSUInteger i = 0; i < parts.count; i++) {
-            NSString *p = parts[i];
-            NSUInteger sep = (used > 0 ? 1 : 0);
-            if (used + sep + p.length <= budget1) {
-                [fitted addObject:p];
-                used += sep + p.length;
-                continue;
-            }
-            BOOL isLast = (i == parts.count - 1);
-            BOOL didMiddleBreak = NO;
-            if (isLast) {
-                /* Middle-break overhead: " " (sep) + head + "\n\n" + label
-                 * + "\n\n" + tail.  We've already subtracted `sep` above;
-                 * inside the partial: 2 + label.length + 2 = label+4. */
-                NSUInteger blockOverhead = kTruncLabel.length + 4;
-                NSUInteger available = 0;
-                if (budget1 > used + sep + blockOverhead) {
-                    available = budget1 - used - sep - blockOverhead;
-                }
-                /* Require at least this many content chars to bother
-                 * splitting; otherwise the head/tail fragments are too
-                 * short to be useful. */
-                const NSUInteger kMinPartial = 24;
-                if (available >= kMinPartial && p.length > available) {
-                    NSUInteger headLen = available / 2;
-                    NSUInteger tailLen = available - headLen;
-                    NSString *withBreak = [NSString stringWithFormat:
-                                            @"%@\n\n%@\n\n%@",
-                                            [p substringToIndex:headLen],
-                                            kTruncLabel,
-                                            [p substringFromIndex:p.length - tailLen]];
-                    [fitted addObject:withBreak];
-                    didMiddleBreak = YES;
-                }
-            }
-            if (!didMiddleBreak) {
-                /* Above-command indicator layout costs LABEL + "\n" more
-                 * than the no-truncation layout. Re-fit by trimming any
-                 * already-fitted parts that no longer fit in the smaller
-                 * budget. Without this, the rendered prompt would overflow
-                 * budget1 by LABEL.length + 1 chars (~18) in tight cases. */
-                NSUInteger aboveBudget = (budget1 > kTruncLabel.length + 1)
-                    ? budget1 - kTruncLabel.length - 1 : 0;
-                while (fitted.count > 0 && used > aboveBudget) {
-                    NSString *last = [fitted lastObject];
-                    [fitted removeLastObject];
-                    NSUInteger lastSep = (fitted.count > 0) ? 1 : 0;
-                    used -= lastSep + last.length;
-                }
-                truncationAbove = YES;
-            }
-            break;
-        }
-        shownParts = fitted;
-    }
-
-    NSString *commandLine = [shownParts componentsJoinedByString:@" "];
-
-    /* Layout. Blank lines are the structural separator; argv tokens are
-     * joined with spaces and escapeControlChars above scrubs Unicode line
-     * separators from every displayed string, so a blank line in the
-     * rendered prompt is unambiguously ours and not argv content. The
-     * trailer sits below the command region so the auto-period (LA) or
-     * our own period (AS) attaches to it instead of the last argv token. */
-    if (outTruncated) *outTruncated = truncated;
-
-    if (truncationAbove) {
-        return [NSString stringWithFormat:@"%@\n\n%@\n\n\n%@\n%@\n\n\n%@",
-                header, verifyLine, kTruncLabel, commandLine, trailer];
-    }
-    return [NSString stringWithFormat:@"%@\n\n%@\n\n\n%@\n\n\n%@",
-            header, verifyLine, commandLine, trailer];
+    /* escapeControlChars scrubs newlines and Unicode line/paragraph separators
+     * from every value, so the blank lines here are unambiguously ours: no
+     * displayed value can forge an extra "User:"/"Path:"/"Command:" line. */
+    NSMutableString *out = [NSMutableString stringWithCapacity:kMaxTotal];
+    [out appendFormat:@"%@\n\n%@\n\nUser: %@\n", header, verifyLine, userShown];
+    if (pathShown) [out appendFormat:@"Path: %@\n", pathShown];
+    [out appendFormat:@"Command: %@\n\n%@", cmdShown, bottom];
+    return out;
 }
 
 @end

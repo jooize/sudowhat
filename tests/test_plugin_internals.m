@@ -262,47 +262,60 @@ static void test_verify_line_format_and_color(void) {
     g_inv = saved;
 }
 
-/* The full-command terminal echo. echoCommand is baked at build time; the test
- * binary is compiled with no -DSW_ECHO_COMMAND, so it sees the header default
- * ("truncated"): echo iff the sheet truncated. emit_full_command is tty-only by
- * design — unlike the verify code it has NO stderr fallback, so a possibly
- * confidential command can never leak into a `2>file` capture. */
+/* The context terminal echo. echoCommand is baked at build time; the test binary
+ * is compiled with no -DSW_ECHO_COMMAND, so it sees the header default
+ * ("truncated"): echo an item iff the sheet replaced it with "(see terminal)".
+ * emit_full_context is tty-only by design — unlike the verify code it has NO
+ * stderr fallback, so a possibly confidential value can never leak into a
+ * `2>file` capture. */
 static void test_echo_command_mode(void) {
     OK(sw_echo_command_mode == SW_EC_truncated,
        "default build resolves echoCommand to truncated");
     OK(sw_should_echo_command(YES),
-       "truncated mode echoes when the sheet truncated");
+       "truncated mode echoes an item that overflowed to the terminal");
     OK(!sw_should_echo_command(NO),
-       "truncated mode stays silent when nothing truncated");
+       "truncated mode stays silent for an item that fit the sheet");
 }
 
-static void test_emit_full_command_to_tty(void) {
+static void test_emit_full_context_to_tty(void) {
     char path[256];
-    sw_tmpl(path, sizeof path, "fullcmd");
+    sw_tmpl(path, sizeof path, "fullctx");
     int fd = mkstemp(path);
-    OK(fd >= 0, "mkstemp created a temp file for the full-command test");
+    OK(fd >= 0, "mkstemp created a temp file for the context echo test");
     if (fd >= 0) close(fd);
 
-    emit_full_command(path, @"/bin/echo 'a b'");
-    EQ(sw_read_utf8(path), @"sudowhat: full command: /bin/echo 'a b'\n",
-       "emit_full_command writes the prefixed command line verbatim");
+    /* All three items echoed -> three labelled lines, in order. */
+    emit_full_context(path, @"root", @"/tmp", @"/bin/echo 'a b'", YES, YES, YES);
+    EQ(sw_read_utf8(path),
+       @"sudowhat: user: root\nsudowhat: path: /tmp\nsudowhat: command: /bin/echo 'a b'\n",
+       "emit_full_context writes user/path/command lines in order");
     unlink(path);
 
-    /* Empty command -> early no-op, nothing written. */
+    /* Only the flagged items are written (path suppressed here). */
     char path2[256];
-    sw_tmpl(path2, sizeof path2, "fullcmd2");
+    sw_tmpl(path2, sizeof path2, "fullctx2");
     int fd2 = mkstemp(path2);
     OK(fd2 >= 0, "mkstemp created a second temp file");
     if (fd2 >= 0) close(fd2);
-    emit_full_command(path2, @"");
-    EQ(sw_read_utf8(path2), @"", "empty command line writes nothing");
+    emit_full_context(path2, @"root", @"/tmp", @"/bin/echo hi", NO, NO, YES);
+    EQ(sw_read_utf8(path2), @"sudowhat: command: /bin/echo hi\n",
+       "only the flagged item is written");
     unlink(path2);
 
-    /* Unopenable path -> silent no-op, no crash, and no fallback channel: like
-     * the verify code, the command is tty-or-nothing (no printf parameter), so
-     * a possibly-confidential command can never reach a capturable stderr. */
-    emit_full_command("/no/such/dir/sw_fullcmd", @"/bin/echo secret");
-    OK(1, "unopenable tty is a silent no-op for the command (no fallback, no crash)");
+    /* Nothing flagged -> early no-op, nothing written (file untouched). */
+    char path3[256];
+    sw_tmpl(path3, sizeof path3, "fullctx3");
+    int fd3 = mkstemp(path3);
+    OK(fd3 >= 0, "mkstemp created a third temp file");
+    if (fd3 >= 0) close(fd3);
+    emit_full_context(path3, @"root", @"/tmp", @"/bin/echo", NO, NO, NO);
+    EQ(sw_read_utf8(path3), @"", "no flags set writes nothing");
+    unlink(path3);
+
+    /* Unopenable path -> silent no-op, no crash, no fallback channel. */
+    emit_full_context("/no/such/dir/sw_fullctx", @"root", @"/tmp",
+                      @"/bin/echo secret", YES, YES, YES);
+    OK(1, "unopenable tty is a silent no-op (no fallback, no crash)");
 }
 
 static void test_nonce_edge_sizes(void) {
@@ -334,7 +347,7 @@ int main(void) {
         test_emit_verify_code_tty_only();
         test_verify_line_format_and_color();
         test_echo_command_mode();
-        test_emit_full_command_to_tty();
+        test_emit_full_context_to_tty();
         SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel, command-echo)");
     }
 }

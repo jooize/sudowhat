@@ -89,32 +89,31 @@ in {
     };
 
     echoCommand = lib.mkOption {
-      type = lib.types.enum [ "never" "truncated" "always" ];
+      type = lib.types.enum [ "truncated" "always" ];
       default = "truncated";
       description = ''
-        Whether the full, untruncated command is echoed to the controlling
-        terminal, just below the verify code.
+        Whether the full invocation context (user, path, command) is echoed to
+        the controlling terminal, just below the verify code.
 
-        The Touch ID sheet caps the command it displays at a conservative
-        budget and marks a longer command truncated with an ellipsis. This
-        option recovers the clipped tail by printing the whole command to the
-        terminal that launched sudo:
+        The Touch ID sheet shows each of user / path / command in full or, when
+        a value does not fit its conservative budget, replaces that item with a
+        `(see terminal)` marker (all-or-nothing per item — no partial ellipsis).
+        This option controls the terminal echo that backs the marker:
 
-        - `truncated` (the default) echoes only when the sheet actually had to
-          truncate, so a short command fully shown in the sheet adds nothing to
-          the terminal.
-        - `always` echoes on every invocation.
-        - `never` disables the echo entirely; the sheet is the sole command
-          disclosure. Use this on shared, screen-recorded, or otherwise
-          sensitive terminals where you would rather a long command not land in
-          scrollback.
+        - `truncated` (the default) echoes only the items the sheet actually
+          replaced with `(see terminal)`, so values that fit the sheet add
+          nothing to the terminal.
+        - `always` echoes the full user / path / command on every invocation.
+
+        There is no `never`: an item shown as `(see terminal)` must be backed by
+        a terminal echo, or the marker would point at nothing.
 
         The echo is disclosure only, never a trust signal: any process that can
         write your terminal can forge the same bytes, so the anchor stays the
         verify code matching the system-rendered sheet. It is written to
         /dev/tty only — never to sudo's stderr — so it cannot be captured by a
         `2>file` redirect, and it is skipped when the caller has no controlling
-        terminal. The command is rendered with the same shell-quoting and
+        terminal. Every value is rendered with the same shell-quoting and
         control-character escaping as the sheet, so it carries no raw escape
         sequences. Baked into the signed bundle at build time.
       '';

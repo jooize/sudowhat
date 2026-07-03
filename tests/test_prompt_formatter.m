@@ -13,18 +13,16 @@
 #import "PromptFormatter.h"
 #import "sw_test.h"
 
-@interface SudoWhatPromptFormatter (SWTest)
-+ (NSString *)escapeControlChars:(NSString *)s;
-@end
+/* escapeControlChars: is now public (the plugin escapes echoed values with it),
+ * so no category is needed. */
 
-/* Trailer constants copied verbatim from PromptFormatter.m:209-210. If these
- * ever mismatch the source the exact-match tests below will flag it. */
-static NSString *const TRAILER_SELF =
-  @"Code verifies origin. Command shown is what runs, unless marked truncated with ellipsis \"…\" (\\u2026).";
-static NSString *const TRAILER_SHEET =
-  @"Code verifies origin. Command shown is what runs, unless marked truncated with ellipsis \"…\" (\\u2026)";
+/* Closing-line constants copied verbatim from PromptFormatter.m. If these ever
+ * mismatch the source the exact-match tests below will flag it. */
+static NSString *const BOTTOM_CLEAN = @"Code must match your terminal";
+static NSString *const BOTTOM_TRUNC = @"⚠️ Long items are shown in your terminal";
+static NSString *const SEE_TERMINAL = @"(see terminal)";
 
-static const NSUInteger kMaxTotal = 480;   /* PromptFormatter.m:197 */
+static const NSUInteger kMaxTotal = 480;   /* PromptFormatter.m kMaxTotal */
 
 static NSString *esc(NSString *s) { return [SudoWhatPromptFormatter escapeControlChars:s]; }
 static NSString *q(NSString *s)   { return [SudoWhatPromptFormatter quoteToken:s]; }
@@ -104,9 +102,45 @@ static void test_escape_c1_and_separators(void) {
 static void test_escape_ellipsis_homoglyphs(void) {
     EQ(esc(uni(0x2026)), @"\\u2026", "esc U+2026 ellipsis -> \\u2026");
     EQ(esc(uni(0x22ef)), @"\\u22ef", "esc U+22EF midline ellipsis -> \\u22ef");
+    EQ(esc(uni(0x2024)), @"\\u2024", "esc U+2024 one-dot leader -> \\u2024");
+    EQ(esc(uni(0x2025)), @"\\u2025", "esc U+2025 two-dot leader -> \\u2025");
+    /* three one-dot-leaders read as `…` but are escaped, so cannot mimic it */
+    EQ(esc(([NSString stringWithFormat:@"%@%@%@", uni(0x2024), uni(0x2024), uni(0x2024)])),
+       @"\\u2024\\u2024\\u2024", "esc run of one-dot leaders");
     /* mixed with text */
     EQ(esc(([NSString stringWithFormat:@"a%@b", uni(0x2026)])), @"a\\u2026b",
        "esc ellipsis between letters");
+}
+
+static void test_escape_bidi(void) {
+    /* Trojan Source (CVE-2021-42574): bidi overrides visually reorder text so
+     * the glyphs on the sheet can read as a different command than runs. Every
+     * one must be escaped, even inside a single-quoted token. */
+    EQ(esc(uni(0x202A)), @"\\u202a", "esc LRE -> \\u202a");
+    EQ(esc(uni(0x202B)), @"\\u202b", "esc RLE -> \\u202b");
+    EQ(esc(uni(0x202C)), @"\\u202c", "esc PDF -> \\u202c");
+    EQ(esc(uni(0x202D)), @"\\u202d", "esc LRO -> \\u202d");
+    EQ(esc(uni(0x202E)), @"\\u202e", "esc RLO -> \\u202e");
+    EQ(esc(uni(0x2066)), @"\\u2066", "esc LRI -> \\u2066");
+    EQ(esc(uni(0x2067)), @"\\u2067", "esc RLI -> \\u2067");
+    EQ(esc(uni(0x2068)), @"\\u2068", "esc FSI -> \\u2068");
+    EQ(esc(uni(0x2069)), @"\\u2069", "esc PDI -> \\u2069");
+    EQ(esc(uni(0x200E)), @"\\u200e", "esc LRM -> \\u200e");
+    EQ(esc(uni(0x200F)), @"\\u200f", "esc RLM -> \\u200f");
+    EQ(esc(uni(0x061C)), @"\\u061c", "esc ALM -> \\u061c");
+    /* the canonical attack token still carries the raw override nowhere */
+    NSString *rlo = [NSString stringWithFormat:@"/etc/%@fdp.ssm", uni(0x202E)];
+    OK(charcount(esc(rlo), 0x202E) == 0, "no raw RLO survives escaping");
+    /* and single-quoting does not smuggle it either */
+    OK(charcount(q(rlo), 0x202E) == 0, "no raw RLO survives quoteToken");
+}
+
+static void test_escape_zero_width(void) {
+    EQ(esc(uni(0x200B)), @"\\u200b", "esc ZWSP -> \\u200b");
+    EQ(esc(uni(0x200C)), @"\\u200c", "esc ZWNJ -> \\u200c");
+    EQ(esc(uni(0x200D)), @"\\u200d", "esc ZWJ -> \\u200d");
+    EQ(esc(uni(0x2060)), @"\\u2060", "esc WORD JOINER -> \\u2060");
+    EQ(esc(uni(0xFEFF)), @"\\ufeff", "esc ZWNBSP/BOM -> \\ufeff");
 }
 
 static void test_escape_dot_runs(void) {
@@ -193,49 +227,62 @@ static void test_quote_control_chars_get_quoted(void) {
        "newline inside word -> 'a\\nb' (no real break)");
 }
 
-/* ---- formatWith: layout, dedup, caps, truncation, length invariant ---- */
+/* ---- formatWith: layout, dedup, caps, all-or-nothing overflow, budget ---- */
+
+static NSString *fmt_ov(NSString *path, NSString *user, NSString *cwd,
+                        NSString *verify, NSArray *argv, SWPromptStyle style,
+                        SWPromptOverflow *ov) {
+    return [SudoWhatPromptFormatter formatWithCommandPath:path runasUser:user
+                                                      cwd:cwd verifyCode:verify
+                                                     argv:argv style:style
+                                                 overflow:ov];
+}
 
 static void test_format_basic_exact_systemsheet(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", @"hello"], SWPromptStyleSystemSheet);
-    NSString *expected = [NSString stringWithFormat:
-        @"%@\n\n%@\n\n\n%@\n\n\n%@",
-        @"run as user root", @"Verify code: AB12", @"/bin/echo hello", TRAILER_SHEET];
-    EQ(out, expected, "basic SystemSheet exact layout");
+    NSString *expected =
+        @"run a command.\n\nVerify code: AB12\n\nUser: root\n"
+        @"Command: /bin/echo hello\n\nCode must match your terminal";
+    EQ(out, expected, "basic SystemSheet exact layout (lowercase, period at top)");
 }
 
 static void test_format_basic_exact_selfcontained(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", @"hello"], SWPromptStyleSelfContained);
-    NSString *expected = [NSString stringWithFormat:
-        @"%@\n\n%@\n\n\n%@\n\n\n%@",
-        @"Run as user root", @"Verify code: AB12", @"/bin/echo hello", TRAILER_SELF];
-    EQ(out, expected, "basic SelfContained exact layout (capital Run, period)");
+    NSString *expected =
+        @"Run a command.\n\nVerify code: AB12\n\nUser: root\n"
+        @"Command: /bin/echo hello\n\nCode must match your terminal";
+    EQ(out, expected, "basic SelfContained exact layout (capital Run, period at top)");
 }
 
-static void test_format_cwd_in_header(void) {
+static void test_format_path_line(void) {
     NSString *out = fmt(@"/bin/echo", @"root", @"/tmp", @"AB12",
                         @[@"echo"], SWPromptStyleSystemSheet);
-    OK([out hasPrefix:@"run as user root in directory /tmp\n\n"],
-       "cwd rendered in header");
+    OK([out containsString:@"User: root\nPath: /tmp\nCommand: /bin/echo\n\n"],
+       "cwd rendered on its own Path line, between User and Command");
+    /* no cwd -> no Path line at all */
+    NSString *noPath = fmt(@"/bin/echo", @"root", nil, @"AB12",
+                           @[@"echo"], SWPromptStyleSystemSheet);
+    OK(![noPath containsString:@"Path:"], "absent cwd omits the Path line");
 }
 
 static void test_format_argv0_dedup(void) {
     /* argv[0] == basename -> dropped */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[@"echo", @"hi"], 0)
-        containsString:@"/bin/echo hi"], "dedup basename argv0");
+        containsString:@"Command: /bin/echo hi"], "dedup basename argv0");
     /* argv[0] == full path -> dropped */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[@"/bin/echo", @"hi"], 0)
-        containsString:@"/bin/echo hi"], "dedup full-path argv0");
+        containsString:@"Command: /bin/echo hi"], "dedup full-path argv0");
     /* argv[0] != path/basename -> kept */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[@"notecho", @"hi"], 0)
-        containsString:@"/bin/echo notecho hi"], "non-matching argv0 kept");
+        containsString:@"Command: /bin/echo notecho hi"], "non-matching argv0 kept");
     /* no argv -> just the path */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[], 0)
-        containsString:@"/bin/echo"], "empty argv -> path only");
+        containsString:@"Command: /bin/echo\n"], "empty argv -> path only");
     /* single argv == basename -> just the path */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[@"echo"], 0)
-        containsString:@"/bin/echo"], "single matching argv0 -> path only");
+        containsString:@"Command: /bin/echo\n"], "single matching argv0 -> path only");
 }
 
 static void test_format_quoting_in_command(void) {
@@ -249,117 +296,136 @@ static void test_format_verify_empty(void) {
     OK([out containsString:@"Verify code: unavailable"], "empty verify -> unavailable");
 }
 
-static void test_format_user_cap(void) {
-    NSString *longUser = rep(@"u", 50);
-    NSString *out = fmt(@"/bin/echo", longUser, nil, @"X", @[@"echo"], 0);
-    NSString *expectHead = [NSString stringWithFormat:@"run as user %@…", rep(@"u", 32)];
-    OK([out hasPrefix:expectHead], "long user capped at 32 + ellipsis");
+static void test_format_user_overflow(void) {
+    /* All-or-nothing: a user value past the cap becomes the marker, never a
+     * partial value with an ellipsis. */
+    SWPromptOverflow ov = { NO, NO, NO };
+    NSString *longUser = rep(@"u", 100);
+    NSString *out = fmt_ov(@"/bin/echo", longUser, nil, @"X", @[@"echo"],
+                           SWPromptStyleSystemSheet, &ov);
+    OK([out containsString:@"User: (see terminal)\n"], "long user -> (see terminal)");
+    OK(ov.user && !ov.path && !ov.command, "overflow flags user only");
+    OK(![out containsString:@"…"], "no ellipsis anywhere in the prompt");
+    /* a short user is shown whole with no marker */
+    SWPromptOverflow ov2 = { NO, NO, NO };
+    NSString *out2 = fmt_ov(@"/bin/echo", @"alice", nil, @"X", @[@"echo"],
+                            SWPromptStyleSystemSheet, &ov2);
+    OK([out2 containsString:@"User: alice\n"] && !ov2.user, "short user shown whole");
 }
 
-static void test_format_cwd_cap(void) {
-    NSString *longCwd = rep(@"c", 100);
-    NSString *out = fmt(@"/bin/echo", @"root", longCwd, @"X", @[@"echo"], 0);
-    NSString *expectCwd = [NSString stringWithFormat:@"in directory %@…", rep(@"c", 80)];
-    OK([out containsString:expectCwd], "long cwd capped at 80 + ellipsis");
+static void test_format_path_overflow(void) {
+    SWPromptOverflow ov = { NO, NO, NO };
+    NSString *longCwd = [@"/" stringByAppendingString:rep(@"c", 300)];
+    NSString *out = fmt_ov(@"/bin/echo", @"root", longCwd, @"X", @[@"echo"],
+                           SWPromptStyleSystemSheet, &ov);
+    OK([out containsString:@"Path: (see terminal)\n"], "long cwd -> (see terminal)");
+    OK(ov.path && !ov.user && !ov.command, "overflow flags path only");
+}
+
+static void test_format_command_overflow(void) {
+    SWPromptOverflow ov = { NO, NO, NO };
+    NSString *out = fmt_ov(@"/bin/echo", @"root", nil, @"AB12",
+                           @[@"echo", rep(@"x", 4000)],
+                           SWPromptStyleSystemSheet, &ov);
+    OK([out containsString:@"Command: (see terminal)\n"], "long command -> (see terminal)");
+    OK(ov.command && !ov.user && !ov.path, "overflow flags command only");
+    OK([out containsString:BOTTOM_TRUNC], "closing line is the truncated variant");
+    OK(![out containsString:BOTTOM_CLEAN], "clean closing line absent when truncated");
 }
 
 static void test_format_antiinjection_newline_count(void) {
-    /* A non-truncated layout has exactly 8 structural newlines. An argv token
-     * carrying a real newline must be escaped, so the count stays 8 - never 9.
-     * This is the load-bearing anti-injection assertion. */
+    /* A non-truncated, no-path layout has exactly 7 structural newlines. An
+     * argv token carrying a real newline must be escaped, so the count stays 7,
+     * never 8. This is the load-bearing anti-injection assertion. */
     NSString *evilArg = [NSString stringWithFormat:@"a%@b", uni(0x0a)];
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", evilArg], SWPromptStyleSystemSheet);
-    OK(nlcount(out) == 8, "argv newline does not add a structural line");
+    OK(nlcount(out) == 7, "argv newline does not add a structural line");
     /* line/paragraph separators likewise must not introduce breaks */
     NSString *evil2 = [NSString stringWithFormat:@"a%@%@b", uni(0x2028), uni(0x2029)];
     NSString *out2 = fmt(@"/bin/echo", @"root", nil, @"AB12",
                          @[@"echo", evil2], SWPromptStyleSystemSheet);
-    OK(nlcount(out2) == 8, "U+2028/2029 in argv add no structural line");
+    OK(nlcount(out2) == 7, "U+2028/2029 in argv add no structural line");
+    /* a fake "Command:" line inside an arg must not forge structure: the colon
+     * survives but the leading newline is escaped, so it stays one line. */
+    NSString *evil3 = [NSString stringWithFormat:@"a%@Command: /bin/sh", uni(0x0a)];
+    NSString *out3 = fmt(@"/bin/echo", @"root", nil, @"AB12",
+                         @[@"echo", evil3], SWPromptStyleSystemSheet);
+    OK(nlcount(out3) == 7, "argv cannot forge an extra labelled line");
 }
 
 static void test_format_ellipsis_in_arg_escaped(void) {
-    /* An argv token containing a real U+2026 must appear as the literal text
-     * …, never as a bare ellipsis that could fake truncation. The only
-     * bare U+2026 chars in a non-truncated prompt come from the trailer. */
+    /* No part of the prompt uses a bare U+2026 any more (all-or-nothing dropped
+     * the ellipsis marker), so an argv token's real U+2026 must render as
+     * … text and leave ZERO bare ellipses in the output. */
     NSString *arg = [NSString stringWithFormat:@"x%@y", uni(0x2026)];
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", arg], SWPromptStyleSystemSheet);
     OK([out containsString:@"x\\u2026y"], "arg ellipsis shown as \\u2026 text");
-    /* trailer contains exactly one bare U+2026; arg added none */
-    OK(charcount(out, 0x2026) == 1, "no bare ellipsis leaked from argv");
+    OK(charcount(out, 0x2026) == 0, "no bare ellipsis anywhere in the prompt");
 }
 
 static void test_format_length_invariant(void) {
     /* The hard guarantee: rendered length stays within the LA budget for ANY
-     * command size, so nothing is silently clipped past the cap. */
+     * input size, so nothing is silently clipped past the cap. */
     NSUInteger worstSeen = 0;
     NSArray *styles = @[@(SWPromptStyleSystemSheet), @(SWPromptStyleSelfContained)];
     for (NSNumber *st in styles) {
         SWPromptStyle style = (SWPromptStyle)st.integerValue;
-        /* one giant single arg (forces middle-break) */
+        /* one giant single arg */
         for (NSUInteger len = 1; len <= 4000; len += 37) {
             NSString *out = fmt(@"/bin/echo", @"root", @"/tmp", @"AB12",
                                 @[@"echo", rep(@"x", len)], style);
             if (out.length > worstSeen) worstSeen = out.length;
             OK(out.length <= kMaxTotal, "single-arg length within budget");
         }
-        /* many args (forces above-indicator + trailing drop) */
+        /* many args */
         NSMutableArray *many = [NSMutableArray arrayWithObject:@"echo"];
         for (NSUInteger i = 0; i < 200; i++) [many addObject:rep(@"y", 20)];
         NSString *out2 = fmt(@"/bin/echo", @"root", @"/tmp", @"AB12", many, style);
         OK(out2.length <= kMaxTotal, "many-args length within budget");
-        OK([out2 containsString:@"… COMMAND TRUNCATED …"], "truncation marker present");
-        /* a long path as the only token */
-        NSString *out3 = fmt(rep(@"/p", 2000), @"root", nil, @"AB12", @[], style);
-        OK(out3.length <= kMaxTotal, "long-path length within budget");
+        OK([out2 containsString:SEE_TERMINAL], "over-long command -> (see terminal)");
+        /* every field over budget at once */
+        NSString *out3 = fmt(rep(@"/p", 2000), rep(@"u", 100),
+                             [@"/" stringByAppendingString:rep(@"c", 300)],
+                             @"AB12", @[], style);
+        OK(out3.length <= kMaxTotal, "all-fields-overflow length within budget");
     }
     fprintf(stderr, "  (worst rendered length observed: %lu / %lu)\n",
             (unsigned long)worstSeen, (unsigned long)kMaxTotal);
 }
 
-static void test_format_truncation_marker_only_when_truncated(void) {
+static void test_format_no_marker_when_it_fits(void) {
     NSString *small = fmt(@"/bin/echo", @"root", nil, @"AB12",
                           @[@"echo", @"hi"], SWPromptStyleSystemSheet);
-    OK(![small containsString:@"COMMAND TRUNCATED"], "no marker when it all fits");
-}
-
-static void test_format_middle_break_preserves_ends(void) {
-    /* A single over-long last arg should middle-break: head + marker + tail,
-     * so the user still sees BOTH ends of the argument, not just the start. */
-    NSString *arg = [NSString stringWithFormat:@"%@%@", rep(@"A", 300), rep(@"Z", 300)];
-    NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
-                        @[@"echo", arg], SWPromptStyleSystemSheet);
-    OK([out containsString:@"… COMMAND TRUNCATED …"], "middle-break shows marker");
-    OK([out containsString:@"AAAAAAAA"], "middle-break preserves head of arg");
-    OK([out containsString:@"ZZZZZZZZ"], "middle-break preserves tail of arg");
-    OK(out.length <= kMaxTotal, "middle-break stays within budget");
+    OK(![small containsString:SEE_TERMINAL], "no marker when it all fits");
+    OK([small containsString:BOTTOM_CLEAN], "clean closing line when nothing overflows");
 }
 
 static void test_format_surrogate_boundary(void) {
-    /* Emoji at the truncation boundary: must not crash and must stay within
-     * budget even if a surrogate pair is split (a split yields a lone
-     * surrogate, cosmetically a replacement glyph, but never an overflow). */
+    /* Emoji flood: all-or-nothing sends it to the terminal; must not crash and
+     * must stay within budget. */
     NSMutableArray *argv = [NSMutableArray arrayWithObject:@"echo"];
     [argv addObject:rep(@"😀", 1000)];
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12", argv,
                         SWPromptStyleSystemSheet);
     OK(out != nil && out.length <= kMaxTotal, "emoji flood stays in budget");
+    OK([out containsString:@"Command: (see terminal)"], "emoji flood -> (see terminal)");
 }
 
 static void test_format_verifycode_bounded(void) {
-    /* verifyCode is now head-capped like user/cwd, so the length invariant
-     * holds even for an absurd code - this is a hard guarantee, not a probe. */
+    /* verifyCode is capped (plain cut, no marker) purely so the budget holds
+     * against a malformed code - a hard guarantee, not a probe. */
     NSString *out = fmt(@"/bin/echo", @"root", nil, rep(@"V", 1000),
                         @[@"echo"], SWPromptStyleSystemSheet);
     OK(out.length <= kMaxTotal, "huge verifyCode stays within budget");
-    NSString *expectVerify = [NSString stringWithFormat:@"Verify code: %@…", rep(@"V", 32)];
-    OK([out containsString:expectVerify], "long verifyCode capped at 32 + ellipsis");
+    NSString *expectVerify = [NSString stringWithFormat:@"Verify code: %@\n", rep(@"V", 32)];
+    OK([out containsString:expectVerify], "long verifyCode capped at 32, no marker");
+    OK(![out containsString:@"…"], "capped verifyCode adds no ellipsis");
     /* the normal production code (4 chars) must NOT be truncated */
     NSString *normal = fmt(@"/bin/echo", @"root", nil, @"AB12",
                            @[@"echo"], SWPromptStyleSystemSheet);
     OK([normal containsString:@"Verify code: AB12\n"], "short code rendered verbatim");
-    OK(![normal containsString:@"AB12…"], "short code not given a truncation ellipsis");
 }
 
 /* ---- fullCommandLineForCommandPath: and wasTruncated: (terminal echo) ---- */
@@ -400,24 +466,27 @@ static void test_fullcmd_untruncated(void) {
 }
 
 static void test_wastruncated_flag(void) {
-    /* The flag the plugin keys the terminal echo on. It must be YES exactly when
-     * the sheet shows a truncation marker (the existing length tests pin that the
-     * marker appears in these same cases). */
+    /* The wasTruncated: wrapper ORs the three overflow flags. It must be YES
+     * exactly when some item was replaced by "(see terminal)". */
     OK(!fmt_trunc(@"/bin/echo", @[@"echo", @"hi"], SWPromptStyleSystemSheet),
        "wasTruncated NO for a short command");
     OK(fmt_trunc(@"/bin/echo", @[@"echo", rep(@"x", 4000)], SWPromptStyleSystemSheet),
-       "wasTruncated YES for an over-long arg (middle-break)");
+       "wasTruncated YES for an over-long command");
     NSMutableArray *many = [NSMutableArray arrayWithObject:@"echo"];
     for (NSUInteger i = 0; i < 200; i++) [many addObject:rep(@"y", 20)];
     OK(fmt_trunc(@"/bin/echo", many, SWPromptStyleSystemSheet),
-       "wasTruncated YES for many args (above-indicator)");
+       "wasTruncated YES for many args");
     OK(fmt_trunc(@"/bin/echo", many, SWPromptStyleSelfContained),
        "wasTruncated YES holds for SelfContained too");
-    /* The 6-arg wrapper passes NULL; the formatter must tolerate it. */
+    /* The wrapper passes NULL through to the overflow variant; tolerate it. */
     NSString *out = [SudoWhatPromptFormatter formatWithCommandPath:@"/bin/echo"
         runasUser:@"root" cwd:nil verifyCode:@"AB12" argv:@[@"echo", @"hi"]
         style:SWPromptStyleSystemSheet wasTruncated:NULL];
     OK(out != nil, "wasTruncated:NULL is tolerated");
+    /* overflow:NULL likewise tolerated */
+    NSString *out2 = fmt_ov(@"/bin/echo", @"root", nil, @"AB12", @[@"echo", @"hi"],
+                            SWPromptStyleSystemSheet, NULL);
+    OK(out2 != nil, "overflow:NULL is tolerated");
 }
 
 int main(void) {
@@ -427,6 +496,8 @@ int main(void) {
         test_escape_hex_c0_del();
         test_escape_c1_and_separators();
         test_escape_ellipsis_homoglyphs();
+        test_escape_bidi();
+        test_escape_zero_width();
         test_escape_dot_runs();
         test_escape_dot_run_transitions();
         test_escape_lone_surrogate();
@@ -440,17 +511,17 @@ int main(void) {
 
         test_format_basic_exact_systemsheet();
         test_format_basic_exact_selfcontained();
-        test_format_cwd_in_header();
+        test_format_path_line();
         test_format_argv0_dedup();
         test_format_quoting_in_command();
         test_format_verify_empty();
-        test_format_user_cap();
-        test_format_cwd_cap();
+        test_format_user_overflow();
+        test_format_path_overflow();
+        test_format_command_overflow();
         test_format_antiinjection_newline_count();
         test_format_ellipsis_in_arg_escaped();
         test_format_length_invariant();
-        test_format_truncation_marker_only_when_truncated();
-        test_format_middle_break_preserves_ends();
+        test_format_no_marker_when_it_fits();
         test_format_surrogate_boundary();
         test_format_verifycode_bounded();
 

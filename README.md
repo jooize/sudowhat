@@ -95,9 +95,9 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
           # "bold"; "plain" disables it; colors are bold+color; "random"
           # rotates colors per invocation). Cosmetic only.
           # services.sudowhat.verifyStyle = "cyan";
-          # Echo the full command to the terminal when the Touch ID sheet had
-          # to truncate it ("truncated", the default; "always"; or "never" to
-          # keep the sheet the sole disclosure on shared/recorded terminals).
+          # Echo user/path/command to the terminal for items the Touch ID sheet
+          # had to replace with "(see terminal)" ("truncated", the default) or
+          # on every invocation ("always").
           # services.sudowhat.echoCommand = "always";
         }
       ];
@@ -179,7 +179,7 @@ them (no sheet) once sudo has authenticated them.
 
 **Verify-code emphasis:** the code echoed to the controlling terminal is bold by default; `services.sudowhat.verifyStyle` selects a different emphasis (`plain`, `bold`, a bold-plus-color — `red`, `green`, `yellow`, `blue`, `magenta`, `cyan` — or `random`, which rotates among a curated color subset per invocation) baked into the signed bundle at build time. It is purely cosmetic — never a trust signal, since the anchor is the code matching the system-rendered Touch ID sheet — and the value selects from a fixed, reviewed set of escape sequences rather than a free-form string, so it adds no injection surface. `NO_COLOR` or `TERM=dumb` in the invoking environment still force plain at runtime regardless of the build-time setting.
 
-**Full-command echo on truncation:** the Touch ID sheet caps the command it shows at a conservative budget (~480 chars) and marks a longer one truncated with an ellipsis. When that happens, the full, untruncated command is also written to the controlling terminal — the same redirect-proof `/dev/tty` channel as the verify code, just below it — so the clipped tail stays readable. It is escaped and shell-quoted exactly as the sheet renders it, so no raw control bytes reach the terminal, and it is disclosure only, never a trust signal: the system-rendered sheet remains authoritative. `services.sudowhat.echoCommand` selects the policy — `truncated` (default, echo only when the sheet clipped), `always`, or `never`. The echo goes to `/dev/tty` only, never to sudo's stderr, so a `2>file` redirect cannot capture it; set `never` to keep a sensitive command out of scrollback on a shared or screen-recorded terminal.
+**Context echo on overflow:** the Touch ID sheet shows the user, path, and command each in full or — when a value does not fit its conservative budget (~480 chars total) — replaces that item with a `(see terminal)` marker (all-or-nothing per item, never a partial value). Each marked item is written in full to the controlling terminal — the same redirect-proof `/dev/tty` channel as the verify code, just below it — so the marker always points at something. Every value is escaped and shell-quoted exactly as the sheet renders it, so no raw control bytes reach the terminal, and it is disclosure only, never a trust signal: the system-rendered sheet remains authoritative. `services.sudowhat.echoCommand` selects the policy — `truncated` (default, echo only the items the sheet clipped) or `always` (echo the full context every time). There is no `never`: a `(see terminal)` marker must be backed by a terminal echo. The echo goes to `/dev/tty` only, never to sudo's stderr, so a `2>file` redirect cannot capture it.
 
 ## Console vs. non-console callers
 

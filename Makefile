@@ -25,14 +25,15 @@ ifeq ($(filter $(SUDOWHAT_VERIFY_STYLE),$(SUDOWHAT_VALID_STYLES)),)
   override SUDOWHAT_VERIFY_STYLE := bold
 endif
 
-# Build-time policy for echoing the full (untruncated) command to the
-# controlling terminal: "truncated" (default - only when the Touch ID sheet had
-# to clip the command), "always", or "never". The nix module exposes the same
-# names via services.sudowhat.echoCommand. Passed as a bare token to
-# -DSW_ECHO_COMMAND, where the plugin maps it to a fixed mode. An unknown value
-# normalizes to "truncated" with a warning, rather than failing the build.
+# Build-time policy for echoing the invocation context (user/path/command) to
+# the controlling terminal: "truncated" (default - only the items the Touch ID
+# sheet had to replace with the "(see terminal)" marker) or "always". There is
+# no "never": a "(see terminal)" marker must be backed by a terminal echo. The
+# nix module exposes the same names via services.sudowhat.echoCommand. Passed as
+# a bare token to -DSW_ECHO_COMMAND, where the plugin maps it to a fixed mode. An
+# unknown value normalizes to "truncated" with a warning, rather than failing.
 SUDOWHAT_ECHO_COMMAND ?= truncated
-SUDOWHAT_VALID_ECHO := never truncated always
+SUDOWHAT_VALID_ECHO := truncated always
 ifeq ($(filter $(SUDOWHAT_ECHO_COMMAND),$(SUDOWHAT_VALID_ECHO)),)
   $(warning sudowhat: unknown SUDOWHAT_ECHO_COMMAND '$(SUDOWHAT_ECHO_COMMAND)', falling back to truncated)
   override SUDOWHAT_ECHO_COMMAND := truncated

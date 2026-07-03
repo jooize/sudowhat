@@ -17,17 +17,28 @@
  * content:
  *   SystemSheet    — LAContext Touch ID sheet. macOS prepends
  *                    `"sudo" is trying to ` and appends a terminal
- *                    period. Our text uses a lowercase verb and no
- *                    trailing period so the surrounding sentence reads
- *                    grammatically.
+ *                    period, so our opening line is a lowercase
+ *                    continuation (`run a command.`).
  *   SelfContained  — Authorization Services password dialog. macOS
- *                    shows our text verbatim with no wrapper, so we
- *                    capitalize the verb and add our own terminal
- *                    period. */
+ *                    shows our text verbatim with no wrapper, so the
+ *                    opening line is capitalized (`Run a command.`).
+ * The full stop lives at the top (the opening line); the closing line
+ * is a short reminder that harmlessly absorbs the sheet's auto-period. */
 typedef NS_ENUM(NSInteger, SWPromptStyle) {
     SWPromptStyleSystemSheet = 0,
     SWPromptStyleSelfContained,
 };
+
+/* Per-item overflow report. The prompt shows each of user / path / command
+ * either in full or, when it does not fit the sheet budget, as the marker
+ * "(see terminal)" (all-or-nothing per item — no partial ellipsis). A YES field
+ * means that item was replaced by the marker, so the plugin MUST echo the full
+ * value to the controlling terminal or the marker would be a lie. */
+typedef struct {
+    BOOL user;
+    BOOL path;
+    BOOL command;
+} SWPromptOverflow;
 
 @interface SudoWhatPromptFormatter : NSObject
 
@@ -38,10 +49,8 @@ typedef NS_ENUM(NSInteger, SWPromptStyle) {
                                 argv:(NSArray<NSString *> *)argv
                               style:(SWPromptStyle)style;
 
-/* As above, but reports via outTruncated whether the command region had to be
- * truncated to fit the budget (the sheet shows a truncation marker). Pass NULL
- * to ignore. The plugin uses this to decide whether to echo the full command to
- * the controlling terminal (services.sudowhat.echoCommand). */
+/* As above, but reports via outTruncated whether ANY item was replaced by the
+ * "(see terminal)" marker (user, path, or command). Pass NULL to ignore. */
 + (NSString *)formatWithCommandPath:(NSString *)path
                           runasUser:(NSString *)user
                                 cwd:(NSString *)cwd
@@ -49,6 +58,16 @@ typedef NS_ENUM(NSInteger, SWPromptStyle) {
                                 argv:(NSArray<NSString *> *)argv
                               style:(SWPromptStyle)style
                        wasTruncated:(BOOL *)outTruncated;
+
+/* As above, but reports which specific items overflowed to the terminal, so the
+ * plugin can echo exactly those. Pass NULL to ignore. */
++ (NSString *)formatWithCommandPath:(NSString *)path
+                          runasUser:(NSString *)user
+                                cwd:(NSString *)cwd
+                         verifyCode:(NSString *)verifyCode
+                                argv:(NSArray<NSString *> *)argv
+                              style:(SWPromptStyle)style
+                           overflow:(SWPromptOverflow *)outOverflow;
 
 /* The full, untruncated command line — the resolved path plus argv, with the
  * SAME shell-quoting and control-char escaping the sheet uses, but no budget
@@ -63,6 +82,12 @@ typedef NS_ENUM(NSInteger, SWPromptStyle) {
 
 /* Exposed for unit tests. Public so a future test target can call it. */
 + (NSString *)quoteToken:(NSString *)token;
+
+/* Escape control / homoglyph / bidi / zero-width characters to visible \xNN or
+ * \uNNNN text, so the glyphs shown can neither smuggle hidden lines nor visually
+ * reorder (Trojan Source). Public so the plugin can escape the user/path values
+ * it echoes to the terminal with the same rules the sheet uses. */
++ (NSString *)escapeControlChars:(NSString *)s;
 
 @end
 
