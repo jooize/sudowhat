@@ -132,7 +132,8 @@ in {
           in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
           metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
           and notable whitespace runs (leading, trailing, or doubled spaces)
-          underlined. Ordinary command structure is left uncoloured.
+          shown on a grey background. Ordinary command structure is left
+          uncoloured.
 
         This is emphasis, never a trust signal: the anchor stays the verify
         code matching the system-rendered sheet, which cannot be coloured. The

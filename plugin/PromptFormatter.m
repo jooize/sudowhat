@@ -295,13 +295,13 @@
  * Kept here, in one reviewed place, so the only escape bytes that can reach the
  * terminal are this closed set — the classifier below is their sole producer.
  * Every colour leads with "1;" (bold+colour) so it still carries where the
- * colour washes out; whitespace uses underline alone so the byte is unchanged
- * but the run is visible. */
+ * colour washes out; whitespace uses a grey background so a run of otherwise-
+ * invisible spaces reads as a filled block while the bytes stay unchanged. */
 static NSString *const kSGRReset   = @"\033[0m";
 static NSString *const kSGRUnicode = @"\033[1;31m"; /* deceptive Unicode: \uNNNN   */
 static NSString *const kSGRControl = @"\033[1;35m"; /* control bytes: \n \r \t \0 \xNN */
 static NSString *const kSGRMeta    = @"\033[1;36m"; /* shell metachars: ' " ` and \\  */
-static NSString *const kSGRSpace   = @"\033[4m";    /* notable whitespace run          */
+static NSString *const kSGRSpace   = @"\033[100m";  /* notable whitespace: grey background */
 
 + (NSString *)colorizeEscaped:(NSString *)s {
     if (s == nil) return s;

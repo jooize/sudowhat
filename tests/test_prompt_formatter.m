@@ -552,11 +552,11 @@ static void test_color_categories(void) {
 static void test_color_whitespace(void) {
     /* Single interior space stays plain, so ordinary commands are unmarked. */
     EQ(color(@"a b"), @"a b", "single interior space is not underlined");
-    /* A run of 2+ spaces is underlined. */
-    OK([color(@"a  b") containsString:@"\033[4m  \033[0m"], "double space underlined");
+    /* A run of 2+ spaces is highlighted (grey background). */
+    OK([color(@"a  b") containsString:@"\033[100m  \033[0m"], "double space highlighted");
     /* Leading and trailing single spaces are the invisible-padding cases. */
-    OK([color(@" x") hasPrefix:@"\033[4m \033[0m"], "leading space underlined");
-    OK([color(@"x ") hasSuffix:@"\033[4m \033[0m"], "trailing space underlined");
+    OK([color(@" x") hasPrefix:@"\033[100m \033[0m"], "leading space highlighted");
+    OK([color(@"x ") hasSuffix:@"\033[100m \033[0m"], "trailing space highlighted");
 }
 
 static void test_color_nil_empty_clean(void) {

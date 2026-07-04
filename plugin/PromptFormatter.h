@@ -95,7 +95,7 @@ typedef struct {
  * echo only. Semantic colours: deceptive Unicode escapes (\uNNNN) red,
  * control-byte escapes (\n \r \t \0 \xNN) magenta, shell metacharacters
  * (' " ` and the escaped backslash \\) cyan, and notable whitespace runs
- * underlined. Purely additive: stripping the SGR yields the exact input bytes
+ * shown on a grey background. Purely additive: stripping the SGR yields the exact input bytes
  * back (round-trip invariant), so it never alters what is shown, only what is
  * emphasised. The input must already be escaped (no raw control bytes, hence no
  * raw ESC), so no attacker byte can become an escape sequence; the only escape
