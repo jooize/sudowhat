@@ -16,6 +16,9 @@
 >   scripted callers; it was cut because a deferred run has no prompt to preview,
 >   so stderr disclosure would only duplicate sudo's audit log while breaking
 >   tty-or-nothing.) The verify code stays structurally tty-only, unchanged.
+>   **(v0.10.0: the `echoDeferred` knob was removed; terminal display moved to the
+>   audit plugin under `auditDisplay` / `echoColor`, still tty-only. See
+>   `docs/design-terminal-mode.md`.)**
 > The headline — mode 3 (NOPASSWD → zero prompts) via the PAM marker — shipped as
 > designed. See the "Policy deference" section of `docs/design-noncon-sudo.md` for
 > the authoritative as-built record.

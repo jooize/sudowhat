@@ -114,8 +114,9 @@ being fused into the biometric sheet.
 1. **Move command display earlier.** Today the non-console/terminal path steps
    aside *silently* (shows nothing). The audit plugin closes that gap: you judge
    the command before committing, in every mode.
-2. **Unify tty command display in one place.** Today the approval plugin owns
-   both the sheet and the post-auth tty echo (`emit_full_context`, echoCommand).
+2. **Unify tty command display in one place.** *(Shipped in v0.10.0.)* Before
+   v0.10.0 the approval plugin owned both the sheet and the post-auth tty echo
+   (`emit_full_context`, `echoCommand`).
    Let the audit plugin own the tty command display (pre-auth); shrink the
    approval plugin to sheet + verify code + resolved last-look. Fewer display
    sites, clearer ownership. (Mind the ordering: the verify code still emits at

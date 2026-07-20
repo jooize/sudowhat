@@ -162,19 +162,18 @@ outside the threat model, and consistent with the deliberately-cut
 
 - `services.sudowhat.policyDeference` (`on` | `off`, default `on`) — the master
   switch; `off` restores today's always-prompt behavior.
-- `services.sudowhat.echoDeferred` (`off` | `tty`, default `off`) — whether to
-  echo user/path/command on a skipped (deferred) run. `off` is silent (suits
-  high-volume NOPASSWD automation; sudo's own log records each command anyway);
-  `tty` echoes to `/dev/tty` only (and no-ops with no controlling terminal),
-  preserving tty-or-nothing. There is deliberately **no stderr variant**: a
-  deferred run has no prompt to preview (no authentication step to see-before),
-  so an stderr disclosure would only duplicate sudo's audit log while breaking
-  tty-or-nothing for the possibly-confidential context. No verify code is ever
-  involved on a deferred run, so the verify code's structural tty-or-nothing
-  invariant is untouched either way.
+> **Superseded in v0.10.0.** An earlier draft of this section documented an
+> `echoDeferred` (`off` | `tty`) knob for echoing user/path/command on a skipped
+> (deferred) run. It was removed. Terminal display is now owned by the sudo
+> **audit plugin** and controlled by `services.sudowhat.auditDisplay`
+> (`on` | `off`, default `on`), with `services.sudowhat.echoColor` for anomaly
+> highlighting. The audit plugin's `open()` runs on **every** path — including a
+> NOPASSWD-deferred run — so the deferred command is shown on `/dev/tty` by that
+> one unconditional mechanism, preserving tty-or-nothing with no stderr variant.
+> See `docs/design-terminal-mode.md`.
 
-Both are build-time knobs baked into the signed bundle (same mechanism as
-`echoCommand`/`echoColor`), fail-closed on an unknown token.
+`policyDeference` is a build-time knob baked into the signed bundle (same
+mechanism as `auditDisplay` / `echoColor`), fail-closed on an unknown token.
 
 ### Relationship to the retired allowlist design
 
