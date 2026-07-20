@@ -67,14 +67,15 @@ ifeq ($(filter $(SUDOWHAT_POLICY_DEFERENCE),$(SUDOWHAT_VALID_DEFERENCE)),)
 endif
 
 # Policy for echoing the invocation context when the prompt is SKIPPED by policy
-# deference (a NOPASSWD-style run): "off" (default, silent), "tty" (echo
-# user/path/command to /dev/tty only), or "always" (as tty, plus disclose on
-# sudo's stderr when there is no controlling terminal, so a script still sees
-# what it runs). The nix module exposes the same names via
-# services.sudowhat.echoDeferred. Passed as a bare token to -DSW_ECHO_DEFERRED.
-# An unknown value normalizes to "off" with a warning, rather than failing.
+# deference (a NOPASSWD-style run): "off" (default, silent) or "tty" (echo
+# user/path/command to /dev/tty only, which no-ops when there is no controlling
+# terminal). There is no stderr variant: a deferred run has no prompt to preview,
+# so stderr disclosure would only duplicate sudo's audit log. The nix module
+# exposes the same names via services.sudowhat.echoDeferred. Passed as a bare
+# token to -DSW_ECHO_DEFERRED. An unknown value normalizes to "off" with a
+# warning, rather than failing.
 SUDOWHAT_ECHO_DEFERRED ?= off
-SUDOWHAT_VALID_ECHO_DEFERRED := off tty always
+SUDOWHAT_VALID_ECHO_DEFERRED := off tty
 ifeq ($(filter $(SUDOWHAT_ECHO_DEFERRED),$(SUDOWHAT_VALID_ECHO_DEFERRED)),)
   $(warning sudowhat: unknown SUDOWHAT_ECHO_DEFERRED '$(SUDOWHAT_ECHO_DEFERRED)', falling back to off)
   override SUDOWHAT_ECHO_DEFERRED := off

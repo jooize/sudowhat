@@ -57,7 +57,7 @@ switch`), then, in a real terminal:
    code on the tty, exactly as before.
 2. **Console, NOPASSWD** → add e.g. `you ALL=(root) NOPASSWD: /usr/bin/true` to a
    sudoers fragment; `sudo /usr/bin/true` runs with **no sheet and no password**.
-   (With `echoDeferred = "tty"`/`"always"`, the user/path/command lines appear.)
+   (With `echoDeferred = "tty"`, the user/path/command lines appear on the tty.)
 3. **Root** → `sudo -i` then `sudo /usr/bin/true`: no prompt (unchanged root
    exemption; marker absent, consistent).
 4. **Tamper drill (the important one)** → as root, comment out the

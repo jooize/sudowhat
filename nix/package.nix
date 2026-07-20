@@ -24,9 +24,8 @@
   # See services.sudowhat.policyDeference.
   policyDeference ? "on",
   # Context echo when the prompt is skipped by policy deference: "off"
-  # (default), "tty", or "always". One of the Makefile's
-  # SUDOWHAT_VALID_ECHO_DEFERRED; validated by the nix module's enum. See
-  # services.sudowhat.echoDeferred.
+  # (default) or "tty". One of the Makefile's SUDOWHAT_VALID_ECHO_DEFERRED;
+  # validated by the nix module's enum. See services.sudowhat.echoDeferred.
   echoDeferred ? "off",
 }:
 

@@ -146,13 +146,16 @@ outside the threat model, and consistent with the deliberately-cut
 
 - `services.sudowhat.policyDeference` (`on` | `off`, default `on`) — the master
   switch; `off` restores today's always-prompt behavior.
-- `services.sudowhat.echoDeferred` (`off` | `tty` | `always`, default `off`) —
-  whether/where to echo user/path/command on a skipped (deferred) run. `off` is
-  silent (suits high-volume NOPASSWD automation); `tty` echoes to `/dev/tty`
-  only (preserving tty-or-nothing); `always` adds an opt-in stderr disclosure
-  when there is no controlling terminal, so a scripted caller still sees what it
-  runs. No verify code is ever involved on a deferred run, so the verify code's
-  structural tty-or-nothing invariant is untouched.
+- `services.sudowhat.echoDeferred` (`off` | `tty`, default `off`) — whether to
+  echo user/path/command on a skipped (deferred) run. `off` is silent (suits
+  high-volume NOPASSWD automation; sudo's own log records each command anyway);
+  `tty` echoes to `/dev/tty` only (and no-ops with no controlling terminal),
+  preserving tty-or-nothing. There is deliberately **no stderr variant**: a
+  deferred run has no prompt to preview (no authentication step to see-before),
+  so an stderr disclosure would only duplicate sudo's audit log while breaking
+  tty-or-nothing for the possibly-confidential context. No verify code is ever
+  involved on a deferred run, so the verify code's structural tty-or-nothing
+  invariant is untouched either way.
 
 Both are build-time knobs baked into the signed bundle (same mechanism as
 `echoCommand`/`echoColor`), fail-closed on an unknown token.

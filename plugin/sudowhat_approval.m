@@ -499,18 +499,19 @@ enum { sw_policy_deference_mode = SW_PD_SEL(SW_POLICY_DEFERENCE) };
  * on the PROMPT path; there is no sheet here, so this governs a standalone
  * disclosure of what ran with no prompt.
  *
- *   off    - (default) skip silently. Suits automation that issues many NOPASSWD
- *            calls (sudo's own log_allowed still records each command).
- *   tty    - echo user / path / command to the controlling terminal only. An
- *            interactive console user sees what ran; a scripted caller with no
- *            controlling terminal sees nothing (preserves the tty-or-nothing
- *            rule that governs the verify code).
- *   always - as "tty", but when there is NO controlling terminal, disclose the
- *            context on sudo's stderr instead (via the plugin_printf channel), so
- *            a script running sudo still sees what it is about to run. This is a
- *            deliberate, opt-in exception to tty-or-nothing for the (non-secret)
- *            context lines; the verify code is never involved here (a deferred
- *            run has none).
+ *   off - (default) skip silently. Suits automation that issues many NOPASSWD
+ *         calls; sudo's own log_allowed still records each command to authpriv.
+ *   tty - echo user / path / command to the controlling terminal only, same
+ *         hardened /dev/tty channel and escaping as the prompt-path echo. An
+ *         interactive console user sees what ran; a scripted caller with no
+ *         controlling terminal sees nothing.
+ *
+ * There is deliberately NO stderr fallback: a deferred run has no prompt to
+ * "preview" (there is no authentication step to see-before), so disclosing on
+ * stderr would only duplicate sudo's own audit log while breaking the
+ * tty-or-nothing rule for the (possibly confidential) context. Keeping this
+ * tty-or-nothing means the deferred echo never touches sudo's stderr and needs
+ * no plugin_printf/conversation channel at all.
  *
  * An unknown token yields an undefined SW_ED_<name> and fails the compile. */
 #ifndef SW_ECHO_DEFERRED
@@ -518,7 +519,6 @@ enum { sw_policy_deference_mode = SW_PD_SEL(SW_POLICY_DEFERENCE) };
 #endif
 #define SW_ED_off      0
 #define SW_ED_tty      1
-#define SW_ED_always   2
 #define SW_ED_CAT(x)   SW_ED_##x
 #define SW_ED_SEL(x)   SW_ED_CAT(x)
 enum { sw_echo_deferred_mode = SW_ED_SEL(SW_ECHO_DEFERRED) };
@@ -532,31 +532,20 @@ enum { sw_echo_deferred_mode = SW_ED_SEL(SW_ECHO_DEFERRED) };
  *   integrity line not wired  -> NO   (an absent marker can't be trusted to mean
  *                                      "waived" if pam_sudowhat may be unwired)
  *   otherwise                 -> YES  (auth waived, chain intact => skip)
- * A caller can pre-set the marker (forcing a prompt) but cannot clear it once
- * pam_sudowhat has run, so the only forgeable direction is the safe one. */
+ *
+ * The security property that makes presence-only enough: SKIP is the dangerous
+ * outcome and it is driven by marker ABSENCE, which cannot be forged. sudo's own
+ * pam_sudowhat setenv() runs in-process AFTER the caller's environment was
+ * captured and overwrites any pre-set value, so a caller can never make the
+ * marker absent when the auth stack actually ran — they can only ADD it (forcing
+ * a prompt, the safe direction). A secret marker value would only protect
+ * PRESENCE, which needs no protection. */
 static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
                               BOOL integrityInstalled) {
     if (!deferenceOn)        return NO;
     if (markerPresent)       return NO;
     if (!integrityInstalled) return NO;
     return YES;
-}
-
-/* Where the deferred-run context echo should go, given the build mode and
- * whether a controlling terminal exists. Pure (mode passed explicitly) so it is
- * unit-testable independent of the baked-in build knob. A live tty always wins
- * (the hardened /dev/tty path); with no tty only "always" discloses on stderr. */
-typedef enum {
-    SW_DEFERRED_ECHO_NONE = 0,
-    SW_DEFERRED_ECHO_TTY,
-    SW_DEFERRED_ECHO_STDERR,
-} sw_deferred_echo_target;
-
-static sw_deferred_echo_target sw_deferred_echo_target_for(int mode, BOOL haveTty) {
-    if (mode == SW_ED_off) return SW_DEFERRED_ECHO_NONE;
-    if (haveTty)           return SW_DEFERRED_ECHO_TTY;
-    if (mode == SW_ED_always) return SW_DEFERRED_ECHO_STDERR;
-    return SW_DEFERRED_ECHO_NONE;   /* "tty" mode with no controlling terminal */
 }
 
 /* Echo the full, untruncated invocation context to the controlling terminal, on
@@ -635,42 +624,20 @@ static void emit_full_context(const char *ttyPath,
 }
 
 /* Echo the invocation context when the prompt was SKIPPED by policy deference
- * (a NOPASSWD-style run). No verify code and no sheet are involved here, so this
- * is pure disclosure of what ran. Routing is decided by sw_deferred_echo_target_for:
- *   NONE   - echoDeferred=off, or "tty" with no controlling terminal: silent.
- *   TTY    - the hardened /dev/tty path (same as the prompt-path echo), coloured
- *            per echoColor when a live terminal permits it.
- *   STDERR - echoDeferred=always with no controlling terminal: the opt-in
- *            scripted-visibility path, plain, via sudo's plugin_printf error
- *            channel (SUDO_CONV_ERROR_MSG -> stderr). PREFER_TTY is unnecessary
- *            because the tty case never reaches this branch.
- * Values are already escapeControlChars/fullCommandLine-escaped by the caller,
- * so no raw control byte reaches either channel. ttyPath is a parameter so the
- * offline unit test can aim the tty path at a temp file. */
+ * (a NOPASSWD-style run). No verify code and no sheet are involved, so this is
+ * pure disclosure of what ran, and it is tty-or-nothing like the prompt-path
+ * echo: off -> silent; tty -> the hardened /dev/tty path (which itself no-ops
+ * when there is no controlling terminal). No stderr channel — see the
+ * SW_ECHO_DEFERRED note above. Values are already escapeControlChars /
+ * fullCommandLine-escaped by the caller, so no raw control byte reaches the
+ * terminal. ttyPath is a parameter so the offline unit test can point it at a
+ * temp file. */
 static void emit_deferred_context(const char *ttyPath,
                                   NSString *userLine, NSString *pathLine,
                                   NSString *commandLine) {
-    switch (sw_deferred_echo_target_for(sw_echo_deferred_mode, g_inv.have_tty)) {
-    case SW_DEFERRED_ECHO_NONE:
-        return;
-    case SW_DEFERRED_ECHO_TTY:
-        emit_full_context(ttyPath, userLine, pathLine, commandLine,
-                          YES, YES, YES, sw_echo_color_allowed());
-        return;
-    case SW_DEFERRED_ECHO_STDERR:
-        if (g_plugin_printf) {
-            if (userLine.length > 0)
-                g_plugin_printf(SUDO_CONV_ERROR_MSG,
-                                "sudowhat: user: %s\n", userLine.UTF8String);
-            if (pathLine.length > 0)
-                g_plugin_printf(SUDO_CONV_ERROR_MSG,
-                                "sudowhat: path: %s\n", pathLine.UTF8String);
-            if (commandLine.length > 0)
-                g_plugin_printf(SUDO_CONV_ERROR_MSG,
-                                "sudowhat: command: %s\n", commandLine.UTF8String);
-        }
-        return;
-    }
+    if (sw_echo_deferred_mode != SW_ED_tty) return;   /* off */
+    emit_full_context(ttyPath, userLine, pathLine, commandLine,
+                      YES, YES, YES, sw_echo_color_allowed());
 }
 
 static int sudowhat_open(unsigned int version,

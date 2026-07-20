@@ -408,24 +408,6 @@ static void test_defer_decision(void) {
        "marker absent AND integrity line wired -> SKIP (sudoers waived auth)");
 }
 
-static void test_deferred_echo_target(void) {
-    /* off never echoes; tty echoes only with a controlling terminal (preserving
-     * the tty-or-nothing rule); always adds the opt-in stderr disclosure when
-     * there is no tty. Mode passed explicitly, so all rows are testable. */
-    OK(sw_deferred_echo_target_for(SW_ED_off, YES) == SW_DEFERRED_ECHO_NONE,
-       "off + tty -> none");
-    OK(sw_deferred_echo_target_for(SW_ED_off, NO) == SW_DEFERRED_ECHO_NONE,
-       "off + no tty -> none");
-    OK(sw_deferred_echo_target_for(SW_ED_tty, YES) == SW_DEFERRED_ECHO_TTY,
-       "tty + tty -> tty");
-    OK(sw_deferred_echo_target_for(SW_ED_tty, NO) == SW_DEFERRED_ECHO_NONE,
-       "tty + no tty -> none (invariant preserved, no stderr fallback)");
-    OK(sw_deferred_echo_target_for(SW_ED_always, YES) == SW_DEFERRED_ECHO_TTY,
-       "always + tty -> tty (hardened path wins)");
-    OK(sw_deferred_echo_target_for(SW_ED_always, NO) == SW_DEFERRED_ECHO_STDERR,
-       "always + no tty -> stderr (opt-in scripted disclosure)");
-}
-
 static void test_policy_deference_defaults(void) {
     /* The test binary is compiled with no -DSW_POLICY_DEFERENCE / -DSW_ECHO_DEFERRED,
      * so it sees the header defaults: deference on, deferred echo off (silent). */
@@ -487,7 +469,6 @@ int main(void) {
         test_echo_color_gate();
         test_integrity_line_detection();
         test_defer_decision();
-        test_deferred_echo_target();
         test_policy_deference_defaults();
         test_emit_deferred_context_off_default();
         SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel, command-echo, policy-deference)");

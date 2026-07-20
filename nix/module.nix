@@ -184,7 +184,7 @@ in {
     };
 
     echoDeferred = lib.mkOption {
-      type = lib.types.enum [ "off" "tty" "always" ];
+      type = lib.types.enum [ "off" "tty" ];
       default = "off";
       description = ''
         Whether the invocation context (user, path, command) is echoed when the
@@ -193,20 +193,20 @@ in {
         marker on the prompt path; there is no sheet here.
 
         - `off` (the default): skip silently. Suits automation that issues many
-          `NOPASSWD` calls (sudo's own `log_allowed` still records each command).
-        - `tty`: echo user / path / command to the controlling terminal only. An
-          interactive console user sees what ran; a scripted caller with no
-          controlling terminal sees nothing — preserving the tty-or-nothing rule
-          that governs the verify code.
-        - `always`: as `tty`, but when there is no controlling terminal, disclose
-          the context on sudo's stderr instead, so a script running sudo still
-          sees what it is about to run. This is a deliberate, opt-in exception to
-          tty-or-nothing for the (non-secret) context lines; no verify code is
-          ever involved on a deferred run.
+          `NOPASSWD` calls (sudo's own `log_allowed` still records each command
+          to the auth log).
+        - `tty`: echo user / path / command to the controlling terminal only —
+          the same hardened `/dev/tty` channel and escaping as the prompt-path
+          echo, which no-ops when there is no controlling terminal. An
+          interactive console user sees what ran; a scripted caller sees nothing.
 
-        Every value is escaped and shell-quoted exactly as the sheet renders it,
-        so no raw control bytes reach either channel. Baked into the signed
-        bundle at build time.
+        There is no stderr variant: a deferred run has no prompt to preview
+        (nothing to see before authenticating, because there is no
+        authentication step), so disclosing on stderr would only duplicate sudo's
+        own audit log while breaking the tty-or-nothing rule for the
+        possibly-confidential context. Every value is escaped and shell-quoted
+        exactly as the sheet renders it. Baked into the signed bundle at build
+        time.
       '';
     };
   };

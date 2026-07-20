@@ -10,9 +10,12 @@
 >   biometrics case keeps its existing GUI Authorization Services password dialog
 >   (changing it to a terminal password would reopen the passwordless-console
 >   concern). This pass did not touch it.
-> - The context echo is `off` by default (knob `echoDeferred`), not "everywhere".
->   `tty` preserves tty-or-nothing; `always` is the opt-in scripted-stderr
->   disclosure. The verify code stays structurally tty-only, unchanged.
+> - The context echo is `off` by default (knob `echoDeferred`), not "everywhere",
+>   and `tty` is the only other value — it is tty-or-nothing, with no stderr
+>   variant. (An earlier draft had an `always` mode that fell back to stderr for
+>   scripted callers; it was cut because a deferred run has no prompt to preview,
+>   so stderr disclosure would only duplicate sudo's audit log while breaking
+>   tty-or-nothing.) The verify code stays structurally tty-only, unchanged.
 > The headline — mode 3 (NOPASSWD → zero prompts) via the PAM marker — shipped as
 > designed. See the "Policy deference" section of `docs/design-noncon-sudo.md` for
 > the authoritative as-built record.
