@@ -169,20 +169,77 @@ bundle) and a drift risk. The marker inherits sudoers' decision directly, so no
 allowlist, no second list, no drift. The allowlist doc is kept for history and
 marked superseded at its head.
 
-### Open item to confirm on hardware
+### The runtime assumption — verified, and why there is no runtime detector
 
-The mechanism rests on one runtime assumption not exercisable under the agent
-sandbox (`sudo` is blocked, and Claude Code has no controlling tty): that a
-`setenv` in `pam_sm_authenticate` is visible to `getenv` in the approval
-`check()` — i.e. sudoers runs PAM in the main `sudo` process, not a child. This
-is near-certain (openpam is an in-process library; the approval plugin and
-policy plugin both run in the main process per the invocation-order contract),
-and the "PAM does not run on NOPASSWD" half is already established in this doc.
-A self-contained spike (`spike/` — a throwaway auth module + approval plugin that
-logs the `getenv` result) confirms it end-to-end before relying on it in
-production; run it per `spike/README.md`. If it were ever to fail, only the
-detection mechanism changes (a pid-keyed side channel); the mode-wiring and the
-`sw_defer_decision` gate are independent of how the signal is carried.
+The mechanism rests on one runtime assumption: that a `setenv` in
+`pam_sm_authenticate` is visible to `getenv` in the approval `check()` — i.e.
+sudoers runs PAM in the main `sudo` process, not a child. This is near-certain
+(openpam is an in-process library; the approval and policy plugins both run in
+the main process per the invocation-order contract).
+
+**Verified 2026-07-20.** The self-contained spike (`spike/`, run per
+`spike/README.md`) confirms the `setenv`→`getenv` primitive end-to-end against
+real openpam, and the full hardware checklist passed on real `sudo`:
+auth-required commands still prompt; NOPASSWD commands skip with no sheet; root
+is exempt; the tamper drill (integrity line commented out) **prompts**
+(fail-safe); and a non-zero `timestamp_timeout` defers an in-window command.
+
+**There is deliberately no runtime self-test or health token.** Two reasons.
+
+First, proportionality. The only thing that breaks the assumption is a future
+macOS/openpam change that runs the PAM stack in a separate process (or wipes the
+environment between the auth stack and the approval callback) — an
+astronomically-unlikely, system-wide change that would ripple far beyond sudo.
+Guarding it with standing machinery (a token *file*, an activation-time selftest)
+imports failure modes *more* probable than the event itself — a full disk leaving
+the token unwritten, stale files, `/etc/pam.d` churn near sudo — i.e. the cure is
+likelier to misfire than the disease is to occur. In auth-critical code, adding
+surface to defend a near-impossible failure is net-negative.
+
+Second — the deeper reason — **no runtime detector can validate the channel**,
+because the signal the feature relies on is *the absence of our code running*. On
+a NOPASSWD command nothing of ours executes in the auth path (that is the whole
+mechanism), so there is nothing there to emit a canary; and an absent canary on a
+NOPASSWD run is indistinguishable from the legitimate absent marker. Every
+candidate was walked and dies for a concrete reason:
+
+- **A same-process canary** (the plugin `setenv`s then `getenv`s its own value)
+  tests only the plugin's *own* environment, never the `pam_sudowhat`→plugin
+  boundary the marker rides. It passes straight through the failure.
+- **The PAM account phase.** sudo *does* run the account stack (`pam_acct_mgmt`,
+  via `sudo_auth_approval`) on the NOPASSWD/exempt path — sudoers' `check_user()`
+  reaches it through `goto success`, before the approval plugin — so a module
+  wired there would run on NOPASSWD. But macOS `/etc/pam.d/sudo` routes **only
+  `auth`** through `sudo_local`; its `account` line is a fixed `pam_permit.so`.
+  Reaching the account phase means editing Apple's `/etc/pam.d/sudo` itself,
+  which this design never does (the whole integration rests on touching only the
+  supported `sudo_local` hook).
+- **An audit-plugin canary** runs on every sudo including NOPASSWD, before the
+  approval plugin, via `sudo.conf` — so it sidesteps the `/etc/pam.d/sudo`
+  routing block. But it tests **plugin→plugin** env propagation, not
+  **PAM→plugin**. Those coincide only while PAM runs in the same process as the
+  plugins — the exact assumption at risk. Under the feared fork both plugins stay
+  in the parent (canary reads healthy) while `pam_sudowhat` in the child sets a
+  marker the parent never sees. The direction is fatal: on a fork the environment
+  flows parent→child, never child→parent, and the marker needs child→parent.
+  Nothing set in the parent can prove that path.
+
+So the residual is accepted, not detected — and it is bounded: it affects only
+the console user's NOPASSWD skip (never normal auth, which always prompts), it is
+scoped to the already-logged-in local principal (not a remote/privilege
+boundary), and it fails open only under the astronomically-unlikely break. The
+proportionate backstops, all zero-cost or already present:
+
+- the existing skip **syslog** notice (`LOG_AUTHPRIV | LOG_NOTICE`,
+  `"prompt skipped, sudoers waived authentication"`) — a forensic breadcrumb that
+  would appear on commands that *should* have prompted, if the channel ever broke;
+- `services.sudowhat.policyDeference = off` — the one-line kill switch back to
+  always-prompt;
+- re-running `spike/run-spike.sh` after a major macOS update, for the paranoid.
+
+A pid-keyed side channel and an OS-build-stamped token were both considered and
+rejected on the proportionality grounds above; if the assumption ever *does*
+fail, the response is the kill switch, not a redesign.
 
 ---
 
