@@ -60,8 +60,15 @@ cd "${repo_root}" || exit 1
 # Refuse a dirty tree: uncommitted changes are in no tag, so a deploy would
 # misrepresent what is actually running.
 if ! git diff --quiet || ! git diff --cached --quiet; then
-  printf '%serror: working tree is dirty -- commit and tag a release first.%s\n' \
-    "$C_RED$C_B" "$C_OFF" >&2
+  {
+    printf '%serror: working tree is dirty -- uncommitted changes are in no release tag.%s\n' \
+      "$C_RED$C_B" "$C_OFF"
+    printf '%s       commit and tag a release, or stash, before deploying:%s\n' "$C_DIM" "$C_OFF"
+    # --untracked-files=no: list only what actually tripped the refusal (tracked,
+    # staged-or-unstaged modifications). Untracked files do not affect the tagged
+    # build, so showing them here would only mislead.
+    git status --short --untracked-files=no | sed 's/^/         /'
+  } >&2
   exit 1
 fi
 

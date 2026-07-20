@@ -111,8 +111,11 @@ fi
 
 # Consistency warnings (non-fatal).
 if (( dirty )); then
-  printf '%sWARNING: working tree is dirty -- uncommitted changes are in no tag.%s\n' \
+  printf '%sWARNING: working tree is dirty -- uncommitted changes are in no tag:%s\n' \
     "$C_RED$C_B" "$C_OFF"
+  # Only tracked, staged-or-unstaged changes (what `dirty` above tests); untracked
+  # files do not affect the tagged build.
+  git status --short --untracked-files=no | sed 's/^/         /'
 fi
 if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
   printf '%sWARNING: tag %s != its nix/package.nix version %s.%s\n' \
