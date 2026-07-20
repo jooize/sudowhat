@@ -1,2 +1,8 @@
 # Append to /etc/sudo.conf to enable sudowhat. Create the file if missing.
+#
+# The audit plugin shows the command on the controlling terminal before
+# authentication (its open() runs before the approval plugin and before PAM);
+# the approval plugin renders the Touch ID / password gate. Line order is
+# cosmetic — sudo runs the audit open() first by plugin type, not file position.
+Plugin sudowhat_audit_plugin /usr/local/libexec/sudo/sudowhat_audit.so
 Plugin sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so

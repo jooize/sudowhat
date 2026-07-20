@@ -35,7 +35,18 @@
 #define SUDOWHAT_PAM_PATH       "/usr/local/lib/pam/pam_sudowhat.so"
 #endif
 
+/* The audit plugin owns terminal command display (its open() runs before the
+ * PAM password prompt on every path). Overridable at build time like the paths
+ * above so a Nix derivation can bake its own $out store path. Optional at
+ * runtime: absent -> no terminal display, but auth is unaffected; present-but-
+ * tampered -> the approval plugin and pam_sudowhat fail closed (mutual-signature
+ * web). See docs/design-terminal-mode.md. */
+#ifndef SUDOWHAT_AUDIT_PATH
+#define SUDOWHAT_AUDIT_PATH     "/usr/local/libexec/sudo/sudowhat_audit.so"
+#endif
+
 #define SUDOWHAT_PLUGIN_SYMBOL  "sudowhat_approval_plugin"
+#define SUDOWHAT_AUDIT_SYMBOL   "sudowhat_audit_plugin"
 #define SUDOWHAT_SUDO_CONF      "/etc/sudo.conf"
 #define SUDOWHAT_SUDO_LOCAL     "/etc/pam.d/sudo_local"
 

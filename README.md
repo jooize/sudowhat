@@ -83,10 +83,10 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
         sudowhat.darwinModules.default
         {
           services.sudowhat.enable = true;
-          # Let SSH / unattended callers sudo via a password on their own
-          # terminal (default false = local console Touch ID only). See
-          # "Console vs. non-console callers".
-          # services.sudowhat.allowNonConsole = true;
+          # What non-console callers (SSH, unattended) may do: "password" (the
+          # default — native password on their own terminal, stock sudo) or
+          # "deny" (console-only lockdown). See "Console vs. non-console callers".
+          # services.sudowhat.nonConsole = "deny";
           # Re-enable sudo's per-tty credential cache, in minutes (default 0 =
           # cache off, so every command re-prompts). Never sets
           # timestamp_type=global. See "How it works".
@@ -95,19 +95,14 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
           # "bold"; "plain" disables it; colors are bold+color; "random"
           # rotates colors per invocation). Cosmetic only.
           # services.sudowhat.verifyStyle = "cyan";
-          # Echo user/path/command to the terminal for items the Touch ID sheet
-          # had to replace with "(see terminal)" ("truncated", the default) or
-          # on every invocation ("always").
-          # services.sudowhat.echoCommand = "always";
+          # Show user/path/command on the terminal before auth, via the audit
+          # plugin ("on", the default) or not ("off"). See "How it works".
+          # services.sudowhat.auditDisplay = "off";
           # Defer to sudoers' own auth decision: skip the console Touch ID
           # prompt when sudoers waived auth (a NOPASSWD rule, !authenticate, or
           # a cached credential), so a NOPASSWD command just runs. Default "on";
           # "off" always prompts. See "How it works".
           # services.sudowhat.policyDeference = "off";
-          # What to echo when the prompt is skipped by policyDeference: "off"
-          # (default, silent) or "tty" (/dev/tty only). No stderr variant — a
-          # deferred run has no prompt to preview; sudo's log records it anyway.
-          # services.sudowhat.echoDeferred = "tty";
         }
       ];
     };
@@ -131,10 +126,18 @@ make print-install-binaries      # prints what install-binaries would do plus
 
 ## How it works
 
-Two signed Mach-O bundles loaded into sudo's process, mutually verifying each other's code signature. No daemon, no agent, no IPC.
+Three signed Mach-O bundles loaded into sudo's process — a PAM module, an approval plugin, and an audit plugin — mutually verifying each other's code signature. No daemon, no agent, no IPC.
 
 ```
 sudo /usr/bin/foo bar
+  │
+  ▼  sudo runs the audit plugin's open() FIRST, before any auth
+/etc/sudo.conf
+  └── Plugin sudowhat_audit_plugin /usr/local/libexec/sudo/sudowhat_audit.so
+      • SecStaticCodeCheckValidity on pam_sudowhat.so + the approval plugin
+      • writes user / path / command (as typed) to /dev/tty — every path,
+        before the password prompt or Touch ID sheet; escaping done in the
+        memory-safe Rust escape_core. tty-only, skipped when headless.
   │
   ▼  PAM auth chain
 /etc/pam.d/sudo
@@ -142,7 +145,7 @@ sudo /usr/bin/foo bar
       └── /etc/pam.d/sudo_local
           ├── auth requisite  /usr/local/lib/pam/pam_sudowhat.so
           │     • parses /etc/sudo.conf, confirms our Plugin line is present
-          │     • SecStaticCodeCheckValidity on the approval plugin bundle
+          │     • SecStaticCodeCheckValidity on the approval + audit bundles
           │     • returns PAM_SUCCESS (-> sufficient pam_permit -> done)
           │              or PAM_AUTH_ERR (-> sudo aborts)
           └── auth sufficient pam_permit.so
@@ -150,12 +153,13 @@ sudo /usr/bin/foo bar
   ▼  sudo loads approval plugin
 /etc/sudo.conf
   └── Plugin sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so
-      • SecStaticCodeCheckValidity on pam_sudowhat.so (mutual)
+      • SecStaticCodeCheckValidity on pam_sudowhat.so + the audit plugin (mutual)
       • uid 0 (root) caller: exempt — system automation, not escalation
       • else: caller must be the LOCAL CONSOLE session — SessionGetInfo()
         reports graphic access and is not remote, and the console UID equals
-        the invoking UID. A non-console caller is denied (or, with
-        allowNonConsole, allowed without a sheet — see below).
+        the invoking UID. A non-console caller never reaches this sheet: it is
+        sent to a native password (nonConsole="password", default) or denied
+        (nonConsole="deny") — see below.
       • formats the command with shell-quoting and control-char escapes
       • seteuid drops to the user
       • LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometricsOrCompanion)
@@ -168,44 +172,50 @@ sudo /usr/bin/foo bar
   ▼  sudo execve("/usr/bin/foo", ["bar"], ...)
 ```
 
-With `services.sudowhat.allowNonConsole` enabled, the second `sudo_local` line
-becomes `auth sufficient pam_sudowhat.so console-gate` instead of `pam_permit.so`.
-That console-gate succeeds (no password) **only** for the local console user, and
+The default (`nonConsole = "password"`) installs the gate variant: the second
+`sudo_local` line is `auth sufficient pam_sudowhat.so console-gate`. That
+console-gate succeeds (no password) **only** for the local console user, and
 fails for everyone else — so a non-console caller falls through the parent
 `/etc/pam.d/sudo` chain to sudo's native `pam_smartcard` / `pam_opendirectory`
 password on the caller's *own* terminal, and the approval plugin steps aside for
-them (no sheet) once sudo has authenticated them.
+them (no sheet) once sudo has authenticated them. Set `nonConsole = "deny"` to
+install `auth sufficient pam_permit.so` instead, which terminates the chain with
+no password path, so the approval plugin denies every non-console caller.
 
 **Trust root:** Apple Developer ID code signing. In a release build, `SignatureVerifier` enforces the team-identifier requirement `anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"`. Forging the integrity check requires forging your developer signature.
 
 **Fail-closed:** any failure of either component aborts sudo. No path leads to `pam_opendirectory`-style permissive defaults. Apple's stock `pam_tid.so` is the broken behavior we're fixing — falling back to it would be regression, not recovery.
 
-**Non-console defense (SSH, automation).** Before prompting, the plugin classifies the caller by its **security session**, not by uid: a local GUI login has graphic access and is not remote, whereas an SSH session is remote and a non-graphical (system-daemon) session lacks graphic access (`SessionGetInfo`). A uid comparison alone cannot tell them apart — the same user, logged in at the Mac and over SSH, shares one uid — and a same-uid SSH session can otherwise render a Touch ID sheet on the console screen. A non-console caller therefore never reaches the biometric / Authorization Services path. By default it is **denied without a prompt**. With `services.sudowhat.allowNonConsole` enabled it is instead routed to sudo's own password / smartcard factor on the caller's *own* terminal — never a sheet on the console — and the plugin steps aside once sudo has authenticated it. This separates *local-GUI* callers from *remote/headless* ones; it does **not** separate the human from another process inside the same GUI login (a background gui-domain agent is treated as console — see [Known limitations](#known-limitations)). See [Console vs. non-console callers](#console-vs-non-console-callers).
+**Non-console defense (SSH, automation).** sudowhat's core job is to show you what will run and prove it came from your terminal; because it sits in the auth path, it *also* decides *where* a caller may authenticate. It classifies the caller by its **security session**, not by uid: a local GUI login has graphic access and is not remote, whereas an SSH session is remote and a non-graphical (system-daemon) session lacks graphic access (`SessionGetInfo`). A uid comparison alone cannot tell them apart — the same user, logged in at the Mac and over SSH, shares one uid — and a same-uid SSH session could otherwise render a Touch ID sheet on the console screen.
+
+**A non-console caller is never shown the biometric / Authorization Services sheet — this is structural, not a setting, and deliberately not configurable.** A Touch ID sheet raised for a remote or background caller renders on the *console* user's screen, and that user reflexively approves a command they never initiated. That reflexive approval is the exact hole sudowhat exists to close, so there is no option to permit it: the code returns before the `LAContext` call for any non-console caller (with a maintainer tripwire forbidding its reordering). It could not do anything useful anyway — the remote human isn't at the sensor, so a local sheet can never represent *them* authenticating; whoever is at the console would be approving on the remote caller's behalf. The only honest remote factor is a password *they* know on *their* terminal. (Genuine remote biometric would need an out-of-band push to the caller's own device — a daemon design this project rejected.)
+
+So a non-console caller authenticates, if at all, through sudo's own machinery on its own session. By default (`nonConsole = "password"`) that is sudo's native password / smartcard factor — stock sudo behaviour, kept intact. Set `nonConsole = "deny"` to refuse non-console callers entirely (a stolen password alone then can't escalate remotely, at the cost of remote / headless sudo). This split separates *local-GUI* callers from *remote/headless* ones; it does **not** separate the human from another process inside the same GUI login (a background gui-domain agent is treated as console — see [Known limitations](#known-limitations)). See [Console vs. non-console callers](#console-vs-non-console-callers).
 
 **Root callers are exempt — by design.** sudowhat gates *escalation*: an unprivileged principal reaching for root. A caller that is already root (uid 0) is not escalating, and a sudo plugin loaded inside a root process cannot meaningfully constrain root anyway — root can run the command directly, rewrite `/etc/sudo.conf`, or unload the plugin. Gating root would add no security while breaking legitimate root-context automation that shells out through sudo: nix-darwin / home-manager per-user activation runs as root and invokes `launchctl asuser <uid> sudo -u <user>` (invoking uid 0); the same pattern appears in launchd jobs and installer postinstall scripts, and these are non-interactive (no human to answer a prompt). So a uid-0 caller is allowed without a prompt, and the bypass is logged to the auth log (`syslog`/`LOG_AUTHPRIV`) so it is auditable rather than silent. The console gate still applies to every non-root caller — which is the entire population the gate can actually defend against.
 
-**Policy deference (console NOPASSWD skip).** The approval plugin runs on *every* `sudo` that sudoers authorizes — `NOPASSWD` does not bypass it — so without this, the console user would get a Touch ID sheet even for a command sudoers authorized `NOPASSWD`. sudowhat instead **defers to sudoers' own authentication decision**: sudo runs the PAM auth stack (where `pam_sudowhat` sets a process-local marker) only when it requires authentication, so an *absent* marker means sudoers waived it — a `NOPASSWD` rule, `Defaults !authenticate`, a root invoker, or a valid credential in the timestamp cache. On an absent marker (with `pam_sudowhat` still wired into `sudo_local`, which the plugin re-checks), the console user's prompt is **skipped and the command just runs**. This is an authorization-trust decision that inherits sudoers' choice rather than re-implementing it — no command allowlist, no drift. It is fail-safe in every uncertain direction: a present marker, an unverifiable chain, or `policyDeference = "off"` all result in a prompt, and a caller can only ever *force* a prompt by manipulating its environment, never suppress one. `services.sudowhat.echoDeferred` controls whether the skipped run still echoes user/path/command (default `off`/silent, or `tty` for `/dev/tty` only). Turn the whole behavior off with `services.sudowhat.policyDeference = "off"`.
+**Policy deference (console NOPASSWD skip).** The approval plugin runs on *every* `sudo` that sudoers authorizes — `NOPASSWD` does not bypass it — so without this, the console user would get a Touch ID sheet even for a command sudoers authorized `NOPASSWD`. sudowhat instead **defers to sudoers' own authentication decision**: sudo runs the PAM auth stack (where `pam_sudowhat` sets a process-local marker) only when it requires authentication, so an *absent* marker means sudoers waived it — a `NOPASSWD` rule, `Defaults !authenticate`, a root invoker, or a valid credential in the timestamp cache. On an absent marker (with `pam_sudowhat` still wired into `sudo_local`, which the plugin re-checks), the console user's prompt is **skipped and the command just runs**. This is an authorization-trust decision that inherits sudoers' choice rather than re-implementing it — no command allowlist, no drift. It is fail-safe in every uncertain direction: a present marker, an unverifiable chain, or `policyDeference = "off"` all result in a prompt, and a caller can only ever *force* a prompt by manipulating its environment, never suppress one. Even on a skipped run the audit plugin has already shown user/path/command on the terminal (it runs before this decision), so a `NOPASSWD` command is still disclosed. Turn the whole behavior off with `services.sudowhat.policyDeference = "off"`.
 
 **Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache, so every privileged command re-prompts. The value is configurable via `services.sudowhat.timestampTimeout`; the module never sets `timestamp_type=global`. Note this composes with policy deference: with a non-zero timeout, a second command within the window on the same terminal has a cached credential (auth stack skipped, marker absent) and so runs with no sheet — sudo's normal grace after the first real factor. Keep the default `0` for a Touch ID sheet on every command.
 
 **Verify-code emphasis:** the code echoed to the controlling terminal is bold by default; `services.sudowhat.verifyStyle` selects a different emphasis (`plain`, `bold`, a bold-plus-color — `red`, `green`, `yellow`, `blue`, `magenta`, `cyan` — or `random`, which rotates among a curated color subset per invocation) baked into the signed bundle at build time. It is purely cosmetic — never a trust signal, since the anchor is the code matching the system-rendered Touch ID sheet — and the value selects from a fixed, reviewed set of escape sequences rather than a free-form string, so it adds no injection surface. `NO_COLOR` or `TERM=dumb` in the invoking environment still force plain at runtime regardless of the build-time setting.
 
-**Context echo on overflow:** the Touch ID sheet shows the user, path, and command each in full or — when a value does not fit its conservative budget (~480 chars total) — replaces that item with a `(see terminal)` marker (all-or-nothing per item, never a partial value). Each marked item is written in full to the controlling terminal — the same redirect-proof `/dev/tty` channel as the verify code, just below it — so the marker always points at something. Every value is escaped and shell-quoted exactly as the sheet renders it, so no raw control bytes reach the terminal, and it is disclosure only, never a trust signal: the system-rendered sheet remains authoritative. `services.sudowhat.echoCommand` selects the policy — `truncated` (default, echo only the items the sheet clipped) or `always` (echo the full context every time). There is no `never`: a `(see terminal)` marker must be backed by a terminal echo. The echo goes to `/dev/tty` only, never to sudo's stderr, so a `2>file` redirect cannot capture it.
+**Terminal command display (audit plugin):** the [audit plugin](#how-it-works) shows the command on the controlling terminal **before authentication, on every path** — the local console (before the Touch ID sheet and its verify code) and non-console / SSH sessions (before sudo's native password prompt). This closes the gap where a non-console sudo used to step aside silently, showing a bare `Password:` with no command. It prints `user`, `path` (the working directory), and the `command` as typed, each shell-quoted and control-character escaped by the memory-safe Rust `escape_core` (so no raw control byte reaches the terminal). It is written to `/dev/tty` only — never sudo's stderr — so a `2>file` redirect cannot capture it, and it is skipped when there is no controlling terminal (headless). Because the full command is already on the terminal, when the Touch ID sheet has to replace an over-long item (past its ~480-char budget) with a `(see terminal)` marker, the marker always points at something. The display is disclosure only, never a trust signal: any process that can write your terminal can forge the same bytes, so the anchor stays the verify code matching the system-rendered sheet (biometric) or sudo's own PAM (terminal). Turn it off with `services.sudowhat.auditDisplay = "off"`. The audit plugin joins the mutual-signature web — a present-but-tampered audit bundle makes the approval plugin and `pam_sudowhat` fail closed — but it is optional: an absent bundle disables terminal display without affecting authentication (tamper-evident in place, not removal-proof).
 
 ## Console vs. non-console callers
 
 sudowhat decides *where* a caller may authenticate by its security session — a local GUI login versus a remote or headless one — not by uid. A caller running as the same user as the console login but over SSH is still treated as non-console.
 
-| Caller | Default (`allowNonConsole = false`) | With `allowNonConsole = true` |
+| Caller | `nonConsole = "password"` (default) | `nonConsole = "deny"` |
 |---|---|---|
 | Local console (GUI) user | Touch ID prompt showing the command¹ | Touch ID prompt showing the command¹ |
-| Interactive remote session (e.g. SSH) | Denied without a prompt | Password / smartcard on the caller's own terminal; no prompt on the console |
-| Unattended job (launchd / cron, no GUI) | Denied without a prompt | Runs if a sudoers rule authorizes it (e.g. `NOPASSWD`); no prompt on the console |
+| Interactive remote session (e.g. SSH) | Password / smartcard on the caller's own terminal; no prompt on the console | Denied without a prompt |
+| Unattended job (launchd / cron, no GUI) | Runs if a sudoers rule authorizes it (e.g. `NOPASSWD`); no prompt on the console | Denied without a prompt |
 | Root (uid 0) | Allowed, logged to the auth log | Allowed, logged to the auth log |
 
 ¹ Skipped when sudoers waived authentication for the command — a `NOPASSWD` rule, `Defaults !authenticate`, or a cached credential — so the command just runs (policy deference, on by default; see "How it works"). Turn off with `services.sudowhat.policyDeference = "off"`.
 
-In every case a non-console caller authenticates (if at all) through sudo's own machinery on its own session — it is never shown a biometric / Authorization Services sheet, which would render on the console user's screen. `allowNonConsole` grants no authority on its own: sudoers still decides who may run what.
+In every case a non-console caller authenticates (if at all) through sudo's own machinery on its own session — it is never shown a biometric / Authorization Services sheet, which would render on the console user's screen (that impossibility is not configurable; see "Non-console defense" above). `nonConsole` grants no authority on its own: sudoers still decides who may run what.
 
 "Non-console" here means a *remote or non-graphical* session. A background process inside your **local GUI login** — e.g. a gui-domain `LaunchAgent` — shares that login's session and is classified as **console**, so it can raise a Touch ID sheet like any process in your session; see [Known limitations](#known-limitations).
 
@@ -266,7 +276,7 @@ These are documented design trade-offs, not bugs.
 
 **Generic icon on the Watch / companion confirmation.** macOS sources the icon shown in the Touch ID prompt and the Apple Watch confirmation notification from the **calling process's** main bundle. The calling process is `sudo` — a CLI binary with no app bundle and no `CFBundleIcon` — so the system falls back to a generic document icon. `LAContext` exposes no public API to override it, and adding an icon to the plugin bundle has no effect (the system queries `sudo`, not the loaded `.so`). Customizing the icon would require shipping a separate signed helper `.app` and IPC'ing the prompt to it, which would reintroduce the agent dependency the current architecture deliberately removes. Trade-off accepted.
 
-**Prompt budget measured in English only.** The prompt formatter keeps its rendered text under a conservative budget (480 chars, ~30 below the ~510-char limit at which `LAContext` silently truncates `localizedReason`). That limit was observed only with the English system prefix (`"sudo" is trying to …`). sudowhat's own prompt text is not localized, so its length is locale-invariant — but it has not been verified whether macOS caps our reason string alone or the *total* sheet text including a longer localized prefix. If you run macOS in another language, sanity-check that a near-maximal command's trailer is not clipped in the Touch ID sheet; if it is, the budget needs lowering. Whenever the sheet does truncate, the full command is echoed to the controlling terminal by default (`services.sudowhat.echoCommand`), so the clipped tail stays available regardless of how conservative the budget is.
+**Prompt budget measured in English only.** The prompt formatter keeps its rendered text under a conservative budget (480 chars, ~30 below the ~510-char limit at which `LAContext` silently truncates `localizedReason`). That limit was observed only with the English system prefix (`"sudo" is trying to …`). sudowhat's own prompt text is not localized, so its length is locale-invariant — but it has not been verified whether macOS caps our reason string alone or the *total* sheet text including a longer localized prefix. If you run macOS in another language, sanity-check that a near-maximal command's trailer is not clipped in the Touch ID sheet; if it is, the budget needs lowering. Whenever the sheet does truncate, the full command is already on the controlling terminal from the audit plugin (`services.sudowhat.auditDisplay`, on by default), so the clipped tail stays available regardless of how conservative the budget is.
 
 ## Verification matrix
 

@@ -27,15 +27,18 @@ fi
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_SRC="$REPO_DIR/build/sudowhat_approval.so"
+AUDIT_SRC="$REPO_DIR/build/sudowhat_audit.so"
 PAM_SRC="$REPO_DIR/build/pam_sudowhat.so"
 PLUGIN_DST="/usr/local/libexec/sudo/sudowhat_approval.so"
+AUDIT_DST="/usr/local/libexec/sudo/sudowhat_audit.so"
 PAM_DST="/usr/local/lib/pam/pam_sudowhat.so"
 SUDO_CONF="/etc/sudo.conf"
 SUDO_CONF_LINE="Plugin sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so"
+AUDIT_CONF_LINE="Plugin sudowhat_audit_plugin /usr/local/libexec/sudo/sudowhat_audit.so"
 SUDOERS_D="/etc/sudoers.d/sudowhat"
 PAM_LOCAL="/etc/pam.d/sudo_local"
 
-if [ ! -f "$PLUGIN_SRC" ] || [ ! -f "$PAM_SRC" ]; then
+if [ ! -f "$PLUGIN_SRC" ] || [ ! -f "$AUDIT_SRC" ] || [ ! -f "$PAM_SRC" ]; then
     echo "install.sh: build artifacts missing; run 'make sign' first" >&2
     exit 1
 fi
@@ -107,23 +110,32 @@ trap 'rollback' ERR
 install -m 0755 -d /usr/local/libexec/sudo
 install -m 0755 -d /usr/local/lib/pam
 
-# (2) Install the plugin and PAM module bundles.
+# (2) Install the approval, audit, and PAM module bundles.
 [ -f "$PLUGIN_DST" ] || add_rollback "rm -f '$PLUGIN_DST'"
 install -m 0755 "$PLUGIN_SRC" "$PLUGIN_DST"
+
+[ -f "$AUDIT_DST" ] || add_rollback "rm -f '$AUDIT_DST'"
+install -m 0755 "$AUDIT_SRC" "$AUDIT_DST"
 
 [ -f "$PAM_DST" ] || add_rollback "rm -f '$PAM_DST'"
 install -m 0755 "$PAM_SRC" "$PAM_DST"
 
-# (3) sudo.conf: append our Plugin line if missing.
+# (3) sudo.conf: append our Plugin lines (audit + approval) if missing. Back up
+# once before any edit so rollback restores the original file wholesale.
 if [ ! -f "$SUDO_CONF" ]; then
     add_rollback "rm -f '$SUDO_CONF'"
     : > "$SUDO_CONF"
     chmod 0644 "$SUDO_CONF"
 fi
-if ! grep -qF "sudowhat_approval_plugin" "$SUDO_CONF"; then
+if ! grep -qF "sudowhat_audit_plugin" "$SUDO_CONF" \
+   || ! grep -qF "sudowhat_approval_plugin" "$SUDO_CONF"; then
     cp "$SUDO_CONF" "$SUDO_CONF.sudowhat-bak"
     add_rollback "mv -f '$SUDO_CONF.sudowhat-bak' '$SUDO_CONF'"
-    printf '%s\n' "$SUDO_CONF_LINE" >> "$SUDO_CONF"
+    # Audit before approval (cosmetic; sudo runs audit open() first by type).
+    grep -qF "sudowhat_audit_plugin" "$SUDO_CONF" \
+        || printf '%s\n' "$AUDIT_CONF_LINE" >> "$SUDO_CONF"
+    grep -qF "sudowhat_approval_plugin" "$SUDO_CONF" \
+        || printf '%s\n' "$SUDO_CONF_LINE" >> "$SUDO_CONF"
 fi
 
 # (4) sudoers.d entry — validated with visudo before the file is left in

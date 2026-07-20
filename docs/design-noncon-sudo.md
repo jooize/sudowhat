@@ -5,6 +5,22 @@ shipped design is summarized in "As built" immediately below; the longer
 "Original exploration" further down is kept for rationale but was superseded in
 two deliberate ways (a session-based console check, and three cut checks).
 
+**v0.10.0 update — the DEFAULT flipped and the option was renamed.** The
+mechanism below is unchanged (gate variant vs. `pam_permit` variant, the
+console-gate, the step-aside). What changed: the boolean `allowNonConsole`
+(default `false` = deny) became the enum `services.sudowhat.nonConsole` with
+values `"password"` (the new DEFAULT — install the gate variant so non-console
+callers get sudo's native password) and `"deny"` (the old default — the
+`pam_permit` console-only variant). Rationale: sudowhat's primary job is
+*informing what will run*, not blocking remote sudo, so the honest default is
+stock sudo (remote password works) plus trustworthy console Touch ID; locking
+sudo to the console is the opt-in hardening. Wherever this doc says
+"`allowNonConsole` on/true" read `nonConsole = "password"`, and "off/false
+(default)" read `nonConsole = "deny"` (no longer the default). The non-console
+caller is still NEVER shown biometric — that is structural and deliberately not
+configurable (a remote caller's sheet would render on the console user's screen;
+see the README "Non-console defense").
+
 ## As built (v0.5.0)
 
 Goal: let a non-root, non-console caller — an SSH session, or unattended

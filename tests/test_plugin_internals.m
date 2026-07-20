@@ -262,84 +262,11 @@ static void test_verify_line_format_and_color(void) {
     g_inv = saved;
 }
 
-/* The context terminal echo. echoCommand is baked at build time; the test binary
- * is compiled with no -DSW_ECHO_COMMAND, so it sees the header default
- * ("truncated"): echo an item iff the sheet replaced it with "(see terminal)".
- * emit_full_context is tty-only by design — unlike the verify code it has NO
- * stderr fallback, so a possibly confidential value can never leak into a
- * `2>file` capture. */
-static void test_echo_command_mode(void) {
-    OK(sw_echo_command_mode == SW_EC_truncated,
-       "default build resolves echoCommand to truncated");
-    OK(sw_should_echo_command(YES),
-       "truncated mode echoes an item that overflowed to the terminal");
-    OK(!sw_should_echo_command(NO),
-       "truncated mode stays silent for an item that fit the sheet");
-}
-
-static void test_emit_full_context_to_tty(void) {
-    char path[256];
-    sw_tmpl(path, sizeof path, "fullctx");
-    int fd = mkstemp(path);
-    OK(fd >= 0, "mkstemp created a temp file for the context echo test");
-    if (fd >= 0) close(fd);
-
-    /* All three items echoed -> three labelled lines, in order. */
-    emit_full_context(path, @"root", @"/tmp", @"/bin/echo 'a b'", YES, YES, YES, NO);
-    EQ(sw_read_utf8(path),
-       @"sudowhat: user: root\nsudowhat: path: /tmp\nsudowhat: command: /bin/echo 'a b'\n",
-       "emit_full_context writes user/path/command lines in order");
-    unlink(path);
-
-    /* Only the flagged items are written (path suppressed here). */
-    char path2[256];
-    sw_tmpl(path2, sizeof path2, "fullctx2");
-    int fd2 = mkstemp(path2);
-    OK(fd2 >= 0, "mkstemp created a second temp file");
-    if (fd2 >= 0) close(fd2);
-    emit_full_context(path2, @"root", @"/tmp", @"/bin/echo hi", NO, NO, YES, NO);
-    EQ(sw_read_utf8(path2), @"sudowhat: command: /bin/echo hi\n",
-       "only the flagged item is written");
-    unlink(path2);
-
-    /* Nothing flagged -> early no-op, nothing written (file untouched). */
-    char path3[256];
-    sw_tmpl(path3, sizeof path3, "fullctx3");
-    int fd3 = mkstemp(path3);
-    OK(fd3 >= 0, "mkstemp created a third temp file");
-    if (fd3 >= 0) close(fd3);
-    emit_full_context(path3, @"root", @"/tmp", @"/bin/echo", NO, NO, NO, NO);
-    EQ(sw_read_utf8(path3), @"", "no flags set writes nothing");
-    unlink(path3);
-
-    /* Unopenable path -> silent no-op, no crash, no fallback channel. */
-    emit_full_context("/no/such/dir/sw_fullctx", @"root", @"/tmp",
-                      @"/bin/echo secret", YES, YES, YES, NO);
-    OK(1, "unopenable tty is a silent no-op (no fallback, no crash)");
-}
-
-/* The echoColor gate. The test binary is compiled with no -DSW_ECHO_COLOR, so
- * it sees the header default ("off"). Even asking to colourise, a non-tty target
- * (the temp file) must render plain — the isatty() gate in emit_full_context is
- * authoritative, so a `2>file`-style redirect never gets escape sequences. */
-static void test_echo_color_gate(void) {
-    OK(sw_echo_color_mode == SW_ECOL_off,
-       "default build resolves echoColor to off");
-    OK(!sw_echo_color_allowed(),
-       "off mode never permits colour (short-circuits before sw_color_allowed)");
-
-    char path[256];
-    sw_tmpl(path, sizeof path, "colorgate");
-    int fd = mkstemp(path);
-    OK(fd >= 0, "mkstemp created a temp file for the colour-gate test");
-    if (fd >= 0) close(fd);
-    /* colorize=YES, but the temp file is not a tty -> plain, no SGR bytes. */
-    emit_full_context(path, @"root", @"/tmp", @"/bin/echo 'a b'", YES, YES, YES, YES);
-    EQ(sw_read_utf8(path),
-       @"sudowhat: user: root\nsudowhat: path: /tmp\nsudowhat: command: /bin/echo 'a b'\n",
-       "colorize=YES on a non-tty still renders plain (isatty gate)");
-    unlink(path);
-}
+/* Terminal command display (user/path/command) moved to the audit plugin
+ * (plugin/sudowhat_audit.m) in v0.10.0; the approval plugin no longer echoes the
+ * context, so the former emit_full_context / echoCommand / echoColor tests are
+ * gone. The audit plugin's escaping is exercised by tests/test_escape_core.m
+ * (the Rust core, byte-identical to PromptFormatter). */
 
 /* Policy deference: the pam_sudowhat auth marker tells the plugin whether sudo
  * ran the PAM auth stack (i.e. sudoers required authentication). These pin the
@@ -409,31 +336,12 @@ static void test_defer_decision(void) {
 }
 
 static void test_policy_deference_defaults(void) {
-    /* The test binary is compiled with no -DSW_POLICY_DEFERENCE / -DSW_ECHO_DEFERRED,
-     * so it sees the header defaults: deference on, deferred echo off (silent). */
+    /* The test binary is compiled with no -DSW_POLICY_DEFERENCE, so it sees the
+     * header default: deference on. (The deferred-echo knob is gone — terminal
+     * display is the audit plugin's job now, on every path including a NOPASSWD
+     * skip.) */
     OK(sw_policy_deference_mode == SW_PD_on,
        "default build resolves policyDeference to on");
-    OK(sw_echo_deferred_mode == SW_ED_off,
-       "default build resolves echoDeferred to off");
-}
-
-static void test_emit_deferred_context_off_default(void) {
-    /* With the default echoDeferred=off, emit_deferred_context is a no-op even
-     * when a controlling terminal is present — the safe default is silent. */
-    sw_invoking_ctx saved = g_inv;
-
-    char path[256];
-    sw_tmpl(path, sizeof path, "deferred");
-    int fd = mkstemp(path);
-    OK(fd >= 0, "mkstemp created a temp file for the deferred-echo test");
-    if (fd >= 0) close(fd);
-
-    g_inv = (sw_invoking_ctx){ .have_tty = 1 };
-    emit_deferred_context(path, @"root", @"/tmp", @"/bin/echo hi");
-    EQ(sw_read_utf8(path), @"", "echoDeferred=off writes nothing even with a tty");
-    unlink(path);
-
-    g_inv = saved;
 }
 
 static void test_nonce_edge_sizes(void) {
@@ -464,13 +372,9 @@ int main(void) {
         test_verify_code_to_tty();
         test_emit_verify_code_tty_only();
         test_verify_line_format_and_color();
-        test_echo_command_mode();
-        test_emit_full_context_to_tty();
-        test_echo_color_gate();
         test_integrity_line_detection();
         test_defer_decision();
         test_policy_deference_defaults();
-        test_emit_deferred_context_off_default();
-        SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel, command-echo, policy-deference)");
+        SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel, policy-deference)");
     }
 }

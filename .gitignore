@@ -4,6 +4,10 @@ build/
 *.so
 *.dylib
 
+# Rust (escape_core) build output. Cargo.lock IS committed (reproducibility).
+target/
+.cargo-home/
+
 # Nix build symlink
 result
 result-*

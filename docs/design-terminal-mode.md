@@ -1,10 +1,16 @@
 # Design note: terminal mode (no-biometric, cross-platform) via a sudo audit plugin
 
-**Status: design, not yet built. Target v0.10.0, after v0.9.0 (policy deference)
-ships.** Captures the structure agreed 2026-07-20 so it does not have to be
-re-derived. Sibling to `docs/design-noncon-sudo.md` (non-console + policy
-deference, shipped) — this note is the *display-before-you-authenticate* layer
-and the path to a Linux port.
+**Status: DISPLAY LAYER SHIPPED in v0.10.0 (Phase 1, macOS).** The audit plugin
+(`plugin/sudowhat_audit.m`) now owns terminal command display on every path,
+with the escape/quote core ported to Rust (`shared/escape_core/`, a `staticlib`
+byte-identical to `PromptFormatter`, guarded by `tests/test_escape_core.m`). Two
+parts of this note remain future work: the **no-biometric terminal password for
+a console user** (open decision #1 — dropping the console-gate + approval
+step-aside) and the **Linux `cdylib` port** (Phase 2, ~v0.11.0, display + PAM
+password, no code-signing anchor). The as-typed vs resolved split, the
+resolved-path last-look, and the anomaly colouriser (echoColor) are also still
+future. Original design captured 2026-07-20; sibling to
+`docs/design-noncon-sudo.md` (non-console + policy deference, shipped).
 
 ## Goal
 

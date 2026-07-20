@@ -5,37 +5,38 @@
   apple-sdk_15,
   darwinMinVersionHook,
   openpam,
+  # cargo + rustc build the escape_core staticlib (the audit plugin's memory-safe
+  # escape/display core). The crate has no dependencies, so the build is offline
+  # and reproducible — no registry fetch, no vendoring, no crane needed.
+  cargo,
+  rustc,
   teamId ? "-",
   # Emphasis preset for the verify-code tty echo. One of the names in the
   # Makefile's SUDOWHAT_VALID_STYLES; the nix module validates this with an
   # enum, so an out-of-set value is caught at eval time rather than reaching
   # the Makefile's bold fallback. See services.sudowhat.verifyStyle.
   verifyStyle ? "bold",
-  # Policy for echoing the full command to the controlling terminal:
-  # "truncated" (default) or "always". One of the Makefile's SUDOWHAT_VALID_ECHO;
-  # validated by the nix module's enum. See services.sudowhat.echoCommand.
-  echoCommand ? "truncated",
-  # Colouring of the terminal context echo: "off" (default) or "anomalies".
-  # One of the Makefile's SUDOWHAT_VALID_ECHO_COLOR; validated by the nix
-  # module's enum. See services.sudowhat.echoColor.
-  echoColor ? "off",
+  # Colouring of the audit plugin's terminal command display: "anomalies"
+  # (default) or "off". One of the Makefile's SUDOWHAT_VALID_ECHO_COLOR;
+  # validated by the nix module's enum. See services.sudowhat.echoColor.
+  echoColor ? "anomalies",
   # Master switch for policy deference: "on" (default) or "off". One of the
   # Makefile's SUDOWHAT_VALID_DEFERENCE; validated by the nix module's enum.
   # See services.sudowhat.policyDeference.
   policyDeference ? "on",
-  # Context echo when the prompt is skipped by policy deference: "off"
-  # (default) or "tty". One of the Makefile's SUDOWHAT_VALID_ECHO_DEFERRED;
-  # validated by the nix module's enum. See services.sudowhat.echoDeferred.
-  echoDeferred ? "off",
+  # Master switch for terminal command display via the audit plugin: "on"
+  # (default) or "off". One of the Makefile's SUDOWHAT_VALID_AUDIT_DISPLAY;
+  # validated by the nix module's enum. See services.sudowhat.auditDisplay.
+  auditDisplay ? "on",
 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "sudowhat";
-  version = "0.9.0";
+  version = "0.10.0";
 
   src = lib.cleanSource ../.;
 
-  nativeBuildInputs = [ darwin.sigtool ];
+  nativeBuildInputs = [ darwin.sigtool cargo rustc ];
 
   # Modern nixpkgs ships unified apple-sdk packages instead of per-framework
   # derivations. SDK 15 + a 15.0 deployment-target hook are needed for
@@ -65,22 +66,28 @@ stdenv.mkDerivation (finalAttrs: {
       --replace-fail '/usr/local/libexec/sudo/sudowhat_approval.so' \
                      "$out/libexec/sudo/sudowhat_approval.so" \
       --replace-fail '/usr/local/lib/pam/pam_sudowhat.so' \
-                     "$out/lib/pam/pam_sudowhat.so"
+                     "$out/lib/pam/pam_sudowhat.so" \
+      --replace-fail '/usr/local/libexec/sudo/sudowhat_audit.so' \
+                     "$out/libexec/sudo/sudowhat_audit.so"
   '';
 
   makeFlags = [
     "SUDOWHAT_TEAM_ID=${teamId}"
     "SUDOWHAT_VERIFY_STYLE=${verifyStyle}"
-    "SUDOWHAT_ECHO_COMMAND=${echoCommand}"
     "SUDOWHAT_ECHO_COLOR=${echoColor}"
     "SUDOWHAT_POLICY_DEFERENCE=${policyDeference}"
-    "SUDOWHAT_ECHO_DEFERRED=${echoDeferred}"
+    "SUDOWHAT_AUDIT_DISPLAY=${auditDisplay}"
   ];
 
   buildPhase = ''
     runHook preBuild
-    # 'make sign' builds all then ad-hoc-signs both bundles via codesign,
-    # which darwin.sigtool provides as a sandbox-safe shim.
+    # A writable, isolated CARGO_HOME inside the sandbox (nix's HOME is not
+    # writable). The escape_core build is offline with a pinned Cargo.lock, so
+    # nothing is fetched — this only needs to be somewhere cargo may scribble.
+    export CARGO_HOME="$NIX_BUILD_TOP/cargo-home"
+    # 'make sign' builds all three bundles (the Rust staticlib + the audit /
+    # approval / pam Mach-O bundles), then ad-hoc-signs them via codesign, which
+    # darwin.sigtool provides as a sandbox-safe shim.
     make $makeFlags sign
     runHook postBuild
   '';
@@ -89,6 +96,7 @@ stdenv.mkDerivation (finalAttrs: {
     runHook preInstall
     install -m 0755 -d $out/libexec/sudo $out/lib/pam
     install -m 0755 build/sudowhat_approval.so $out/libexec/sudo/sudowhat_approval.so
+    install -m 0755 build/sudowhat_audit.so    $out/libexec/sudo/sudowhat_audit.so
     install -m 0755 build/pam_sudowhat.so      $out/lib/pam/pam_sudowhat.so
     runHook postInstall
   '';

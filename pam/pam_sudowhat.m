@@ -115,6 +115,19 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags,
             return PAM_AUTH_ERR;
         }
 
+        /* The audit plugin owns terminal command display and joins the mutual-
+         * signature web. It is OPTIONAL — absent means no terminal display with
+         * auth unaffected — but a present-but-tampered bundle could show a false
+         * command, so verify it when installed and fail closed on tamper.
+         * Removing the bundle needs root, which is outside the threat model:
+         * tamper-evident in place, not removal-proof. */
+        if ([[NSFileManager defaultManager] fileExistsAtPath:@SUDOWHAT_AUDIT_PATH]
+            && ![SudoWhatPamSigVerifier verifyPath:@SUDOWHAT_AUDIT_PATH error:&err]) {
+            sudowhat_log(LOG_ERR, "audit plugin signature check failed: %s",
+                         utf8_or(err.localizedDescription, "unknown"));
+            return PAM_AUTH_ERR;
+        }
+
         return PAM_SUCCESS;
     }
 }

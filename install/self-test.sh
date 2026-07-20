@@ -11,6 +11,7 @@
 set -euo pipefail
 
 PLUGIN_DST="/usr/local/libexec/sudo/sudowhat_approval.so"
+AUDIT_DST="/usr/local/libexec/sudo/sudowhat_audit.so"
 PAM_DST="/usr/local/lib/pam/pam_sudowhat.so"
 SUDO_CONF="/etc/sudo.conf"
 SUDOERS_D="/etc/sudoers.d/sudowhat"
@@ -18,14 +19,19 @@ PAM_LOCAL="/etc/pam.d/sudo_local"
 
 # (1) Files exist with expected modes.
 [ -x "$PLUGIN_DST" ]                || { echo "self-test: $PLUGIN_DST missing or not executable" >&2; exit 1; }
+[ -x "$AUDIT_DST" ]                 || { echo "self-test: $AUDIT_DST missing or not executable" >&2;  exit 1; }
 [ -x "$PAM_DST" ]                   || { echo "self-test: $PAM_DST missing or not executable" >&2;    exit 1; }
 [ -f "$SUDO_CONF" ]                 || { echo "self-test: $SUDO_CONF missing" >&2;                    exit 1; }
 [ -f "$SUDOERS_D" ]                 || { echo "self-test: $SUDOERS_D missing" >&2;                    exit 1; }
 [ -f "$PAM_LOCAL" ]                 || { echo "self-test: $PAM_LOCAL missing" >&2;                    exit 1; }
 
-# (2) /etc/sudo.conf names our approval plugin at the expected path.
+# (2) /etc/sudo.conf names our approval and audit plugins at the expected paths.
 if ! grep -qF "sudowhat_approval_plugin /usr/local/libexec/sudo/sudowhat_approval.so" "$SUDO_CONF"; then
     echo "self-test: $SUDO_CONF does not name sudowhat_approval_plugin at the expected path" >&2
+    exit 1
+fi
+if ! grep -qF "sudowhat_audit_plugin /usr/local/libexec/sudo/sudowhat_audit.so" "$SUDO_CONF"; then
+    echo "self-test: $SUDO_CONF does not name sudowhat_audit_plugin at the expected path" >&2
     exit 1
 fi
 

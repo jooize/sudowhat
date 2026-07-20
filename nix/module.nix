@@ -21,28 +21,34 @@ in {
       '';
     };
 
-    allowNonConsole = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
+    nonConsole = lib.mkOption {
+      type = lib.types.enum [ "password" "deny" ];
+      default = "password";
       description = ''
-        Allow non-console callers — SSH sessions, unattended automation — to
-        use sudo. When false (the default), only the local, physically present
-        console (GUI) user may sudo; every non-console caller is denied without
-        a prompt.
+        What a non-console caller — an SSH session, unattended automation, any
+        non-GUI-login security session — may do with sudo. A non-console caller
+        is NEVER shown a Touch ID / Authorization Services sheet (that would
+        render on the console user's screen — the reflexive-approval hole this
+        tool exists to close); this option only chooses between password and
+        denial.
 
-        When true, the `sudo_local` gate variant is installed: the local
-        console user is still gated by the approval plugin's Touch ID prompt
-        (no password), while a non-console caller is routed to sudo's native
-        password / smartcard factor on their OWN terminal — never a biometric
-        sheet on the console — and the approval plugin steps aside for them
-        once sudo has authenticated them.
+        - `password` (the default): the `sudo_local` gate variant is installed.
+          The local console user is still gated by the approval plugin's Touch
+          ID prompt (no password), while a non-console caller falls through to
+          sudo's native password / smartcard factor on their OWN terminal, and
+          the approval plugin steps aside for them once sudo has authenticated
+          them. This is stock sudo behaviour for remote callers, kept intact —
+          sudowhat adds trustworthy console Touch ID without taking it away.
+        - `deny`: the console-only variant is installed. Only the local,
+          physically present console (GUI) user may sudo; every non-console
+          caller is denied without a prompt. Choose this to harden the machine
+          so a stolen password alone cannot escalate remotely — at the cost of
+          breaking remote / headless sudo (root-context automation stays exempt).
 
-        This grants no new authority: sudoers still decides who may run what.
-        It only changes whether an already-authorized non-console caller is
-        permitted to authenticate at all. The classification is by the caller's
-        security session (local GUI vs. remote/headless), not by uid, so an SSH
-        session running as the same user as the console login is correctly
-        treated as non-console.
+        Neither value grants new authority: sudoers still decides who may run
+        what. The classification is by the caller's security session (local GUI
+        vs. remote/headless), not by uid, so an SSH session running as the same
+        user as the console login is correctly treated as non-console.
       '';
     };
 
@@ -88,46 +94,49 @@ in {
       '';
     };
 
-    echoCommand = lib.mkOption {
-      type = lib.types.enum [ "truncated" "always" ];
-      default = "truncated";
+    auditDisplay = lib.mkOption {
+      type = lib.types.enum [ "on" "off" ];
+      default = "on";
       description = ''
-        Whether the full invocation context (user, path, command) is echoed to
-        the controlling terminal, just below the verify code.
+        Whether sudowhat shows the command on the controlling terminal before
+        authentication, via a sudo audit plugin.
 
-        The Touch ID sheet shows each of user / path / command in full or, when
-        a value does not fit its conservative budget, replaces that item with a
-        `(see terminal)` marker (all-or-nothing per item — no partial ellipsis).
-        This option controls the terminal echo that backs the marker:
+        - `on` (the default): the audit plugin prints `user`, `path` (the
+          working directory), and the `command` as typed to the controlling
+          terminal on EVERY path — the local console (before the Touch ID sheet
+          and its verify code) and non-console / SSH sessions (before sudo's
+          native password prompt). This closes the gap where a non-console sudo
+          used to step aside silently, showing a bare `Password:` with no
+          command.
+        - `off`: the audit plugin loads but displays nothing.
 
-        - `truncated` (the default) echoes only the items the sheet actually
-          replaced with `(see terminal)`, so values that fit the sheet add
-          nothing to the terminal.
-        - `always` echoes the full user / path / command on every invocation.
-
-        There is no `never`: an item shown as `(see terminal)` must be backed by
-        a terminal echo, or the marker would point at nothing.
-
-        The echo is disclosure only, never a trust signal: any process that can
+        The display is disclosure, never a trust signal: any process that can
         write your terminal can forge the same bytes, so the anchor stays the
-        verify code matching the system-rendered sheet. It is written to
-        /dev/tty only — never to sudo's stderr — so it cannot be captured by a
-        `2>file` redirect, and it is skipped when the caller has no controlling
-        terminal. Every value is rendered with the same shell-quoting and
-        control-character escaping as the sheet, so it carries no raw escape
-        sequences. Baked into the signed bundle at build time.
+        verify code matching the system-rendered sheet (biometric path) or
+        sudo's own PAM (terminal path). It is written to /dev/tty only — never to
+        sudo's stderr — so it cannot be captured by a `2>file` redirect, and it
+        is skipped when there is no controlling terminal (headless). Every token
+        is shell-quoted and control-character escaped by the memory-safe Rust
+        core, so it carries no raw escape sequences. Baked into the signed bundle
+        at build time.
+
+        The audit plugin joins the mutual-signature web: a present-but-tampered
+        audit bundle makes the approval plugin and `pam_sudowhat` fail closed. It
+        is optional, though — an absent bundle disables terminal display without
+        affecting authentication (tamper-evident in place, not removal-proof).
       '';
     };
 
     echoColor = lib.mkOption {
       type = lib.types.enum [ "off" "anomalies" ];
-      default = "off";
+      default = "anomalies";
       description = ''
-        Whether the terminal context echo (see `echoCommand`) is coloured to
-        draw the eye to the bytes that matter.
+        Whether the audit plugin's terminal command display (see `auditDisplay`)
+        is coloured to draw the eye to the bytes that matter.
 
-        - `off` (the default) emits the echo with no colour at all.
-        - `anomalies` wraps only anomaly spans in a fixed, reviewed palette:
+        - `off` emits the display with no colour at all.
+        - `anomalies` (the default) wraps only anomaly spans in a fixed,
+          reviewed palette:
           deceptive Unicode escapes (`\uNNNN` — bidi, zero-width, homoglyphs)
           in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
           metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
@@ -135,15 +144,13 @@ in {
           shown on a grey background. Ordinary command structure is left
           uncoloured.
 
-        This is emphasis, never a trust signal: the anchor stays the verify
-        code matching the system-rendered sheet, which cannot be coloured. The
-        echoed values are already control-character escaped, so the colouriser
-        only adds this fixed SGR set around inert bytes and can never let an
-        attacker byte become an escape sequence — stripping the colour yields
-        the exact same bytes. The runtime opt-outs still apply: NO_COLOR or
-        TERM=dumb in the invoking environment, or a non-tty target, always
-        render plain regardless of this setting. Baked into the signed bundle
-        at build time.
+        NOTE: the colouriser is a fast-follow — the escape_core port of the
+        anomaly colourer is not done yet — so `anomalies` is accepted but the
+        display currently renders plain regardless. Once it lands it is emphasis
+        only, never a trust signal (the anchor stays the verify code matching the
+        system-rendered sheet), and the runtime opt-outs still force plain:
+        NO_COLOR or TERM=dumb in the invoking environment, or a non-tty target.
+        Baked into the signed bundle at build time.
       '';
     };
 
@@ -183,44 +190,17 @@ in {
       '';
     };
 
-    echoDeferred = lib.mkOption {
-      type = lib.types.enum [ "off" "tty" ];
-      default = "off";
-      description = ''
-        Whether the invocation context (user, path, command) is echoed when the
-        prompt is **skipped** by `policyDeference` (a `NOPASSWD`-style run).
-        Distinct from `echoCommand`, which backs the sheet's `(see terminal)`
-        marker on the prompt path; there is no sheet here.
-
-        - `off` (the default): skip silently. Suits automation that issues many
-          `NOPASSWD` calls (sudo's own `log_allowed` still records each command
-          to the auth log).
-        - `tty`: echo user / path / command to the controlling terminal only —
-          the same hardened `/dev/tty` channel and escaping as the prompt-path
-          echo, which no-ops when there is no controlling terminal. An
-          interactive console user sees what ran; a scripted caller sees nothing.
-
-        There is no stderr variant: a deferred run has no prompt to preview
-        (nothing to see before authenticating, because there is no
-        authentication step), so disclosing on stderr would only duplicate sudo's
-        own audit log while breaking the tty-or-nothing rule for the
-        possibly-confidential context. Every value is escaped and shell-quoted
-        exactly as the sheet renders it. Baked into the signed bundle at build
-        time.
-      '';
-    };
   };
 
   config = lib.mkIf cfg.enable (let
     # Bake the chosen build-time presets into the bundle. The defaults
-    # (verifyStyle "bold", echoCommand "truncated", echoColor "off",
-    # policyDeference "on", echoDeferred "off") reproduce the package's own
-    # defaults, so default users get the same store path with no rebuild; any
-    # other value produces a distinct derivation whose embedded path and the
-    # /etc references below stay consistent (both come from `pkg`), preserving
-    # mutual signature verification.
+    # (verifyStyle "bold", echoColor "anomalies", policyDeference "on",
+    # auditDisplay "on") reproduce the package's own defaults, so default users get the same
+    # store path with no rebuild; any other value produces a distinct derivation
+    # whose embedded paths and the /etc references below stay consistent (both
+    # come from `pkg`), preserving mutual signature verification.
     pkg = cfg.package.override {
-      inherit (cfg) verifyStyle echoCommand echoColor policyDeference echoDeferred;
+      inherit (cfg) verifyStyle echoColor policyDeference auditDisplay;
     };
   in {
     # The store-path approach: binaries live in /nix/store, /etc files
@@ -233,6 +213,12 @@ in {
       # Managed by the sudowhat nix-darwin module. Disable the module to
       # restore stock /etc/sudo.conf (which on macOS does not exist by
       # default).
+      #
+      # The audit plugin owns terminal command display; its open() runs before
+      # the approval plugin and before PAM, so the command is shown first on
+      # every path. Line order here is cosmetic — sudo runs audit open() before
+      # other plugins by type, not by file position.
+      Plugin sudowhat_audit_plugin ${pkg}/libexec/sudo/sudowhat_audit.so
       Plugin sudowhat_approval_plugin ${pkg}/libexec/sudo/sudowhat_approval.so
     '';
 
@@ -259,8 +245,8 @@ in {
     # path (SUDOWHAT_PAM_PATH, baked from the same package) before stepping
     # aside, so the two always reference one store path.
     environment.etc."pam.d/sudo_local".text =
-      if cfg.allowNonConsole then ''
-        # Managed by the sudowhat nix-darwin module (allowNonConsole = true).
+      if cfg.nonConsole == "password" then ''
+        # Managed by the sudowhat nix-darwin module (nonConsole = "password").
         #
         #   requisite  pam_sudowhat.so                - integrity; aborts sudo on tamper
         #   sufficient pam_sudowhat.so console-gate    - PAM_SUCCESS iff the caller is the
@@ -275,7 +261,7 @@ in {
         auth    requisite     ${pkg}/lib/pam/pam_sudowhat.so
         auth    sufficient    ${pkg}/lib/pam/pam_sudowhat.so console-gate
       '' else ''
-        # Managed by the sudowhat nix-darwin module.
+        # Managed by the sudowhat nix-darwin module (nonConsole = "deny").
         #
         #   requisite  pam_sudowhat.so   - integrity; failure aborts sudo immediately
         #   sufficient pam_permit.so     - success terminates the auth chain so the

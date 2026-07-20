@@ -1,17 +1,33 @@
-# sudowhat: integrity-check PAM module. The Touch ID prompt itself is
-# rendered post-PAM by the sudo approval plugin loaded from /etc/sudo.conf.
+# sudowhat PAM config. The Touch ID prompt itself is rendered post-PAM by the
+# sudo approval plugin loaded from /etc/sudo.conf. A non-console caller is NEVER
+# shown that biometric sheet (it would render on the console user's screen); the
+# only choice is password vs. denial, made by which variant of this file you
+# install.
 #
 # Apple's openpam fork does not parse the Linux-PAM bracket-list syntax
-# `[success=done default=die]`, so the same fail-closed semantics are
-# expressed with two simple-flag lines:
+# `[success=done default=die]`, so the fail-closed semantics use simple flags.
 #
-#   requisite  pam_sudowhat.so   - failure aborts sudo immediately
-#   sufficient pam_permit.so     - success terminates the auth chain so the
-#                                  parent /etc/pam.d/sudo never falls back
-#                                  to pam_smartcard / pam_opendirectory
+# DEFAULT variant (below) — non-console callers get a native password:
 #
-# If pam_sudowhat.so returns failure, requisite dies before reaching
-# pam_permit. If it returns success, pam_permit's sufficient short-circuits
-# the chain. No password fallback path exists.
+#   requisite  pam_sudowhat.so                - integrity; failure aborts sudo
+#   sufficient pam_sudowhat.so console-gate    - PAM_SUCCESS iff the caller is the
+#                                                local console (GUI) user, so the
+#                                                console user is never asked for a
+#                                                password (Touch ID gates them in
+#                                                the approval plugin). For a
+#                                                non-console caller it FAILS, so the
+#                                                parent /etc/pam.d/sudo chain falls
+#                                                through to pam_smartcard /
+#                                                pam_opendirectory on the caller's
+#                                                own terminal, and the approval
+#                                                plugin steps aside for them.
 auth    requisite     /usr/local/lib/pam/pam_sudowhat.so
-auth    sufficient    pam_permit.so
+auth    sufficient    /usr/local/lib/pam/pam_sudowhat.so console-gate
+
+# DENY variant — to lock sudo to the local console only (so a stolen password
+# alone cannot escalate remotely), replace the `console-gate` line above with:
+#
+#   auth    sufficient    pam_permit.so
+#
+# That terminates the auth chain with no password path, so the approval plugin
+# denies every non-console caller.

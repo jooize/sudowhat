@@ -25,31 +25,36 @@ ifeq ($(filter $(SUDOWHAT_VERIFY_STYLE),$(SUDOWHAT_VALID_STYLES)),)
   override SUDOWHAT_VERIFY_STYLE := bold
 endif
 
-# Build-time policy for echoing the invocation context (user/path/command) to
-# the controlling terminal: "truncated" (default - only the items the Touch ID
-# sheet had to replace with the "(see terminal)" marker) or "always". There is
-# no "never": a "(see terminal)" marker must be backed by a terminal echo. The
-# nix module exposes the same names via services.sudowhat.echoCommand. Passed as
-# a bare token to -DSW_ECHO_COMMAND, where the plugin maps it to a fixed mode. An
-# unknown value normalizes to "truncated" with a warning, rather than failing.
-SUDOWHAT_ECHO_COMMAND ?= truncated
-SUDOWHAT_VALID_ECHO := truncated always
-ifeq ($(filter $(SUDOWHAT_ECHO_COMMAND),$(SUDOWHAT_VALID_ECHO)),)
-  $(warning sudowhat: unknown SUDOWHAT_ECHO_COMMAND '$(SUDOWHAT_ECHO_COMMAND)', falling back to truncated)
-  override SUDOWHAT_ECHO_COMMAND := truncated
+# Build-time master switch for terminal command display via the audit plugin:
+# "on" (default - show user/path/command on the controlling terminal before the
+# password prompt / Touch ID sheet, on every path) or "off" (never display). The
+# nix module exposes the same names via services.sudowhat.auditDisplay. Passed as
+# a bare token to -DSW_AUDIT_DISPLAY (audit bundle only). An unknown value
+# normalizes to "on" with a warning, rather than failing.
+SUDOWHAT_AUDIT_DISPLAY ?= on
+SUDOWHAT_VALID_AUDIT_DISPLAY := on off
+ifeq ($(filter $(SUDOWHAT_AUDIT_DISPLAY),$(SUDOWHAT_VALID_AUDIT_DISPLAY)),)
+  $(warning sudowhat: unknown SUDOWHAT_AUDIT_DISPLAY '$(SUDOWHAT_AUDIT_DISPLAY)', falling back to on)
+  override SUDOWHAT_AUDIT_DISPLAY := on
 endif
 
-# Build-time policy for colouring the terminal context echo: "off" (default) or
-# "anomalies" (highlight deceptive Unicode / control-byte escapes, shell
-# metacharacters, and notable whitespace in a fixed reviewed palette). The nix
-# module exposes the same names via services.sudowhat.echoColor. Passed as a
-# bare token to -DSW_ECHO_COLOR, where the plugin maps it to a fixed mode. An
-# unknown value normalizes to "off" with a warning, rather than failing.
-SUDOWHAT_ECHO_COLOR ?= off
+# Build-time policy for colouring the audit plugin's terminal command display:
+# "off" (default) or "anomalies" (highlight deceptive Unicode / control-byte
+# escapes, shell metacharacters, and notable whitespace in a fixed reviewed
+# palette). The nix module exposes the same names via services.sudowhat.echoColor.
+# Passed as a bare token to -DSW_AUDIT_ECHO_COLOR (audit bundle only). Default
+# "anomalies": coloring is anomaly-only, so a clean command renders identically
+# and colour appears only for genuinely deceptive bytes (bidi / zero-width /
+# homoglyph / control) — sudowhat's threat model — and the isatty / NO_COLOR /
+# TERM=dumb gates keep it off non-terminals. NOTE: the colouriser is a
+# fast-follow — the escape_core port of colorizeEscaped: is not done yet, so this
+# is accepted but currently renders plain. An unknown value normalizes to
+# "anomalies" with a warning, rather than failing.
+SUDOWHAT_ECHO_COLOR ?= anomalies
 SUDOWHAT_VALID_ECHO_COLOR := off anomalies
 ifeq ($(filter $(SUDOWHAT_ECHO_COLOR),$(SUDOWHAT_VALID_ECHO_COLOR)),)
-  $(warning sudowhat: unknown SUDOWHAT_ECHO_COLOR '$(SUDOWHAT_ECHO_COLOR)', falling back to off)
-  override SUDOWHAT_ECHO_COLOR := off
+  $(warning sudowhat: unknown SUDOWHAT_ECHO_COLOR '$(SUDOWHAT_ECHO_COLOR)', falling back to anomalies)
+  override SUDOWHAT_ECHO_COLOR := anomalies
 endif
 
 # Master switch for policy deference: "on" (default) skips the console user's
@@ -66,36 +71,35 @@ ifeq ($(filter $(SUDOWHAT_POLICY_DEFERENCE),$(SUDOWHAT_VALID_DEFERENCE)),)
   override SUDOWHAT_POLICY_DEFERENCE := on
 endif
 
-# Policy for echoing the invocation context when the prompt is SKIPPED by policy
-# deference (a NOPASSWD-style run): "off" (default, silent) or "tty" (echo
-# user/path/command to /dev/tty only, which no-ops when there is no controlling
-# terminal). There is no stderr variant: a deferred run has no prompt to preview,
-# so stderr disclosure would only duplicate sudo's audit log. The nix module
-# exposes the same names via services.sudowhat.echoDeferred. Passed as a bare
-# token to -DSW_ECHO_DEFERRED. An unknown value normalizes to "off" with a
-# warning, rather than failing.
-SUDOWHAT_ECHO_DEFERRED ?= off
-SUDOWHAT_VALID_ECHO_DEFERRED := off tty
-ifeq ($(filter $(SUDOWHAT_ECHO_DEFERRED),$(SUDOWHAT_VALID_ECHO_DEFERRED)),)
-  $(warning sudowhat: unknown SUDOWHAT_ECHO_DEFERRED '$(SUDOWHAT_ECHO_DEFERRED)', falling back to off)
-  override SUDOWHAT_ECHO_DEFERRED := off
-endif
-
 CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
-          -Iplugin -Ipam -Ishared \
+          -Iplugin -Ipam -Ishared -Ishared/escape_core \
           -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"' \
           -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE) \
-          -DSW_ECHO_COMMAND=$(SUDOWHAT_ECHO_COMMAND) \
-          -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) \
-          -DSW_POLICY_DEFERENCE=$(SUDOWHAT_POLICY_DEFERENCE) \
-          -DSW_ECHO_DEFERRED=$(SUDOWHAT_ECHO_DEFERRED)
+          -DSW_POLICY_DEFERENCE=$(SUDOWHAT_POLICY_DEFERENCE)
 LDFLAGS = -bundle \
           -framework Foundation \
           -framework CoreFoundation \
           -framework Security \
           -framework SystemConfiguration \
           -framework LocalAuthentication
+
+# The audit bundle is a lean ObjC shell + Rust staticlib: Foundation (strings,
+# NSFileManager) and Security (code-signature check). No LocalAuthentication (no
+# biometrics) and no SystemConfiguration (no SessionGuard — display is
+# unconditional). The Rust staticlib links in as a plain archive.
+AUDIT_LDFLAGS = -bundle \
+                -framework Foundation \
+                -framework CoreFoundation \
+                -framework Security
+
+# Rust escape/display core (shared/escape_core). No external dependencies, so it
+# builds offline and reproducibly. CARGO_HOME defaults to a project-local dir so
+# the build stays inside the sandbox / Nix build tree; an ambient CARGO_HOME (a
+# dev machine, Nix) is respected when set.
+ESCAPE_CORE_DIR = shared/escape_core
+ESCAPE_CORE_LIB = $(ESCAPE_CORE_DIR)/target/release/libescape_core.a
+CARGO ?= cargo
 
 # SignatureVerifier is one shared source (shared/SignatureVerifier.m) compiled
 # once per bundle with a distinct class name baked in via -DSW_SIGVERIFIER_CLASS
@@ -112,6 +116,12 @@ PAM_OBJS    = pam/pam_sudowhat.o \
               build/pam_SignatureVerifier.o \
               build/pam_SessionGuard.o
 
+# The audit bundle: its ObjC shell + a per-target SignatureVerifier (third class
+# name). No SessionGuard (display is unconditional). The Rust staticlib is a
+# separate link input, not an object.
+AUDIT_OBJS  = plugin/sudowhat_audit.o \
+              build/audit_SignatureVerifier.o
+
 .PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit clean
 
 TEST_CFLAGS = $(CFLAGS) -Itests
@@ -119,10 +129,18 @@ TEST_FRAMEWORKS = -framework Foundation -framework CoreFoundation \
                   -framework Security -framework SystemConfiguration \
                   -framework LocalAuthentication
 
-all: build/sudowhat_approval.so build/pam_sudowhat.so
+all: build/sudowhat_approval.so build/pam_sudowhat.so build/sudowhat_audit.so
 
 build:
 	mkdir -p build
+
+# Rust escape/display core. --locked pins to the committed Cargo.lock; --offline
+# forbids any network fetch (the crate has no dependencies, so both always hold).
+$(ESCAPE_CORE_LIB): $(ESCAPE_CORE_DIR)/src/lib.rs $(ESCAPE_CORE_DIR)/Cargo.toml \
+		$(ESCAPE_CORE_DIR)/Cargo.lock
+	cd $(ESCAPE_CORE_DIR) && \
+	    CARGO_HOME=$${CARGO_HOME:-$(CURDIR)/.cargo-home} \
+	    $(CARGO) build --release --offline --locked
 
 # Per-bundle class name for the shared SignatureVerifier. Target-specific
 # CFLAGS propagate to every prerequisite object, so the bundle's caller
@@ -132,9 +150,19 @@ build/sudowhat_approval.so: CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVe
                                       -DSW_SESSIONGUARD_CLASS=SudoWhatSessionGuard
 build/pam_sudowhat.so:      CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerifier \
                                       -DSW_SESSIONGUARD_CLASS=SudoWhatPamSessionGuard
+# The audit bundle gets the third SignatureVerifier class name plus its own
+# build-time display knobs. Target-specific CFLAGS propagate to prerequisites, so
+# plugin/sudowhat_audit.o and build/audit_SignatureVerifier.o both see these.
+build/sudowhat_audit.so:    CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatAuditSigVerifier \
+                                      -DSW_AUDIT_DISPLAY=$(SUDOWHAT_AUDIT_DISPLAY) \
+                                      -DSW_AUDIT_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR)
 
 build/sudowhat_approval.so: $(PLUGIN_OBJS) | build
 	$(CC) $(LDFLAGS) -o $@ $(PLUGIN_OBJS)
+
+# The audit bundle links the Rust staticlib (a plain archive) after its objects.
+build/sudowhat_audit.so: $(AUDIT_OBJS) $(ESCAPE_CORE_LIB) | build
+	$(CC) $(AUDIT_LDFLAGS) -o $@ $(AUDIT_OBJS) $(ESCAPE_CORE_LIB)
 
 # -undefined dynamic_lookup: the PAM module calls back into the host's PAM
 # library (pam_get_user, …). Those symbols are provided by sudo (the PAM host)
@@ -152,6 +180,9 @@ build/plugin_SignatureVerifier.o: shared/SignatureVerifier.m shared/SignatureVer
 build/pam_SignatureVerifier.o: shared/SignatureVerifier.m shared/SignatureVerifier.h shared/Constants.h | build
 	$(CC) $(CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerifier -c shared/SignatureVerifier.m -o $@
 
+build/audit_SignatureVerifier.o: shared/SignatureVerifier.m shared/SignatureVerifier.h shared/Constants.h | build
+	$(CC) $(CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatAuditSigVerifier -c shared/SignatureVerifier.m -o $@
+
 # SessionGuard is one shared source compiled once per bundle with a distinct
 # class name (same rationale as SignatureVerifier above): both bundles load
 # into the same sudo process. The plugin's console guard and the PAM
@@ -168,7 +199,7 @@ build/pam_SessionGuard.o: shared/SessionGuard.m shared/SessionGuard.h shared/Con
 sign: all
 	@if [ "$(SUDOWHAT_TEAM_ID)" = "-" ]; then \
 		echo "ad-hoc signing build/*.so (dev mode)"; \
-		codesign --force --sign - build/sudowhat_approval.so build/pam_sudowhat.so; \
+		codesign --force --sign - build/sudowhat_approval.so build/pam_sudowhat.so build/sudowhat_audit.so; \
 	else \
 		if [ -z "$$DEVELOPER_NAME" ]; then \
 			echo "DEVELOPER_NAME must be set for release builds" >&2; \
@@ -177,7 +208,7 @@ sign: all
 		echo "Developer ID signing as team $(SUDOWHAT_TEAM_ID)"; \
 		codesign --force --options runtime \
 		    --sign "Developer ID Application: $$DEVELOPER_NAME ($(SUDOWHAT_TEAM_ID))" \
-		    build/sudowhat_approval.so build/pam_sudowhat.so; \
+		    build/sudowhat_approval.so build/pam_sudowhat.so build/sudowhat_audit.so; \
 	fi
 
 install: sign
@@ -208,14 +239,25 @@ test: install
 
 # test-unit: offline unit tests for the pure helpers (no root, no install).
 # Builds standalone test executables and runs them; non-zero exit on failure.
-test-unit: build/test_prompt_formatter build/test_plugin_internals
+# test_escape_core is the cross-language guard: it links the Rust staticlib and
+# asserts it escapes byte-identically to the ObjC PromptFormatter.
+test-unit: build/test_prompt_formatter build/test_plugin_internals build/test_escape_core
 	@build/test_prompt_formatter
 	@build/test_plugin_internals
+	@build/test_escape_core
 
 build/test_prompt_formatter: tests/test_prompt_formatter.m tests/sw_test.h \
 		plugin/PromptFormatter.m plugin/PromptFormatter.h | build
 	$(CC) $(TEST_CFLAGS) -framework Foundation -o $@ \
 	    tests/test_prompt_formatter.m plugin/PromptFormatter.m
+
+# Links the Rust escape_core staticlib (so the C-ABI functions are callable) plus
+# PromptFormatter (the ObjC reference) and compares their output byte-for-byte.
+build/test_escape_core: tests/test_escape_core.m tests/sw_test.h \
+		plugin/PromptFormatter.m plugin/PromptFormatter.h \
+		$(ESCAPE_CORE_DIR)/escape_core.h $(ESCAPE_CORE_LIB) | build
+	$(CC) $(TEST_CFLAGS) -framework Foundation -o $@ \
+	    tests/test_escape_core.m plugin/PromptFormatter.m $(ESCAPE_CORE_LIB)
 
 # Includes plugin/sudowhat_approval.m directly to reach its static helpers, so
 # that file is compiled into the binary - do NOT also pass it as a source.
@@ -229,4 +271,5 @@ build/test_plugin_internals: tests/test_plugin_internals.m tests/sw_test.h \
 	    shared/SignatureVerifier.m shared/SessionGuard.m
 
 clean:
-	rm -rf build $(PLUGIN_OBJS) $(PAM_OBJS)
+	rm -rf build $(PLUGIN_OBJS) $(PAM_OBJS) $(AUDIT_OBJS)
+	rm -rf $(ESCAPE_CORE_DIR)/target .cargo-home

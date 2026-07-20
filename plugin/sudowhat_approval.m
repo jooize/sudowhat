@@ -402,71 +402,6 @@ static void emit_verify_code(const char *ttyPath, const char *code,
     write_verify_code_to_tty(ttyPath, code, colorAllowed);
 }
 
-/* Build-time policy for echoing the invocation context (user / path / command)
- * to the controlling terminal, chosen by -DSW_ECHO_COMMAND
- * (services.sudowhat.echoCommand in the nix module; SUDOWHAT_ECHO_COMMAND in the
- * Makefile). Mirrors the SW_VERIFY_STYLE machinery above: a bare token names one
- * of two fixed modes, so the policy is baked into the signed bundle and no
- * free-form value is possible.
- *
- *   truncated - (default) echo only the items the sheet had to replace with the
- *               "(see terminal)" marker, so a value too long for the sheet is
- *               still readable in full — and the marker is never a lie.
- *   always    - echo the full user / path / command on every invocation.
- *
- * There is deliberately no "never": an item shown as "(see terminal)" MUST be
- * echoed or the marker would point at nothing, so suppression cannot be honored.
- *
- * The Makefile normalizes an unknown value to "truncated" with a warning; a raw
- * -D that bypasses it with an unknown name yields an undefined SW_EC_<name> and
- * fails the compile - the intended fail-closed result for that path. */
-#ifndef SW_ECHO_COMMAND
-#define SW_ECHO_COMMAND truncated
-#endif
-#define SW_EC_truncated 0
-#define SW_EC_always    1
-#define SW_EC_CAT(x)    SW_EC_##x
-#define SW_EC_SEL(x)    SW_EC_CAT(x)
-enum { sw_echo_command_mode = SW_EC_SEL(SW_ECHO_COMMAND) };
-
-/* Whether to echo a given item, given whether the sheet replaced it with the
- * "(see terminal)" marker. Always echo an overflowed item (correctness); in
- * "always" mode echo every item regardless. */
-static BOOL sw_should_echo_command(BOOL itemOverflowed) {
-    return sw_echo_command_mode == SW_EC_always || itemOverflowed;
-}
-
-/* Build-time policy for colouring the context echo, chosen by -DSW_ECHO_COLOR
- * (services.sudowhat.echoColor in the nix module; SUDOWHAT_ECHO_COLOR in the
- * Makefile). Mirrors the SW_ECHO_COMMAND machinery: a bare token names a fixed
- * mode, baked into the signed bundle.
- *
- *   off       - (default) echo the context with no SGR at all.
- *   anomalies - wrap anomaly spans (deceptive Unicode / control-byte escapes,
- *               shell metacharacters, notable whitespace) in PromptFormatter's
- *               fixed, reviewed colour palette, drawing the eye to the bytes
- *               that matter. Additive only (stripping the SGR yields the same
- *               bytes; see colorizeEscaped:), never a trust signal.
- *
- * An unknown token yields an undefined SW_ECOL_<name> and fails the compile —
- * the intended fail-closed result for a raw -D that bypasses the Makefile. */
-#ifndef SW_ECHO_COLOR
-#define SW_ECHO_COLOR off
-#endif
-#define SW_ECOL_off       0
-#define SW_ECOL_anomalies 1
-#define SW_ECOL_CAT(x)    SW_ECOL_##x
-#define SW_ECOL_SEL(x)    SW_ECOL_CAT(x)
-enum { sw_echo_color_mode = SW_ECOL_SEL(SW_ECHO_COLOR) };
-
-/* Whether the context echo should be coloured: the build knob is "anomalies"
- * AND the invoking environment permits colour. The authoritative isatty() gate
- * is at the write site (emit_full_context), so a redirect always renders plain.
- * The && short-circuits before sw_color_allowed() in the default "off" build. */
-static BOOL sw_echo_color_allowed(void) {
-    return sw_echo_color_mode == SW_ECOL_anomalies && sw_color_allowed();
-}
-
 /* Build-time master switch for POLICY DEFERENCE, chosen by -DSW_POLICY_DEFERENCE
  * (services.sudowhat.policyDeference in the nix module; SUDOWHAT_POLICY_DEFERENCE
  * in the Makefile). Same fail-closed token machinery as the knobs above.
@@ -492,37 +427,6 @@ static BOOL sw_echo_color_allowed(void) {
 #define SW_PD_SEL(x)   SW_PD_CAT(x)
 enum { sw_policy_deference_mode = SW_PD_SEL(SW_POLICY_DEFERENCE) };
 
-/* Build-time policy for echoing the invocation context (user / path / command)
- * when the prompt is SKIPPED by policy deference (a NOPASSWD-style run), chosen
- * by -DSW_ECHO_DEFERRED (services.sudowhat.echoDeferred; SUDOWHAT_ECHO_DEFERRED).
- * Distinct from SW_ECHO_COMMAND, which backs the sheet's "(see terminal)" marker
- * on the PROMPT path; there is no sheet here, so this governs a standalone
- * disclosure of what ran with no prompt.
- *
- *   off - (default) skip silently. Suits automation that issues many NOPASSWD
- *         calls; sudo's own log_allowed still records each command to authpriv.
- *   tty - echo user / path / command to the controlling terminal only, same
- *         hardened /dev/tty channel and escaping as the prompt-path echo. An
- *         interactive console user sees what ran; a scripted caller with no
- *         controlling terminal sees nothing.
- *
- * There is deliberately NO stderr fallback: a deferred run has no prompt to
- * "preview" (there is no authentication step to see-before), so disclosing on
- * stderr would only duplicate sudo's own audit log while breaking the
- * tty-or-nothing rule for the (possibly confidential) context. Keeping this
- * tty-or-nothing means the deferred echo never touches sudo's stderr and needs
- * no plugin_printf/conversation channel at all.
- *
- * An unknown token yields an undefined SW_ED_<name> and fails the compile. */
-#ifndef SW_ECHO_DEFERRED
-#define SW_ECHO_DEFERRED off
-#endif
-#define SW_ED_off      0
-#define SW_ED_tty      1
-#define SW_ED_CAT(x)   SW_ED_##x
-#define SW_ED_SEL(x)   SW_ED_CAT(x)
-enum { sw_echo_deferred_mode = SW_ED_SEL(SW_ECHO_DEFERRED) };
-
 /* Pure decision: should the console user's approval prompt be SKIPPED because
  * sudoers waived authentication for this invocation? All inputs are explicit so
  * every branch is unit-testable. Fail-safe in every uncertain direction — any
@@ -546,98 +450,6 @@ static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
     if (markerPresent)       return NO;
     if (!integrityInstalled) return NO;
     return YES;
-}
-
-/* Echo the full, untruncated invocation context to the controlling terminal, on
- * its own lines below the verify code, so the user can read whatever the Touch
- * ID sheet had to replace with "(see terminal)". Only the items whose echo* flag
- * is set are written.
- *
- * tty-ONLY by design, and that is the answer to the confidentiality concern:
- * unlike the verify code, this is NOT a trust signal that must reach the human
- * at all costs - it is disclosure of values the sheet could not show in full. So
- * it has NO stderr/plugin_printf fallback. sudo's stderr can be captured by a
- * `2>file` redirect, which would leak a possibly-confidential command into a
- * file; /dev/tty cannot be redirected that way and is where the user already is.
- * If there is no controlling terminal (a Dock/Spotlight launch), we skip it.
- *
- * Every value is PromptFormatter's escaped (user/path) or escaped+shell-quoted
- * (command) rendering, so it carries no raw control bytes. Under echoColor=off
- * (the default) we add only our own fixed ASCII prefixes and newlines. Under
- * echoColor=anomalies AND on a live tty, each value is additionally run through
- * PromptFormatter's colorizeEscaped: — because the value is already escaped (no
- * raw ESC), the colorizer can only add a fixed, reviewed SGR palette around
- * inert bytes, never let an attacker byte become an escape, and stripping the
- * SGR yields the exact same bytes (see colorizeEscaped:). Colour here is
- * emphasis, never a trust signal — the anchor stays the verify code matching the
- * system-rendered sheet — so colouring attacker-influenced content is safe. The
- * fixed label word is bolded (our own bytes) purely for readability. ttyPath is
- * a parameter so the offline unit test can aim it at a temp file. */
-static void append_ctx_line(NSMutableString *text, NSString *label,
-                            NSString *value, BOOL useColor) {
-    if (useColor) {
-        [text appendFormat:@"sudowhat: \033[1m%@:\033[0m %@\n",
-             label, [SudoWhatPromptFormatter colorizeEscaped:value]];
-    } else {
-        [text appendFormat:@"sudowhat: %@: %@\n", label, value];
-    }
-}
-
-static void emit_full_context(const char *ttyPath,
-                              NSString *userLine, NSString *pathLine,
-                              NSString *commandLine,
-                              BOOL echoUser, BOOL echoPath, BOOL echoCommand,
-                              BOOL colorize) {
-    BOOL wantUser = echoUser && userLine.length > 0;
-    BOOL wantPath = echoPath && pathLine.length > 0;
-    BOOL wantCmd  = echoCommand && commandLine.length > 0;
-    if (!wantUser && !wantPath && !wantCmd) return;
-
-    int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
-    if (fd < 0) return;
-
-    /* Colour only a live terminal: this isatty() check is authoritative, so a
-     * redirected fd or a regular-file test path always renders plain even when
-     * the build knob and environment permit colour. */
-    BOOL useColor = colorize && isatty(fd);
-
-    NSMutableString *text = [NSMutableString string];
-    if (wantUser) append_ctx_line(text, @"user", userLine, useColor);
-    if (wantPath) append_ctx_line(text, @"path", pathLine, useColor);
-    if (wantCmd)  append_ctx_line(text, @"command", commandLine, useColor);
-
-    NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
-    if (data == nil) { close(fd); return; }
-
-    const char *bytes = data.bytes;
-    size_t total = data.length;
-    size_t off = 0;
-    while (off < total) {
-        ssize_t w = write(fd, bytes + off, total - off);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        off += (size_t)w;
-    }
-    close(fd);
-}
-
-/* Echo the invocation context when the prompt was SKIPPED by policy deference
- * (a NOPASSWD-style run). No verify code and no sheet are involved, so this is
- * pure disclosure of what ran, and it is tty-or-nothing like the prompt-path
- * echo: off -> silent; tty -> the hardened /dev/tty path (which itself no-ops
- * when there is no controlling terminal). No stderr channel — see the
- * SW_ECHO_DEFERRED note above. Values are already escapeControlChars /
- * fullCommandLine-escaped by the caller, so no raw control byte reaches the
- * terminal. ttyPath is a parameter so the offline unit test can point it at a
- * temp file. */
-static void emit_deferred_context(const char *ttyPath,
-                                  NSString *userLine, NSString *pathLine,
-                                  NSString *commandLine) {
-    if (sw_echo_deferred_mode != SW_ED_tty) return;   /* off */
-    emit_full_context(ttyPath, userLine, pathLine, commandLine,
-                      YES, YES, YES, sw_echo_color_allowed());
 }
 
 static int sudowhat_open(unsigned int version,
@@ -751,6 +563,22 @@ static void sudowhat_close(void) {
     g_plugin_printf = NULL;
 }
 
+/* Verify the audit plugin's on-disk signature IF it is installed. The audit
+ * plugin owns terminal command display (its open() runs before this check); a
+ * present-but-tampered audit bundle could draw a false command, so we refuse to
+ * proceed when it fails to validate. It is OPTIONAL, though: an ABSENT bundle
+ * simply means no terminal display, with auth unaffected, so absence passes.
+ * This is tamper-evidence in place, not removal-proofing — removing the bundle
+ * or its sudo.conf line needs root, which is outside the threat model. Uses the
+ * plugin's own signature class (SudoWhatSignatureVerifier). Returns YES when
+ * absent or validly signed; NO (with *error set) when present-but-invalid. */
+static BOOL sudowhat_audit_bundle_ok(NSError **error) {
+    if (![[NSFileManager defaultManager] fileExistsAtPath:@SUDOWHAT_AUDIT_PATH]) {
+        return YES;
+    }
+    return [SudoWhatSignatureVerifier verifyPath:@SUDOWHAT_AUDIT_PATH error:error];
+}
+
 static int sudowhat_check(char * const command_info[],
                           char * const run_argv[],
                           char * const run_envp[],
@@ -763,6 +591,16 @@ static int sudowhat_check(char * const command_info[],
         NSError *sigErr = nil;
         if (![SudoWhatSignatureVerifier verifyPath:@SUDOWHAT_PAM_PATH error:&sigErr]) {
             set_errstr(errstr, "sudowhat: pam_sudowhat signature invalid: %s",
+                       utf8_or(sigErr.localizedDescription, "unknown"));
+            return 0;
+        }
+
+        /* (1b) If the audit plugin (terminal command display) is installed, its
+         * signature must validate — a tampered display bundle could lie about
+         * the command, so fail closed. Absent is fine (no display, auth
+         * unaffected). See sudowhat_audit_bundle_ok. */
+        if (!sudowhat_audit_bundle_ok(&sigErr)) {
+            set_errstr(errstr, "sudowhat: audit plugin signature invalid: %s",
                        utf8_or(sigErr.localizedDescription, "unknown"));
             return 0;
         }
@@ -922,16 +760,13 @@ static int sudowhat_check(char * const command_info[],
             (deferenceOn && !markerPresent)
                 ? sudowhat_pam_integrity_line_installed() : NO;
         if (sw_defer_decision(deferenceOn, markerPresent, integrityInstalled)) {
+            /* The command was already shown on the controlling terminal by the
+             * audit plugin (its open() runs before this check), so a deferred
+             * NOPASSWD run still discloses what ran — there is nothing to echo
+             * here. Record the skip and allow. */
             syslog(LOG_AUTHPRIV | LOG_NOTICE,
                    "sudowhat: prompt skipped, sudoers waived authentication "
                    "(invoking uid %u)", g_inv.uid);
-            NSString *dUser = [SudoWhatPromptFormatter escapeControlChars:runasUser];
-            NSString *dPath = cwd
-                ? [SudoWhatPromptFormatter escapeControlChars:cwd] : nil;
-            NSString *dCmd =
-                [SudoWhatPromptFormatter fullCommandLineForCommandPath:commandPath
-                                                                  argv:argv];
-            emit_deferred_context("/dev/tty", dUser, dPath, dCmd);
             return 1;
         }
 
@@ -972,49 +807,32 @@ static int sudowhat_check(char * const command_info[],
          * a system-supplied sentence and appends a period, so we use the
          * SystemSheet style there. Authorization Services (password
          * fallback below) shows our text verbatim, so SelfContained is the
-         * whole message. Capture which items (user/path/command) each
-         * rendering had to replace with "(see terminal)" — that drives the
-         * terminal echo below. (Formatting is pure and precedes the seteuid
-         * drop, so doing it before the tty writes is safe.) */
-        SWPromptOverflow ovLA = { NO, NO, NO }, ovAS = { NO, NO, NO };
+         * whole message. A "(see terminal)" marker either sheet emits for an
+         * over-long item is backed by the audit plugin's full-command line,
+         * already printed to this terminal before this plugin ran. (Formatting
+         * is pure and precedes the seteuid drop, so doing it before the tty
+         * write is safe.) */
         NSString *promptTextLA =
             [SudoWhatPromptFormatter formatWithCommandPath:commandPath
                                                  runasUser:runasUser
                                                        cwd:cwd
                                                 verifyCode:verifyCode
                                                       argv:argv
-                                                     style:SWPromptStyleSystemSheet
-                                                  overflow:&ovLA];
+                                                     style:SWPromptStyleSystemSheet];
         NSString *promptTextAS =
             [SudoWhatPromptFormatter formatWithCommandPath:commandPath
                                                  runasUser:runasUser
                                                        cwd:cwd
                                                 verifyCode:verifyCode
                                                       argv:argv
-                                                     style:SWPromptStyleSelfContained
-                                                  overflow:&ovAS];
+                                                     style:SWPromptStyleSelfContained];
 
+        /* The command itself is shown on the terminal by the audit plugin
+         * (before this plugin runs) and on the sheet below (resolved), so the
+         * approval plugin emits only the verify code here — the one out-of-band
+         * signal binding the sheet to the terminal. No fd redirect can hide it
+         * (emit_verify_code targets /dev/tty). */
         emit_verify_code("/dev/tty", nonceBuf, sw_color_allowed());
-
-        /* Echo to the SAME controlling terminal every item the sheet replaced
-         * with "(see terminal)" (correctness: the marker must not point at
-         * nothing), plus — under echoCommand=always — the full context anyway.
-         * We union the two renderings since the user may face the LA sheet or
-         * its AS password fallback. The echoed values reuse PromptFormatter's
-         * escaping so no raw control byte reaches the terminal. tty-only, no
-         * stderr fallback — see emit_full_context for why that bounds the leak
-         * surface. */
-        NSString *echoUser = [SudoWhatPromptFormatter escapeControlChars:runasUser];
-        NSString *echoPath = cwd
-            ? [SudoWhatPromptFormatter escapeControlChars:cwd] : nil;
-        NSString *echoCmd =
-            [SudoWhatPromptFormatter fullCommandLineForCommandPath:commandPath
-                                                              argv:argv];
-        emit_full_context("/dev/tty", echoUser, echoPath, echoCmd,
-                          sw_should_echo_command(ovLA.user || ovAS.user),
-                          sw_should_echo_command(ovLA.path || ovAS.path),
-                          sw_should_echo_command(ovLA.command || ovAS.command),
-                          sw_echo_color_allowed());
 
         /* (5) LAContext call.
          *
