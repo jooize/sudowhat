@@ -1,7 +1,15 @@
 # Design note: NOPASSWD and the console prompt (exact-command allowlist)
 
-**Status: proposed, not yet implemented.** Captures the reasoning from a design
-discussion so it does not have to be re-derived. The recommendation is an
+> **SUPERSEDED (2026-07-20, v0.9.0). Not implemented — do not build this.**
+> The console NOPASSWD skip shipped via a different, better mechanism: a
+> PAM auth-phase **marker** that inherits sudoers' own authentication decision,
+> with no command list to maintain in two places and no drift. See the
+> "Policy deference" section of `docs/design-noncon-sudo.md`. This allowlist
+> note is kept only for the historical record and the problem framing below;
+> its "baked allowlist" recommendation was rejected in favor of the marker.
+
+**Original status: proposed, not yet implemented.** Captures the reasoning from a
+design discussion so it does not have to be re-derived. The recommendation is an
 opt-in, exact-command, signature-covered console allowlist (see "The design"
 below). Sibling to `docs/design-noncon-sudo.md`, which covers the *non-console*
 NOPASSWD path (already shipped in v0.5.0).

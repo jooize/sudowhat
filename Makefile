@@ -52,13 +52,43 @@ ifeq ($(filter $(SUDOWHAT_ECHO_COLOR),$(SUDOWHAT_VALID_ECHO_COLOR)),)
   override SUDOWHAT_ECHO_COLOR := off
 endif
 
+# Master switch for policy deference: "on" (default) skips the console user's
+# Touch ID prompt when sudoers itself waived authentication for the invocation
+# (a NOPASSWD rule, Defaults !authenticate, or a valid timestamp cache), so a
+# NOPASSWD command just runs; "off" always prompts, as before the feature. The
+# nix module exposes the same names via services.sudowhat.policyDeference. Passed
+# as a bare token to -DSW_POLICY_DEFERENCE. An unknown value normalizes to "on"
+# with a warning, rather than failing.
+SUDOWHAT_POLICY_DEFERENCE ?= on
+SUDOWHAT_VALID_DEFERENCE := on off
+ifeq ($(filter $(SUDOWHAT_POLICY_DEFERENCE),$(SUDOWHAT_VALID_DEFERENCE)),)
+  $(warning sudowhat: unknown SUDOWHAT_POLICY_DEFERENCE '$(SUDOWHAT_POLICY_DEFERENCE)', falling back to on)
+  override SUDOWHAT_POLICY_DEFERENCE := on
+endif
+
+# Policy for echoing the invocation context when the prompt is SKIPPED by policy
+# deference (a NOPASSWD-style run): "off" (default, silent), "tty" (echo
+# user/path/command to /dev/tty only), or "always" (as tty, plus disclose on
+# sudo's stderr when there is no controlling terminal, so a script still sees
+# what it runs). The nix module exposes the same names via
+# services.sudowhat.echoDeferred. Passed as a bare token to -DSW_ECHO_DEFERRED.
+# An unknown value normalizes to "off" with a warning, rather than failing.
+SUDOWHAT_ECHO_DEFERRED ?= off
+SUDOWHAT_VALID_ECHO_DEFERRED := off tty always
+ifeq ($(filter $(SUDOWHAT_ECHO_DEFERRED),$(SUDOWHAT_VALID_ECHO_DEFERRED)),)
+  $(warning sudowhat: unknown SUDOWHAT_ECHO_DEFERRED '$(SUDOWHAT_ECHO_DEFERRED)', falling back to off)
+  override SUDOWHAT_ECHO_DEFERRED := off
+endif
+
 CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
           -Iplugin -Ipam -Ishared \
           -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"' \
           -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE) \
           -DSW_ECHO_COMMAND=$(SUDOWHAT_ECHO_COMMAND) \
-          -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR)
+          -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) \
+          -DSW_POLICY_DEFERENCE=$(SUDOWHAT_POLICY_DEFERENCE) \
+          -DSW_ECHO_DEFERRED=$(SUDOWHAT_ECHO_DEFERRED)
 LDFLAGS = -bundle \
           -framework Foundation \
           -framework CoreFoundation \

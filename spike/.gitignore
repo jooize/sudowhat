@@ -1,0 +1,4 @@
+# Built spike artifacts (run-spike.sh rebuilds them on demand).
+spike_pam.so
+spike_driver
+.trash/

@@ -151,6 +151,54 @@ static BOOL sudowhat_noncon_password_path_installed(void) {
     return sudowhat_text_is_gate_variant(content);
 }
 
+/* Does /etc/pam.d/sudo_local carry pam_sudowhat's INTEGRITY line
+ *   auth requisite <SUDOWHAT_PAM_PATH>
+ * at our own baked module path? This line is present in BOTH the default
+ * console-only variant and the non-console gate variant, and it is what makes
+ * pam_sudowhat's auth entry run — and set the policy-deference marker — whenever
+ * sudo runs the PAM auth stack. The absent-marker skip relies on that premise:
+ * if this line is NOT present, an absent marker cannot be trusted to mean
+ * "sudoers waived authentication" (pam_sudowhat might simply be unwired), so the
+ * caller must fail toward prompting. A strict subset of what
+ * sudowhat_text_is_gate_variant checks; token-based and whitespace-insensitive,
+ * '#'-comments and blank lines skipped, pinned to SUDOWHAT_PAM_PATH so a line at
+ * some other module path does not count. file-static for the offline unit test.
+ *
+ * NOTE: like the existing gate-variant check, this reads sudo_local only, not
+ * the OS-owned /etc/pam.d/sudo that includes it. Editing either file to unwire
+ * pam_sudowhat requires root, which is outside the threat model (an attacker
+ * with root has already won); this is defense-in-depth against a misconfigured
+ * sudo_local, not a guarantee against a root actor. */
+static BOOL sudowhat_text_has_integrity_line(NSString *content) {
+    if (content == nil) return NO;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *rawLine in [content componentsSeparatedByString:@"\n"]) {
+        NSString *line = [rawLine stringByTrimmingCharactersInSet:ws];
+        if (line.length == 0 || [line hasPrefix:@"#"]) continue;
+        NSMutableArray<NSString *> *f = [NSMutableArray array];
+        for (NSString *tok in [line componentsSeparatedByCharactersInSet:ws]) {
+            if (tok.length > 0) [f addObject:tok];
+        }
+        if (f.count == 3
+            && [f[0] isEqualToString:@"auth"]
+            && [f[1] isEqualToString:@"requisite"]
+            && [f[2] isEqualToString:@SUDOWHAT_PAM_PATH]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+/* Reads /etc/pam.d/sudo_local and reports whether pam_sudowhat's integrity line
+ * is wired in. Unreadable / absent / wrong shape -> NO, so an absent marker is
+ * treated as untrustworthy and the console user is prompted (fail-safe). */
+static BOOL sudowhat_pam_integrity_line_installed(void) {
+    NSString *content = [NSString stringWithContentsOfFile:@SUDOWHAT_SUDO_LOCAL
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:NULL];
+    return sudowhat_text_has_integrity_line(content);
+}
+
 static void set_errstr(const char **errstr, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -419,6 +467,98 @@ static BOOL sw_echo_color_allowed(void) {
     return sw_echo_color_mode == SW_ECOL_anomalies && sw_color_allowed();
 }
 
+/* Build-time master switch for POLICY DEFERENCE, chosen by -DSW_POLICY_DEFERENCE
+ * (services.sudowhat.policyDeference in the nix module; SUDOWHAT_POLICY_DEFERENCE
+ * in the Makefile). Same fail-closed token machinery as the knobs above.
+ *
+ *   on  - (default) when sudoers itself waived authentication for this
+ *         invocation (a NOPASSWD rule, `Defaults !authenticate`, or a valid
+ *         timestamp cache), the console user's Touch ID prompt is SKIPPED and
+ *         the command just runs. Detected via the pam_sudowhat auth marker: sudo
+ *         runs the PAM auth stack (which sets the marker) only when it requires
+ *         authentication, so an absent marker — with pam_sudowhat still wired
+ *         into the chain — means sudoers waived it. Fail-safe in every uncertain
+ *         direction (see sw_defer_decision).
+ *   off - the console user is always prompted, exactly as before this feature
+ *         (the marker is not consulted).
+ *
+ * An unknown token yields an undefined SW_PD_<name> and fails the compile. */
+#ifndef SW_POLICY_DEFERENCE
+#define SW_POLICY_DEFERENCE on
+#endif
+#define SW_PD_off      0
+#define SW_PD_on       1
+#define SW_PD_CAT(x)   SW_PD_##x
+#define SW_PD_SEL(x)   SW_PD_CAT(x)
+enum { sw_policy_deference_mode = SW_PD_SEL(SW_POLICY_DEFERENCE) };
+
+/* Build-time policy for echoing the invocation context (user / path / command)
+ * when the prompt is SKIPPED by policy deference (a NOPASSWD-style run), chosen
+ * by -DSW_ECHO_DEFERRED (services.sudowhat.echoDeferred; SUDOWHAT_ECHO_DEFERRED).
+ * Distinct from SW_ECHO_COMMAND, which backs the sheet's "(see terminal)" marker
+ * on the PROMPT path; there is no sheet here, so this governs a standalone
+ * disclosure of what ran with no prompt.
+ *
+ *   off    - (default) skip silently. Suits automation that issues many NOPASSWD
+ *            calls (sudo's own log_allowed still records each command).
+ *   tty    - echo user / path / command to the controlling terminal only. An
+ *            interactive console user sees what ran; a scripted caller with no
+ *            controlling terminal sees nothing (preserves the tty-or-nothing
+ *            rule that governs the verify code).
+ *   always - as "tty", but when there is NO controlling terminal, disclose the
+ *            context on sudo's stderr instead (via the plugin_printf channel), so
+ *            a script running sudo still sees what it is about to run. This is a
+ *            deliberate, opt-in exception to tty-or-nothing for the (non-secret)
+ *            context lines; the verify code is never involved here (a deferred
+ *            run has none).
+ *
+ * An unknown token yields an undefined SW_ED_<name> and fails the compile. */
+#ifndef SW_ECHO_DEFERRED
+#define SW_ECHO_DEFERRED off
+#endif
+#define SW_ED_off      0
+#define SW_ED_tty      1
+#define SW_ED_always   2
+#define SW_ED_CAT(x)   SW_ED_##x
+#define SW_ED_SEL(x)   SW_ED_CAT(x)
+enum { sw_echo_deferred_mode = SW_ED_SEL(SW_ECHO_DEFERRED) };
+
+/* Pure decision: should the console user's approval prompt be SKIPPED because
+ * sudoers waived authentication for this invocation? All inputs are explicit so
+ * every branch is unit-testable. Fail-safe in every uncertain direction — any
+ * doubt returns NO (prompt):
+ *   deference off             -> NO   (today's always-prompt behavior)
+ *   marker present            -> NO   (sudo ran the auth stack => auth required)
+ *   integrity line not wired  -> NO   (an absent marker can't be trusted to mean
+ *                                      "waived" if pam_sudowhat may be unwired)
+ *   otherwise                 -> YES  (auth waived, chain intact => skip)
+ * A caller can pre-set the marker (forcing a prompt) but cannot clear it once
+ * pam_sudowhat has run, so the only forgeable direction is the safe one. */
+static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
+                              BOOL integrityInstalled) {
+    if (!deferenceOn)        return NO;
+    if (markerPresent)       return NO;
+    if (!integrityInstalled) return NO;
+    return YES;
+}
+
+/* Where the deferred-run context echo should go, given the build mode and
+ * whether a controlling terminal exists. Pure (mode passed explicitly) so it is
+ * unit-testable independent of the baked-in build knob. A live tty always wins
+ * (the hardened /dev/tty path); with no tty only "always" discloses on stderr. */
+typedef enum {
+    SW_DEFERRED_ECHO_NONE = 0,
+    SW_DEFERRED_ECHO_TTY,
+    SW_DEFERRED_ECHO_STDERR,
+} sw_deferred_echo_target;
+
+static sw_deferred_echo_target sw_deferred_echo_target_for(int mode, BOOL haveTty) {
+    if (mode == SW_ED_off) return SW_DEFERRED_ECHO_NONE;
+    if (haveTty)           return SW_DEFERRED_ECHO_TTY;
+    if (mode == SW_ED_always) return SW_DEFERRED_ECHO_STDERR;
+    return SW_DEFERRED_ECHO_NONE;   /* "tty" mode with no controlling terminal */
+}
+
 /* Echo the full, untruncated invocation context to the controlling terminal, on
  * its own lines below the verify code, so the user can read whatever the Touch
  * ID sheet had to replace with "(see terminal)". Only the items whose echo* flag
@@ -492,6 +632,45 @@ static void emit_full_context(const char *ttyPath,
         off += (size_t)w;
     }
     close(fd);
+}
+
+/* Echo the invocation context when the prompt was SKIPPED by policy deference
+ * (a NOPASSWD-style run). No verify code and no sheet are involved here, so this
+ * is pure disclosure of what ran. Routing is decided by sw_deferred_echo_target_for:
+ *   NONE   - echoDeferred=off, or "tty" with no controlling terminal: silent.
+ *   TTY    - the hardened /dev/tty path (same as the prompt-path echo), coloured
+ *            per echoColor when a live terminal permits it.
+ *   STDERR - echoDeferred=always with no controlling terminal: the opt-in
+ *            scripted-visibility path, plain, via sudo's plugin_printf error
+ *            channel (SUDO_CONV_ERROR_MSG -> stderr). PREFER_TTY is unnecessary
+ *            because the tty case never reaches this branch.
+ * Values are already escapeControlChars/fullCommandLine-escaped by the caller,
+ * so no raw control byte reaches either channel. ttyPath is a parameter so the
+ * offline unit test can aim the tty path at a temp file. */
+static void emit_deferred_context(const char *ttyPath,
+                                  NSString *userLine, NSString *pathLine,
+                                  NSString *commandLine) {
+    switch (sw_deferred_echo_target_for(sw_echo_deferred_mode, g_inv.have_tty)) {
+    case SW_DEFERRED_ECHO_NONE:
+        return;
+    case SW_DEFERRED_ECHO_TTY:
+        emit_full_context(ttyPath, userLine, pathLine, commandLine,
+                          YES, YES, YES, sw_echo_color_allowed());
+        return;
+    case SW_DEFERRED_ECHO_STDERR:
+        if (g_plugin_printf) {
+            if (userLine.length > 0)
+                g_plugin_printf(SUDO_CONV_ERROR_MSG,
+                                "sudowhat: user: %s\n", userLine.UTF8String);
+            if (pathLine.length > 0)
+                g_plugin_printf(SUDO_CONV_ERROR_MSG,
+                                "sudowhat: path: %s\n", pathLine.UTF8String);
+            if (commandLine.length > 0)
+                g_plugin_printf(SUDO_CONV_ERROR_MSG,
+                                "sudowhat: command: %s\n", commandLine.UTF8String);
+        }
+        return;
+    }
 }
 
 static int sudowhat_open(unsigned int version,
@@ -728,6 +907,67 @@ static int sudowhat_check(char * const command_info[],
             }
         }
 
+        /* Resolve cwd once — used by the policy-deference echo just below and by
+         * the prompt formatting further down. Preference: command_info["cwd"]
+         * (set when sudoers has cwd=) > the stashed invoking cwd from user_info
+         * (the default case, where sudo inherits the caller's cwd without
+         * emitting command_info["cwd"]). Either way it reflects where execve
+         * will run. */
+        const char *cwdC = find_kv(command_info, "cwd");
+        NSString *cwd = nil;
+        if (cwdC && cwdC[0] != '\0') {
+            cwd = [NSString stringWithUTF8String:cwdC];
+        } else if (g_inv.have_cwd) {
+            cwd = [NSString stringWithUTF8String:g_inv.cwd];
+        }
+
+        /* (3.5) POLICY DEFERENCE. sudo runs the PAM auth stack — and pam_sudowhat
+         * sets SUDOWHAT_AUTH_MARKER_ENV — only when sudoers requires
+         * authentication. A NOPASSWD rule, `Defaults !authenticate`, or a valid
+         * timestamp cache skip it entirely, leaving the marker absent. Honor that
+         * by SKIPPING our own Touch ID prompt: the whole point is that a NOPASSWD
+         * command just runs, with no sheet and no password. This is an
+         * authorization-trust step, not an authentication one — sudoers already
+         * authorized the caller (the approval plugin runs after check_policy
+         * succeeds); here we simply do not re-gate what sudoers chose not to
+         * gate. Separate from the root and non-console exits above; it only
+         * affects the console user's prompt.
+         *
+         * Read the marker and immediately clear it (hygiene: no stale value can
+         * linger; sudo builds the command's environment separately, so this
+         * never reaches the execed program regardless). The integrity-line check
+         * runs only when it can matter (deference on AND marker absent) and
+         * confirms an absent marker really means "the auth stack did not run"
+         * rather than "pam_sudowhat is unwired" — otherwise sw_defer_decision
+         * fails toward prompting. No TOCTOU pre-stat is needed on this path:
+         * there is no authorization delay, hence no window to swap the binary.
+         *
+         * timestamp interaction: with a non-zero timestamp_timeout a cached
+         * credential also skips the auth stack, so a second in-window command on
+         * the same tty is deferred and runs with no sheet — sudo's normal grace
+         * after the first real factor on that tty. Set timestamp_timeout=0 (the
+         * module default) for a sheet on every command. */
+        const char *authMarker = getenv(SUDOWHAT_AUTH_MARKER_ENV);
+        BOOL markerPresent = (authMarker != NULL);
+        unsetenv(SUDOWHAT_AUTH_MARKER_ENV);
+        BOOL deferenceOn = (sw_policy_deference_mode == SW_PD_on);
+        BOOL integrityInstalled =
+            (deferenceOn && !markerPresent)
+                ? sudowhat_pam_integrity_line_installed() : NO;
+        if (sw_defer_decision(deferenceOn, markerPresent, integrityInstalled)) {
+            syslog(LOG_AUTHPRIV | LOG_NOTICE,
+                   "sudowhat: prompt skipped, sudoers waived authentication "
+                   "(invoking uid %u)", g_inv.uid);
+            NSString *dUser = [SudoWhatPromptFormatter escapeControlChars:runasUser];
+            NSString *dPath = cwd
+                ? [SudoWhatPromptFormatter escapeControlChars:cwd] : nil;
+            NSString *dCmd =
+                [SudoWhatPromptFormatter fullCommandLineForCommandPath:commandPath
+                                                                  argv:argv];
+            emit_deferred_context("/dev/tty", dUser, dPath, dCmd);
+            return 1;
+        }
+
         /* (3a) Pre-prompt stat — capture (dev, inode) so we can detect a
          * binary swap during authorization. Open with O_CLOEXEC so the fd
          * doesn't leak into the execed program. */
@@ -746,19 +986,8 @@ static int sudowhat_check(char * const command_info[],
             return -1;
         }
 
-        /* (4) Format prompt. cwd preference: command_info["cwd"] (set
-         * when sudoers has cwd=) > stashed invoking cwd from user_info
-         * (the default case where sudo just inherits the caller's cwd
-         * without emitting command_info["cwd"]). Either way the value
-         * reflects where execve will run. */
-        const char *cwdC = find_kv(command_info, "cwd");
-        NSString *cwd = nil;
-        if (cwdC && cwdC[0] != '\0') {
-            cwd = [NSString stringWithUTF8String:cwdC];
-        } else if (g_inv.have_cwd) {
-            cwd = [NSString stringWithUTF8String:g_inv.cwd];
-        }
-
+        /* (4) Format prompt. cwd was resolved above (shared with the
+         * policy-deference echo) and reflects where execve will run. */
         /* Channel-binding nonce: print it to the user's terminal BEFORE we
          * put up the LAContext sheet, then embed the same value in the prompt
          * body. A real sudo run originated from the user's foreground shell

@@ -146,16 +146,82 @@ in {
         at build time.
       '';
     };
+
+    policyDeference = lib.mkOption {
+      type = lib.types.enum [ "on" "off" ];
+      default = "on";
+      description = ''
+        Whether sudowhat defers to sudoers' own authentication decision for the
+        local console user.
+
+        - `on` (the default): when sudoers itself waived authentication for an
+          invocation — a `NOPASSWD` rule, `Defaults !authenticate`, or a valid
+          credential in the timestamp cache — the console user's Touch ID prompt
+          is **skipped** and the command just runs. sudo runs the PAM auth stack
+          (where `pam_sudowhat` sets a process-local marker) only when it
+          requires authentication, so an absent marker — with `pam_sudowhat`
+          still wired into `sudo_local` — is the signal that sudoers waived it.
+        - `off`: the console user is always prompted, exactly as before this
+          option existed; the marker is not consulted.
+
+        This grants no new authority: sudoers still decides who may run what and
+        whether authentication is required. It only stops sudowhat from
+        re-gating, with a biometric prompt, a command sudoers already chose to
+        run without authentication. The decision is fail-safe in every uncertain
+        direction — a present marker, an unverifiable chain, or this option off
+        all result in a prompt, never a silent skip. A caller cannot suppress
+        the prompt by manipulating its environment (pre-setting the marker only
+        *forces* a prompt); suppressing it would require editing the root-owned
+        `sudo_local` / `sudo` PAM files, which is outside the threat model.
+
+        Note the timestamp-cache interaction: with `on` and a non-zero
+        `timestampTimeout`, a second command within the grace window on the same
+        terminal is treated as deferred and runs with no sheet — sudo's normal
+        grace after the first real factor on that terminal. Keep
+        `timestampTimeout = 0` (the default) for a Touch ID sheet on every
+        command. Baked into the signed bundle at build time.
+      '';
+    };
+
+    echoDeferred = lib.mkOption {
+      type = lib.types.enum [ "off" "tty" "always" ];
+      default = "off";
+      description = ''
+        Whether the invocation context (user, path, command) is echoed when the
+        prompt is **skipped** by `policyDeference` (a `NOPASSWD`-style run).
+        Distinct from `echoCommand`, which backs the sheet's `(see terminal)`
+        marker on the prompt path; there is no sheet here.
+
+        - `off` (the default): skip silently. Suits automation that issues many
+          `NOPASSWD` calls (sudo's own `log_allowed` still records each command).
+        - `tty`: echo user / path / command to the controlling terminal only. An
+          interactive console user sees what ran; a scripted caller with no
+          controlling terminal sees nothing — preserving the tty-or-nothing rule
+          that governs the verify code.
+        - `always`: as `tty`, but when there is no controlling terminal, disclose
+          the context on sudo's stderr instead, so a script running sudo still
+          sees what it is about to run. This is a deliberate, opt-in exception to
+          tty-or-nothing for the (non-secret) context lines; no verify code is
+          ever involved on a deferred run.
+
+        Every value is escaped and shell-quoted exactly as the sheet renders it,
+        so no raw control bytes reach either channel. Baked into the signed
+        bundle at build time.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable (let
     # Bake the chosen build-time presets into the bundle. The defaults
-    # (verifyStyle "bold", echoCommand "truncated", echoColor "off") reproduce the package's own
+    # (verifyStyle "bold", echoCommand "truncated", echoColor "off",
+    # policyDeference "on", echoDeferred "off") reproduce the package's own
     # defaults, so default users get the same store path with no rebuild; any
     # other value produces a distinct derivation whose embedded path and the
     # /etc references below stay consistent (both come from `pkg`), preserving
     # mutual signature verification.
-    pkg = cfg.package.override { inherit (cfg) verifyStyle echoCommand echoColor; };
+    pkg = cfg.package.override {
+      inherit (cfg) verifyStyle echoCommand echoColor policyDeference echoDeferred;
+    };
   in {
     # The store-path approach: binaries live in /nix/store, /etc files
     # reference them by full path. nix-darwin owns these three /etc files

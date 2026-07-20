@@ -59,6 +59,128 @@ root:
 The one kept check is the load-bearing one: *is the gate variant actually
 installed* before the plugin steps aside.
 
+## Policy deference — the console NOPASSWD skip (v0.9.0)
+
+The non-console work above lets a non-console NOPASSWD caller through (the
+step-aside). It left one gap the README's originating use case cares about: **the
+local console user still got a Touch ID sheet for a `NOPASSWD` command.** The
+approval plugin runs on every `check_policy` success — NOPASSWD does not bypass
+it (that is the whole reason 0.4.2 needed the root exemption) — so a console user
+running a passwordless command was still prompted. Policy deference closes that.
+
+### The signal: a PAM auth-phase marker, not a config parse
+
+`command_info[]` carries no authentication signal (established in (a) below), so
+the plugin cannot read "was this NOPASSWD?" from sudo. But it can observe
+sudoers' *behavior*: sudo runs the PAM auth stack **only when it requires
+authentication**. `pam_sudowhat` already sits in that auth stack (the `requisite`
+integrity line). So:
+
+- `pam_sm_authenticate` (either role) calls `setenv(SUDOWHAT_AUTH_RAN, "1")`
+  before doing anything else. This runs in the one `sudo` process; the approval
+  plugin reads it back with `getenv` in the same process, later in the same run
+  (invocation order: policy `check_policy` runs PAM → approval `check`).
+- In `check()`, for the **console user only** (root and non-console have already
+  exited above), the plugin reads and clears the marker:
+  - **present** → sudo ran the auth stack → authentication was required → prompt
+    (Touch ID), exactly as before.
+  - **absent** → sudoers waived authentication → **skip the prompt**, the command
+    just runs. But only after confirming `pam_sudowhat`'s integrity line is still
+    wired into `sudo_local` (`sudowhat_text_has_integrity_line`); if it is not, an
+    absent marker cannot be trusted to mean "waived" (the module might be
+    unwired), so the plugin **fails toward prompting**.
+
+This is an **authorization**-trust decision, identical in spirit to the
+non-console step-aside: sudoers authorized the caller and chose not to require a
+factor, and the plugin declines to re-gate what sudoers did not gate. It does not
+re-implement or parse policy — it inherits sudoers' own decision from whether the
+auth stack ran. Single source of truth, no drift, no baked command allowlist.
+
+### What "marker absent" covers — all four cases, all root-configured
+
+An absent marker means "sudo did not run the PAM auth stack for this
+invocation," which happens in exactly four ways, every one a decision made by
+root-owned configuration:
+
+1. **A `NOPASSWD` rule** — the headline case; the console user's passwordless
+   command runs with no sheet.
+2. **The invoking user is root** — sudoers exempts uid 0 from authentication.
+   Already handled by the v0.4.2 root exemption (which exits before the marker
+   check), so this is consistent, not new behavior.
+3. **`Defaults !authenticate`** (global or per-user/host) — the admin turned off
+   authentication for a broader scope than a single command. Skipping is correct
+   (the admin said so) but is a bigger lever than a per-command tag; an admin
+   should know it now also silences Touch ID.
+4. **A valid timestamp cache** — a second command within `timestamp_timeout` on
+   the same terminal (default `tty` scope) skips PAM. Under the default
+   `timestamp_timeout=0` this never occurs and cases 1–4 collapse to "NOPASSWD /
+   root / `!authenticate`". With a non-zero timeout it means an in-window command
+   runs with no sheet — sudo's normal grace after the first real factor on that
+   terminal, per the credential-cache analysis below. This is why
+   `timestamp_timeout=0` remains the default for "a sheet on every command".
+
+### Why it is safe (forgery analysis)
+
+The marker is process-local and never crosses a trust boundary. Analyze both
+directions:
+
+- **Forging presence** (caller `export SUDOWHAT_AUTH_RAN=1` before sudo): the
+  marker is present → the plugin **prompts**. The fail-safe direction — an
+  attacker can force an *extra* Touch ID prompt, never suppress one.
+- **Forging absence** (caller clears it): irrelevant. If the auth stack runs,
+  `pam_sudowhat` `setenv`s it back to "1" *after* the caller's environment was
+  captured, so the caller cannot keep it absent when auth actually ran. The only
+  way to keep it absent when auth runs is to stop `pam_sudowhat` from running —
+  i.e. edit the root-owned `/etc/pam.d/sudo{,_local}` — which is out of the
+  threat model (an attacker with root has already won), and which the
+  integrity-line check catches for the misconfiguration case regardless.
+
+The residual, stated plainly: the integrity-line check reads `sudo_local` only,
+not the OS-owned `/etc/pam.d/sudo` that includes it. If root removed the
+`include`, the marker would be absent even when `/etc/pam.d/sudo`'s own modules
+required auth, and the plugin would wrongly skip. That is a root-level edit,
+outside the threat model, and consistent with the deliberately-cut
+`/etc/pam.d/sudo` scan above — this design does not re-open that scan.
+
+### Config surface
+
+- `services.sudowhat.policyDeference` (`on` | `off`, default `on`) — the master
+  switch; `off` restores today's always-prompt behavior.
+- `services.sudowhat.echoDeferred` (`off` | `tty` | `always`, default `off`) —
+  whether/where to echo user/path/command on a skipped (deferred) run. `off` is
+  silent (suits high-volume NOPASSWD automation); `tty` echoes to `/dev/tty`
+  only (preserving tty-or-nothing); `always` adds an opt-in stderr disclosure
+  when there is no controlling terminal, so a scripted caller still sees what it
+  runs. No verify code is ever involved on a deferred run, so the verify code's
+  structural tty-or-nothing invariant is untouched.
+
+Both are build-time knobs baked into the signed bundle (same mechanism as
+`echoCommand`/`echoColor`), fail-closed on an unknown token.
+
+### Relationship to the retired allowlist design
+
+This **supersedes `docs/design-nopasswd-console-allowlist.md`** in full. That
+note proposed baking an exact-command allowlist into the bundle to detect
+NOPASSWD, with the admin maintaining the list in two places (sudoers + the
+bundle) and a drift risk. The marker inherits sudoers' decision directly, so no
+allowlist, no second list, no drift. The allowlist doc is kept for history and
+marked superseded at its head.
+
+### Open item to confirm on hardware
+
+The mechanism rests on one runtime assumption not exercisable under the agent
+sandbox (`sudo` is blocked, and Claude Code has no controlling tty): that a
+`setenv` in `pam_sm_authenticate` is visible to `getenv` in the approval
+`check()` — i.e. sudoers runs PAM in the main `sudo` process, not a child. This
+is near-certain (openpam is an in-process library; the approval plugin and
+policy plugin both run in the main process per the invocation-order contract),
+and the "PAM does not run on NOPASSWD" half is already established in this doc.
+A self-contained spike (`spike/` — a throwaway auth module + approval plugin that
+logs the `getenv` result) confirms it end-to-end before relying on it in
+production; run it per `spike/README.md`. If it were ever to fail, only the
+detection mechanism changes (a pid-keyed side channel); the mode-wiring and the
+`sw_defer_decision` gate are independent of how the signal is carried.
+
 ---
 
 ## Original exploration

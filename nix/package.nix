@@ -19,6 +19,15 @@
   # One of the Makefile's SUDOWHAT_VALID_ECHO_COLOR; validated by the nix
   # module's enum. See services.sudowhat.echoColor.
   echoColor ? "off",
+  # Master switch for policy deference: "on" (default) or "off". One of the
+  # Makefile's SUDOWHAT_VALID_DEFERENCE; validated by the nix module's enum.
+  # See services.sudowhat.policyDeference.
+  policyDeference ? "on",
+  # Context echo when the prompt is skipped by policy deference: "off"
+  # (default), "tty", or "always". One of the Makefile's
+  # SUDOWHAT_VALID_ECHO_DEFERRED; validated by the nix module's enum. See
+  # services.sudowhat.echoDeferred.
+  echoDeferred ? "off",
 }:
 
 stdenv.mkDerivation (finalAttrs: {
@@ -65,6 +74,8 @@ stdenv.mkDerivation (finalAttrs: {
     "SUDOWHAT_VERIFY_STYLE=${verifyStyle}"
     "SUDOWHAT_ECHO_COMMAND=${echoCommand}"
     "SUDOWHAT_ECHO_COLOR=${echoColor}"
+    "SUDOWHAT_POLICY_DEFERENCE=${policyDeference}"
+    "SUDOWHAT_ECHO_DEFERRED=${echoDeferred}"
   ];
 
   buildPhase = ''

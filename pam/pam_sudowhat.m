@@ -15,6 +15,7 @@
 #import <Foundation/Foundation.h>
 #include <syslog.h>
 #include <string.h>
+#include <stdlib.h>
 #include <pwd.h>
 
 #define PAM_SM_AUTH
@@ -48,6 +49,19 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     (void)flags;
 
     @autoreleasepool {
+        /* Policy-deference marker. Our auth entry running AT ALL means sudo
+         * entered the PAM auth conversation — i.e. sudoers required
+         * authentication for this invocation. NOPASSWD, a root invoker,
+         * `Defaults !authenticate`, and a valid timestamp cache all skip the
+         * auth stack, so this module never runs for them and the marker stays
+         * absent; the approval plugin reads that absence to skip its own prompt
+         * (a NOPASSWD command just runs). Set for BOTH roles, before any return,
+         * so no config ordering can leave it unset when the auth stack ran. The
+         * value is not load-bearing — only presence matters, and a caller can
+         * forge presence only in the fail-safe direction (forcing a prompt), not
+         * clear it once we have run. See SUDOWHAT_AUTH_MARKER_ENV in Constants.h. */
+        setenv(SUDOWHAT_AUTH_MARKER_ENV, "1", 1);
+
         /* Second role — the CONSOLE-GATE. The non-console gate variant of
          * /etc/pam.d/sudo_local invokes this same module a second time as
          *   auth sufficient <pam_sudowhat.so> console-gate

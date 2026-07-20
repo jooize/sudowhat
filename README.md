@@ -99,6 +99,15 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
           # had to replace with "(see terminal)" ("truncated", the default) or
           # on every invocation ("always").
           # services.sudowhat.echoCommand = "always";
+          # Defer to sudoers' own auth decision: skip the console Touch ID
+          # prompt when sudoers waived auth (a NOPASSWD rule, !authenticate, or
+          # a cached credential), so a NOPASSWD command just runs. Default "on";
+          # "off" always prompts. See "How it works".
+          # services.sudowhat.policyDeference = "off";
+          # What to echo when the prompt is skipped by policyDeference: "off"
+          # (default, silent), "tty" (/dev/tty only), or "always" (also stderr
+          # when there is no controlling terminal, so a script sees what runs).
+          # services.sudowhat.echoDeferred = "tty";
         }
       ];
     };
@@ -175,7 +184,9 @@ them (no sheet) once sudo has authenticated them.
 
 **Root callers are exempt — by design.** sudowhat gates *escalation*: an unprivileged principal reaching for root. A caller that is already root (uid 0) is not escalating, and a sudo plugin loaded inside a root process cannot meaningfully constrain root anyway — root can run the command directly, rewrite `/etc/sudo.conf`, or unload the plugin. Gating root would add no security while breaking legitimate root-context automation that shells out through sudo: nix-darwin / home-manager per-user activation runs as root and invokes `launchctl asuser <uid> sudo -u <user>` (invoking uid 0); the same pattern appears in launchd jobs and installer postinstall scripts, and these are non-interactive (no human to answer a prompt). So a uid-0 caller is allowed without a prompt, and the bypass is logged to the auth log (`syslog`/`LOG_AUTHPRIV`) so it is auditable rather than silent. The console gate still applies to every non-root caller — which is the entire population the gate can actually defend against.
 
-**Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache, so every privileged command re-prompts. The value is configurable via `services.sudowhat.timestampTimeout`; the module never sets `timestamp_type=global`.
+**Policy deference (console NOPASSWD skip).** The approval plugin runs on *every* `sudo` that sudoers authorizes — `NOPASSWD` does not bypass it — so without this, the console user would get a Touch ID sheet even for a command sudoers authorized `NOPASSWD`. sudowhat instead **defers to sudoers' own authentication decision**: sudo runs the PAM auth stack (where `pam_sudowhat` sets a process-local marker) only when it requires authentication, so an *absent* marker means sudoers waived it — a `NOPASSWD` rule, `Defaults !authenticate`, a root invoker, or a valid credential in the timestamp cache. On an absent marker (with `pam_sudowhat` still wired into `sudo_local`, which the plugin re-checks), the console user's prompt is **skipped and the command just runs**. This is an authorization-trust decision that inherits sudoers' choice rather than re-implementing it — no command allowlist, no drift. It is fail-safe in every uncertain direction: a present marker, an unverifiable chain, or `policyDeference = "off"` all result in a prompt, and a caller can only ever *force* a prompt by manipulating its environment, never suppress one. `services.sudowhat.echoDeferred` controls whether the skipped run still echoes user/path/command (default `off`/silent; `tty`; or `always`, which adds an stderr disclosure for scripted callers with no terminal). Turn the whole behavior off with `services.sudowhat.policyDeference = "off"`.
+
+**Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache, so every privileged command re-prompts. The value is configurable via `services.sudowhat.timestampTimeout`; the module never sets `timestamp_type=global`. Note this composes with policy deference: with a non-zero timeout, a second command within the window on the same terminal has a cached credential (auth stack skipped, marker absent) and so runs with no sheet — sudo's normal grace after the first real factor. Keep the default `0` for a Touch ID sheet on every command.
 
 **Verify-code emphasis:** the code echoed to the controlling terminal is bold by default; `services.sudowhat.verifyStyle` selects a different emphasis (`plain`, `bold`, a bold-plus-color — `red`, `green`, `yellow`, `blue`, `magenta`, `cyan` — or `random`, which rotates among a curated color subset per invocation) baked into the signed bundle at build time. It is purely cosmetic — never a trust signal, since the anchor is the code matching the system-rendered Touch ID sheet — and the value selects from a fixed, reviewed set of escape sequences rather than a free-form string, so it adds no injection surface. `NO_COLOR` or `TERM=dumb` in the invoking environment still force plain at runtime regardless of the build-time setting.
 
@@ -187,10 +198,12 @@ sudowhat decides *where* a caller may authenticate by its security session — a
 
 | Caller | Default (`allowNonConsole = false`) | With `allowNonConsole = true` |
 |---|---|---|
-| Local console (GUI) user | Touch ID prompt showing the command | Touch ID prompt showing the command |
+| Local console (GUI) user | Touch ID prompt showing the command¹ | Touch ID prompt showing the command¹ |
 | Interactive remote session (e.g. SSH) | Denied without a prompt | Password / smartcard on the caller's own terminal; no prompt on the console |
 | Unattended job (launchd / cron, no GUI) | Denied without a prompt | Runs if a sudoers rule authorizes it (e.g. `NOPASSWD`); no prompt on the console |
 | Root (uid 0) | Allowed, logged to the auth log | Allowed, logged to the auth log |
+
+¹ Skipped when sudoers waived authentication for the command — a `NOPASSWD` rule, `Defaults !authenticate`, or a cached credential — so the command just runs (policy deference, on by default; see "How it works"). Turn off with `services.sudowhat.policyDeference = "off"`.
 
 In every case a non-console caller authenticates (if at all) through sudo's own machinery on its own session — it is never shown a biometric / Authorization Services sheet, which would render on the console user's screen. `allowNonConsole` grants no authority on its own: sudoers still decides who may run what.
 

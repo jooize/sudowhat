@@ -341,6 +341,119 @@ static void test_echo_color_gate(void) {
     unlink(path);
 }
 
+/* Policy deference: the pam_sudowhat auth marker tells the plugin whether sudo
+ * ran the PAM auth stack (i.e. sudoers required authentication). These pin the
+ * two security-critical pure helpers and the build defaults. */
+
+static void test_integrity_line_detection(void) {
+    /* sudowhat_text_has_integrity_line confirms pam_sudowhat's auth entry is
+     * actually wired into sudo_local at OUR baked module path — the premise the
+     * absent-marker skip relies on. Present in BOTH install variants; anything
+     * else -> NO, so an unverifiable chain fails toward prompting. */
+    NSString *pam = @SUDOWHAT_PAM_PATH;
+
+    NSString *permit = [NSString stringWithFormat:
+        @"auth requisite %@\nauth sufficient pam_permit.so\n", pam];
+    OK(sudowhat_text_has_integrity_line(permit),
+       "default console-only variant has the integrity line");
+
+    NSString *gate = [NSString stringWithFormat:
+        @"auth requisite %@\nauth sufficient %@ console-gate\n", pam, pam];
+    OK(sudowhat_text_has_integrity_line(gate),
+       "gate variant has the integrity line");
+
+    NSString *none = @"auth sufficient pam_permit.so\n";
+    OK(!sudowhat_text_has_integrity_line(none), "no integrity line -> NO");
+
+    NSString *wrongPath = @"auth requisite /usr/local/lib/pam/evil.so\n";
+    OK(!sudowhat_text_has_integrity_line(wrongPath),
+       "requisite line at a different module path -> NO");
+
+    NSString *wrongFlag = [NSString stringWithFormat:@"auth sufficient %@\n", pam];
+    OK(!sudowhat_text_has_integrity_line(wrongFlag),
+       "our path but control flag is not requisite -> NO");
+
+    NSString *fourTok = [NSString stringWithFormat:
+        @"auth requisite %@ console-gate\n", pam];
+    OK(!sudowhat_text_has_integrity_line(fourTok),
+       "requisite line with a trailing arg is not the integrity line -> NO");
+
+    NSString *commented = [NSString stringWithFormat:@"# auth requisite %@\n", pam];
+    OK(!sudowhat_text_has_integrity_line(commented),
+       "commented-out integrity line does not count -> NO");
+
+    NSString *spaced = [NSString stringWithFormat:
+        @"\n  auth\trequisite\t%@   \n# a comment\n", pam];
+    OK(sudowhat_text_has_integrity_line(spaced),
+       "tabs/extra spaces/blank lines/comments tolerated");
+
+    OK(!sudowhat_text_has_integrity_line(nil), "nil content -> NO");
+    OK(!sudowhat_text_has_integrity_line(@""), "empty content -> NO");
+}
+
+static void test_defer_decision(void) {
+    /* Fail-safe in every uncertain direction: only marker-absent AND
+     * chain-intact AND deference-on skips the prompt. */
+    OK(!sw_defer_decision(NO, NO, YES),
+       "deference off -> prompt even when everything else says skip");
+    OK(!sw_defer_decision(NO, YES, YES), "deference off -> prompt regardless");
+
+    OK(!sw_defer_decision(YES, YES, YES),
+       "marker present (sudo ran the auth stack) -> prompt");
+    OK(!sw_defer_decision(YES, YES, NO),
+       "marker present, chain unverified -> prompt");
+    OK(!sw_defer_decision(YES, NO, NO),
+       "marker absent but integrity line not wired -> prompt (absence untrusted)");
+    OK(sw_defer_decision(YES, NO, YES),
+       "marker absent AND integrity line wired -> SKIP (sudoers waived auth)");
+}
+
+static void test_deferred_echo_target(void) {
+    /* off never echoes; tty echoes only with a controlling terminal (preserving
+     * the tty-or-nothing rule); always adds the opt-in stderr disclosure when
+     * there is no tty. Mode passed explicitly, so all rows are testable. */
+    OK(sw_deferred_echo_target_for(SW_ED_off, YES) == SW_DEFERRED_ECHO_NONE,
+       "off + tty -> none");
+    OK(sw_deferred_echo_target_for(SW_ED_off, NO) == SW_DEFERRED_ECHO_NONE,
+       "off + no tty -> none");
+    OK(sw_deferred_echo_target_for(SW_ED_tty, YES) == SW_DEFERRED_ECHO_TTY,
+       "tty + tty -> tty");
+    OK(sw_deferred_echo_target_for(SW_ED_tty, NO) == SW_DEFERRED_ECHO_NONE,
+       "tty + no tty -> none (invariant preserved, no stderr fallback)");
+    OK(sw_deferred_echo_target_for(SW_ED_always, YES) == SW_DEFERRED_ECHO_TTY,
+       "always + tty -> tty (hardened path wins)");
+    OK(sw_deferred_echo_target_for(SW_ED_always, NO) == SW_DEFERRED_ECHO_STDERR,
+       "always + no tty -> stderr (opt-in scripted disclosure)");
+}
+
+static void test_policy_deference_defaults(void) {
+    /* The test binary is compiled with no -DSW_POLICY_DEFERENCE / -DSW_ECHO_DEFERRED,
+     * so it sees the header defaults: deference on, deferred echo off (silent). */
+    OK(sw_policy_deference_mode == SW_PD_on,
+       "default build resolves policyDeference to on");
+    OK(sw_echo_deferred_mode == SW_ED_off,
+       "default build resolves echoDeferred to off");
+}
+
+static void test_emit_deferred_context_off_default(void) {
+    /* With the default echoDeferred=off, emit_deferred_context is a no-op even
+     * when a controlling terminal is present — the safe default is silent. */
+    sw_invoking_ctx saved = g_inv;
+
+    char path[256];
+    sw_tmpl(path, sizeof path, "deferred");
+    int fd = mkstemp(path);
+    OK(fd >= 0, "mkstemp created a temp file for the deferred-echo test");
+    if (fd >= 0) close(fd);
+
+    g_inv = (sw_invoking_ctx){ .have_tty = 1 };
+    emit_deferred_context(path, @"root", @"/tmp", @"/bin/echo hi");
+    EQ(sw_read_utf8(path), @"", "echoDeferred=off writes nothing even with a tty");
+    unlink(path);
+
+    g_inv = saved;
+}
+
 static void test_nonce_edge_sizes(void) {
     char b1[1] = { '?' };
     generate_verify_nonce(b1, sizeof b1);
@@ -372,6 +485,11 @@ int main(void) {
         test_echo_command_mode();
         test_emit_full_context_to_tty();
         test_echo_color_gate();
-        SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel, command-echo)");
+        test_integrity_line_detection();
+        test_defer_decision();
+        test_deferred_echo_target();
+        test_policy_deference_defaults();
+        test_emit_deferred_context_off_default();
+        SW_SUMMARY("plugin internals (find_kv, gate-variant, nonce, verify-channel, command-echo, policy-deference)");
     }
 }

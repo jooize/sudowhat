@@ -48,4 +48,23 @@
  * (nix module emits it, pam_sudowhat branches on it, the plugin checks it). */
 #define SUDOWHAT_GATE_ARG       "console-gate"
 
+/* Policy-deference marker. pam_sudowhat's auth entry (either role) sets this
+ * environment variable when it runs, and the approval plugin reads it in
+ * check() to learn whether sudo entered the PAM auth conversation for THIS
+ * invocation. sudo runs the auth stack only when sudoers requires
+ * authentication; NOPASSWD, a root invoker, `Defaults !authenticate`, and a
+ * valid timestamp cache all skip it entirely, so the module never runs and the
+ * marker stays absent. Absent (with the integrity line still installed) means
+ * "sudoers waived authentication" — the signal the approval plugin uses to skip
+ * its own Touch ID prompt so a NOPASSWD command just runs.
+ *
+ * setenv() modifies this sudo process's environ; the approval plugin (same
+ * process, later in the same run) reads it with getenv(). It is process-local
+ * and never crosses a trust boundary: a caller can pre-set it in sudo's
+ * inherited environment, but that only FORCES a prompt (marker present ->
+ * prompt), the fail-safe direction — it can never clear the marker once
+ * pam_sudowhat has run. One definition, two readers (pam sets it, the plugin
+ * reads it). See docs/design-noncon-sudo.md ("policy deference"). */
+#define SUDOWHAT_AUTH_MARKER_ENV "SUDOWHAT_AUTH_RAN"
+
 #endif
