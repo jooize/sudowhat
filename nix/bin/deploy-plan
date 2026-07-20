@@ -72,7 +72,10 @@ if [[ -r "${FLAKE}" ]]; then
   pin_line="$(grep -F "${REPO_MATCH}" "${FLAKE}" 2>/dev/null | head -n1 || true)"
   if [[ -n "${pin_line}" ]]; then
     pinned_rev="$(printf '%s\n' "${pin_line}" | grep -oE 'rev=[0-9a-f]{40}' | head -n1 | cut -d= -f2 || true)"
-    pinned_ref="$(printf '%s\n' "${pin_line}" | grep -oE 'ref=refs/tags/[^&"]+' | head -n1 | cut -d= -f2 || true)"
+    # Match ANY current ref (a release tag OR a branch, e.g. a hardware-test
+    # pin), so the emitted sed swaps the whole ref= token to the target tag ref
+    # instead of falling back to the manual "edit the flake" note.
+    pinned_ref="$(printf '%s\n' "${pin_line}" | grep -oE 'ref=[^&"]+' | head -n1 | cut -d= -f2 || true)"
   fi
 fi
 

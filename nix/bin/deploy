@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# deploy -- bump the nix-darwin flake's pin of this repo to the latest release
+# tag and rebuild.
+#
+# Interactive sibling of deploy-plan: instead of only printing the commands, it
+# shows the exact commands that will run as root, asks for confirmation, and
+# executes them via sudo. Use deploy-plan for copy-paste output only.
+#
+# sudowhat is pinned by release tag AND rev (ref=refs/tags/vX.Y.Z&rev=<sha>), so
+# this bumps BOTH to the latest release tag reachable from HEAD -- never a raw,
+# untagged HEAD. It refuses a dirty tree (uncommitted changes are in no tag).
+set -euo pipefail
+IFS=$'\n\t'
+
+usage() {
+  cat <<'EOF'
+usage: deploy [--yes] [--dry-run] [-h|--help]
+
+Bumps the sudowhat input in the nix-darwin flake to the latest release tag
+reachable from HEAD (ref=refs/tags/vX.Y.Z + rev), then runs darwin-rebuild.
+Both steps run under sudo, after showing the exact commands and confirming.
+
+  --yes      skip the confirmation prompt (still prints the commands)
+  --dry-run  print the commands, run nothing
+
+Env:
+  NIX_DARWIN_FLAKE   path to the system flake (default /etc/nix-darwin/flake.nix)
+EOF
+}
+
+YES=0 DRY_RUN=0
+for arg in "$@"; do
+  case "$arg" in
+    --yes) YES=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'error: unknown argument: %s\n' "$arg" >&2; usage >&2; exit 1 ;;
+  esac
+done
+
+# Colour, but only when stdout is a terminal (piping/redirecting stays clean).
+if [[ -t 1 ]]; then
+  C_OFF=$'\033[0m'; C_B=$'\033[1m'; C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_CYN=$'\033[36m'
+else
+  C_OFF=; C_B=; C_DIM=; C_RED=; C_GRN=; C_YEL=; C_CYN=
+fi
+
+# macOS-only project (Touch ID / LAContext sudo plugin): the system flake is
+# always nix-darwin. NIX_DARWIN_FLAKE overrides the path.
+FLAKE="${NIX_DARWIN_FLAKE:-/etc/nix-darwin/flake.nix}"
+REPO_MATCH='sudowhat?ref='   # identifies this repo's input line in the flake
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  printf '%serror: not inside a git repository%s\n' "$C_RED" "$C_OFF" >&2
+  exit 1
+}
+cd "${repo_root}" || exit 1
+
+# Refuse a dirty tree: uncommitted changes are in no tag, so a deploy would
+# misrepresent what is actually running.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  printf '%serror: working tree is dirty -- commit and tag a release first.%s\n' \
+    "$C_RED$C_B" "$C_OFF" >&2
+  exit 1
+fi
+
+head="$(git rev-parse HEAD)"
+
+# Deploy target = latest release tag reachable from HEAD (highest semver).
+target_tag="$(git tag --merged HEAD 2>/dev/null | grep -E '^v[0-9]' | sort -V | tail -n1 || true)"
+[[ -n "${target_tag}" ]] || {
+  printf '%serror: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first.%s\n' \
+    "$C_RED" "$C_OFF" >&2
+  exit 1
+}
+target_rev="$(git rev-list -n1 "${target_tag}")"
+
+# The tagged release's declared version, for a tag/version consistency check.
+tag_version="$(git show "${target_tag}:nix/package.nix" 2>/dev/null \
+  | grep -oE 'version *= *"[0-9.]+"' | head -n1 | grep -oE '[0-9]+(\.[0-9]+)*' || true)"
+
+[[ -r "${FLAKE}" ]] || {
+  printf '%serror: cannot read %s -- set NIX_DARWIN_FLAKE.%s\n' "$C_RED" "${FLAKE}" "$C_OFF" >&2
+  exit 1
+}
+pin_line="$(grep -F "${REPO_MATCH}" "${FLAKE}" | head -n1 || true)"
+[[ -n "${pin_line}" ]] || {
+  printf '%serror: no sudowhat input pin found in %s.%s\n' "$C_RED" "${FLAKE}" "$C_OFF" >&2
+  exit 1
+}
+# Match ANY current ref (a release tag OR a branch, e.g. a hardware-test pin),
+# plus the rev. The whole ref= token is swapped to the target tag ref.
+pin_ref_kv="$(printf '%s\n' "${pin_line}" | grep -oE 'ref=[^&"]+' | head -n1 || true)"
+pinned_rev="$(printf '%s\n' "${pin_line}" | grep -oE 'rev=[0-9a-f]{40}' | head -n1 | cut -d= -f2 || true)"
+[[ -n "${pinned_rev}" ]] || {
+  printf '%serror: no rev= pin for sudowhat found in %s.%s\n' "$C_RED" "${FLAKE}" "$C_OFF" >&2
+  exit 1
+}
+
+# Header (mirrors deploy-plan). C_DIM is the dim ATTRIBUTE and does not reset the
+# foreground, so reset with C_OFF before each colour switch or it bleeds.
+printf '%sTarget:%s  %s%s%s  %s(%s)%s\n' \
+  "$C_DIM" "$C_OFF" "$C_CYN" "${target_tag}" "$C_OFF" \
+  "$C_DIM" "${target_rev:0:10}" "$C_OFF"
+printf '%sHEAD:%s    %s%s%s' "$C_DIM" "$C_OFF" "$C_CYN" "${head:0:10}" "$C_OFF"
+if [[ "${head}" == "${target_rev}" ]]; then
+  printf '   %s(%s== %s%s)%s\n' "$C_DIM" "$C_OFF$C_GRN" "${target_tag}" "$C_OFF$C_DIM" "$C_OFF"
+else
+  ahead="$(git rev-list --count "${target_rev}..HEAD" 2>/dev/null || echo '?')"
+  printf '   %s(%s%s commit(s) after %s -- unreleased%s)%s\n' \
+    "$C_DIM" "$C_OFF$C_YEL" "${ahead}" "${target_tag}" "$C_OFF$C_DIM" "$C_OFF"
+fi
+printf '%sPinned:%s  %s%s%s  %s%s  (%s)%s\n' \
+  "$C_DIM" "$C_OFF" "$C_CYN" "${pinned_rev:0:10}" "$C_OFF" \
+  "$C_DIM" "${pin_ref_kv:-ref=?}" "${FLAKE}" "$C_OFF"
+if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
+  printf '%sWARNING: tag %s != its nix/package.nix version %s.%s\n' \
+    "$C_YEL$C_B" "${target_tag}" "${tag_version}" "$C_OFF"
+fi
+printf '\n'
+
+if [[ "${pinned_rev}" == "${target_rev}" ]]; then
+  printf '%sAlready in sync. Nothing to deploy.%s\n' "$C_GRN$C_B" "$C_OFF"
+  exit 0
+fi
+
+# Literal ref+rev swap via perl. \Q..\E quotemeta-escapes the pattern (so the
+# dots in a version match literally); s{}{} bracket delimiters avoid clashing
+# with the slashes in refs/tags and sidestep the literal `&` between ref and rev
+# that a sed s|..&..| form would need escaped. Only rewrite ref if one was found.
+subst="s{\\Q${pin_ref_kv}\\E}{ref=refs/tags/${target_tag}}g; s{\\Qrev=${pinned_rev}\\E}{rev=${target_rev}}g"
+[[ -n "${pin_ref_kv}" ]] || subst="s{\\Qrev=${pinned_rev}\\E}{rev=${target_rev}}g"
+PIN_CMD=(perl -i -pe "${subst}" -- "${FLAKE}")
+REBUILD_CMD=(darwin-rebuild switch --flake "$(dirname "${FLAKE}")")
+
+printf '%sWill run as root:%s\n' "$C_B" "$C_OFF"
+printf '  %ssudo' "$C_CYN"; printf ' %q' "${PIN_CMD[@]}"; printf '%s\n' "$C_OFF"
+printf '  %ssudo' "$C_CYN"; printf ' %q' "${REBUILD_CMD[@]}"; printf '%s\n' "$C_OFF"
+printf '\n'
+
+if (( DRY_RUN )); then
+  printf '%sDry run -- nothing executed.%s\n' "$C_YEL" "$C_OFF"
+  exit 0
+fi
+
+if (( ! YES )); then
+  if [[ ! -t 0 ]]; then
+    printf '%serror: no tty for confirmation -- pass --yes to proceed non-interactively.%s\n' \
+      "$C_RED" "$C_OFF" >&2
+    exit 2
+  fi
+  printf '%sProceed? [y/N]%s ' "$C_B" "$C_OFF"
+  read -r answer
+  case "${answer}" in
+    y|Y|yes|YES) ;;
+    *) printf '%sAborted.%s\n' "$C_YEL" "$C_OFF"; exit 2 ;;
+  esac
+fi
+
+sudo "${PIN_CMD[@]}"
+printf '%s\xe2\x9c\x93 pin updated to %s (%s)%s\n' "$C_GRN" "${target_tag}" "${target_rev:0:10}" "$C_OFF"
+sudo "${REBUILD_CMD[@]}"
+printf '%s\xe2\x9c\x93 rebuild complete%s\n' "$C_GRN" "$C_OFF"
