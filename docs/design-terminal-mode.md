@@ -42,8 +42,8 @@ plaintext password in-plugin is complex and dangerous, and unnecessary).
 ```
 $ sudo systemctl restart nginx
 sudowhat: user: root                    <- audit plugin open(), BEFORE auth
-sudowhat: path: systemctl               <- as-typed (see "resolved path" below)
-sudowhat: command: systemctl restart nginx
+sudowhat: directory: /etc/nginx         <- the invoking cwd (user_info["cwd"])
+sudowhat: command: systemctl restart nginx  <- as-typed (see "resolved path" below)
 Password: ****                          <- sudo's native PAM, on the terminal
 sudowhat: will exec /run/.../systemctl restart nginx   <- resolved last-look (optional)
 <runs>
