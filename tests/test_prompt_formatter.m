@@ -278,12 +278,12 @@ static void test_format_basic_exact_selfcontained(void) {
 static void test_format_path_line(void) {
     NSString *out = fmt(@"/bin/echo", @"root", @"/tmp", @"AB12",
                         @[@"echo"], SWPromptStyleSystemSheet);
-    OK([out containsString:@"User: root\nPath: /tmp\nCommand: /bin/echo\n\n"],
-       "cwd rendered on its own Path line, between User and Command");
-    /* no cwd -> no Path line at all */
+    OK([out containsString:@"User: root\nDirectory: /tmp\nCommand: /bin/echo\n\n"],
+       "cwd rendered on its own Directory line, between User and Command");
+    /* no cwd -> no Directory line at all */
     NSString *noPath = fmt(@"/bin/echo", @"root", nil, @"AB12",
                            @[@"echo"], SWPromptStyleSystemSheet);
-    OK(![noPath containsString:@"Path:"], "absent cwd omits the Path line");
+    OK(![noPath containsString:@"Directory:"], "absent cwd omits the Directory line");
 }
 
 static void test_format_argv0_dedup(void) {
@@ -337,7 +337,7 @@ static void test_format_path_overflow(void) {
     NSString *longCwd = [@"/" stringByAppendingString:rep(@"c", 300)];
     NSString *out = fmt_ov(@"/bin/echo", @"root", longCwd, @"X", @[@"echo"],
                            SWPromptStyleSystemSheet, &ov);
-    OK([out containsString:@"Path: (see terminal)\n"], "long cwd -> (see terminal)");
+    OK([out containsString:@"Directory: (see terminal)\n"], "long cwd -> (see terminal)");
     OK(ov.path && !ov.user && !ov.command, "overflow flags path only");
 }
 

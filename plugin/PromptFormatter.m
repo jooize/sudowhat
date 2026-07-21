@@ -258,13 +258,13 @@
     BOOL pathOverflow = (pathVal != nil && pathVal.length > kMaxCwdDisplay);
     NSString *pathShown = pathVal ? (pathOverflow ? kSeeTerminal : pathVal) : nil;
 
-    /* Layout: header \n\n verify \n\n "User: "u \n ["Path: "p \n] "Command: "c
-     *         \n\n bottom. Fixed labels are 6/6/9 chars. */
+    /* Layout: header \n\n verify \n\n "User: "u \n ["Directory: "p \n] "Command: "c
+     *         \n\n bottom. Fixed labels are 6/11/9 chars. */
     NSUInteger overhead =
         header.length + 2
         + verifyLine.length + 2
         + 6 + userShown.length + 1
-        + (pathShown ? (6 + pathShown.length + 1) : 0)
+        + (pathShown ? (11 + pathShown.length + 1) : 0)
         + 9
         + 2 + bottomReserve;
     NSUInteger cmdBudget = (kMaxTotal > overhead) ? kMaxTotal - overhead : 0;
@@ -283,10 +283,10 @@
 
     /* escapeControlChars scrubs newlines and Unicode line/paragraph separators
      * from every value, so the blank lines here are unambiguously ours: no
-     * displayed value can forge an extra "User:"/"Path:"/"Command:" line. */
+     * displayed value can forge an extra "User:"/"Directory:"/"Command:" line. */
     NSMutableString *out = [NSMutableString stringWithCapacity:kMaxTotal];
     [out appendFormat:@"%@\n\n%@\n\nUser: %@\n", header, verifyLine, userShown];
-    if (pathShown) [out appendFormat:@"Path: %@\n", pathShown];
+    if (pathShown) [out appendFormat:@"Directory: %@\n", pathShown];
     [out appendFormat:@"Command: %@\n\n%@", cmdShown, bottom];
     return out;
 }

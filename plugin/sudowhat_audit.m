@@ -189,6 +189,22 @@ static void sw_audit_write_tty(const char *ttyPath, NSString *block) {
     close(fd);
 }
 
+/* Whether the invoking environment permits ANSI emphasis on the tty display —
+ * the audit-plugin twin of the approval plugin's sw_color_allowed(). Cosmetic,
+ * so reading the (spoofable) captured submit_envp is safe: the worst a liar
+ * gains is the wrong emphasis, never a security effect (the trust anchor is the
+ * verify code matching the system-rendered sheet, which cannot be coloured).
+ * Off when NO_COLOR is present at any value (no-color.org) or TERM is
+ * absent/empty/"dumb". isatty() in sw_audit_write_tty is the authoritative
+ * final gate, so a redirect or non-tty always renders plain regardless. */
+static BOOL sw_audit_color_allowed(char * const envp[]) {
+    if (find_kv(envp, "NO_COLOR") != NULL) return NO;
+    const char *term = find_kv(envp, "TERM");
+    if (term == NULL || term[0] == '\0') return NO;
+    if (strcmp(term, "dumb") == 0) return NO;
+    return YES;
+}
+
 static int sudowhat_audit_open(unsigned int version,
                                sudo_conv_t conversation,
                                sudo_printf_t plugin_printf,
@@ -199,7 +215,7 @@ static int sudowhat_audit_open(unsigned int version,
                                char * const submit_envp[],
                                char * const plugin_options[],
                                const char **errstr) {
-    (void)conversation; (void)plugin_printf; (void)submit_envp;
+    (void)conversation; (void)plugin_printf;
     (void)plugin_options; (void)errstr;
 
     /* Return convention for an audit open(): 1 = loaded, 0 = decline/unload
@@ -255,21 +271,31 @@ static int sudowhat_audit_open(unsigned int version,
         NSString *userLine = (runas && runas[0] != '\0')
             ? sw_audit_escape(runas) : @"root";
 
-        /* Path shown is the invoking cwd where execve will run (matches the
-         * approval sheet's Path line, which is the cwd, not a binary path).
+        /* Directory shown is the invoking cwd where execve will run (matches the
+         * approval sheet's Directory line, the cwd, not a binary path).
          * command_info["cwd"] does not exist yet at audit open(); user_info's cwd
-         * is the honest pre-resolution value. Absent -> omit the Path line. */
+         * is the honest pre-resolution value. Absent -> omit the Directory line. */
         const char *cwd = find_kv(user_info, "cwd");
-        NSString *pathLine = (cwd && cwd[0] != '\0') ? sw_audit_escape(cwd) : nil;
+        NSString *dirLine = (cwd && cwd[0] != '\0') ? sw_audit_escape(cwd) : nil;
 
         if (userLine == nil || commandLine == nil) return 1;   /* alloc failure */
 
+        /* Bold the label word purely for readability (our own fixed bytes, never
+         * user input — the values are escape_core-escaped). Gated by the same env
+         * opt-outs as the approval plugin's verify code (NO_COLOR / TERM), with
+         * sw_audit_write_tty's isatty() as the final gate, so a redirect or a
+         * non-tty always renders plain. Restores the emphasis the pre-v0.10.0
+         * emit_full_context applied before terminal display moved here. */
+        BOOL color = sw_audit_color_allowed(submit_envp);
+        NSString *lb = color ? @"\033[1m" : @"";
+        NSString *lo = color ? @"\033[0m" : @"";
+
         NSMutableString *block = [NSMutableString string];
-        [block appendFormat:@"sudowhat: user: %@\n", userLine];
-        if (pathLine.length > 0) {
-            [block appendFormat:@"sudowhat: path: %@\n", pathLine];
+        [block appendFormat:@"sudowhat: %@user:%@ %@\n", lb, lo, userLine];
+        if (dirLine.length > 0) {
+            [block appendFormat:@"sudowhat: %@directory:%@ %@\n", lb, lo, dirLine];
         }
-        [block appendFormat:@"sudowhat: command: %@\n", commandLine];
+        [block appendFormat:@"sudowhat: %@command:%@ %@\n", lb, lo, commandLine];
 
         sw_audit_write_tty("/dev/tty", block);
         return 1;
