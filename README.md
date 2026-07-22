@@ -44,6 +44,19 @@ The prompt binds to *your* user account, not "System Administrator", so your pas
 
 Build, sign, install. Requires macOS 15 or later — the prompt uses a LocalAuthentication policy (`…BiometricsOrCompanion`) added in macOS 15 — and the Xcode Command Line Tools.
 
+> [!WARNING]
+> **Installing this edits sudo's own configuration — do it deliberately.** It
+> writes `/etc/sudo.conf`, `/etc/pam.d/sudo_local`, and `/etc/sudoers.d/sudowhat`
+> (on Linux, the audit plugin needs `/etc/sudo.conf`). A malformed sudo/PAM
+> config can make `sudo` refuse to run — and you may need `sudo` to fix it. The
+> installer validates its edits and rolls back on failure, but before you run it,
+> **keep a separate root shell open** (`sudo -s` in another terminal, or a root
+> console / VM snapshot) so a broken `sudo` is always recoverable. On Linux in
+> particular, adding *any* `Plugin` line to `/etc/sudo.conf` disables sudo's
+> default sudoers auto-load, so the file must re-declare the stock `sudoers.so`
+> plugins or every `sudo` fails — the Nix module and the sample config do this;
+> a hand-edited file must too.
+
 ```sh
 git clone https://github.com/jooize/sudowhat
 cd sudowhat
