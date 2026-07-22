@@ -5,12 +5,15 @@ edition = "2024"
 publish = false
 description = "Anti-spoofing escape/quote/command-line core for sudowhat (C ABI staticlib)"
 
-# staticlib: the macOS audit bundle (an ObjC shell) links this .a directly; the
-# same crate is the Phase-2 Linux plugin's core. No external dependencies, so
-# the build needs no registry access and is reproducible offline.
+# staticlib: the macOS audit bundle (an ObjC shell) links this .a directly. lib
+# (rlib): the pure-Rust Linux audit plugin (linux/sudowhat_audit) path-depends on
+# this crate and calls its escape/quote/command-line functions directly — same
+# language, no FFI round-trip. Both artifacts fall out of one `cargo build`; the
+# .a keeps its filename so the macOS Makefile is unchanged. No external
+# dependencies, so the build needs no registry access and is reproducible offline.
 [lib]
 name = "escape_core"
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "lib"]
 
 # panic = "abort": a panic must never unwind across the C ABI (that is UB). The
 # code below is written to be panic-free; abort is the hard backstop. Set on

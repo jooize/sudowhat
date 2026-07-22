@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Post-install sanity check. We deliberately do NOT drive sudo through an
 # end-to-end auth here: sudowhat's approval plugin pops a system-trusted
 # Touch ID dialog and forcing that during `make install` is hostile.

@@ -55,7 +55,7 @@ port verbatim.
    `@convention(c)`). The one part Swift would clean up, `PromptFormatter`'s
    string handling, is already memory-safe via `NSString`/Foundation.
 
-4. **No automated test oracle for the trust-critical path.** `install/self-test.sh`
+4. **No automated test oracle for the trust-critical path.** `install/self-test.bash`
    checks wiring (the `sudo.conf` line, file modes, PAM config), not the auth /
    EUID / TOCTOU sequence. Reimplementing audited, working security code with
    no equivalence harness is high risk for an aesthetic gain.

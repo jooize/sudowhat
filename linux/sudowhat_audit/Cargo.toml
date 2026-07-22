@@ -1,0 +1,33 @@
+[package]
+name = "sudowhat_audit"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "sudo audit plugin (Linux): terminal command display before authentication"
+
+# cdylib: sudo dlopen()s this as a plugin. Linux cargo emits it as
+# libsudowhat_audit.so; the install step / nix package renames it to
+# sudowhat_audit.so (the name /etc/sudo.conf references). Building on the macOS
+# dev host produces a .dylib instead — not shippable, but it validates the
+# repr(C) struct, the #[no_mangle] static export, and the FFI shape compile
+# cleanly (see the Cargo `cargo build` note in docs/design-linux-port.md).
+[lib]
+name = "sudowhat_audit"
+crate-type = ["cdylib"]
+
+# The escape/quote/command-line core, shared byte-for-byte with the macOS audit
+# plugin. A path dependency (no registry, no version): escape_core has zero
+# external deps, so the whole build is offline and reproducible with a pinned
+# Cargo.lock. This crate adds no dependencies of its own.
+[dependencies]
+escape_core = { path = "../../shared/escape_core" }
+
+# panic = "abort": a panic must never unwind across the C ABI sudo calls us over
+# (that is UB). The code is written to be panic-free by construction; abort is
+# the hard backstop. Release only — the dev/test profile keeps unwinding so the
+# in-crate `cargo test` harness (the pure display.rs unit tests) still works.
+# A path dependency's own profile is ignored, so escape_core inherits this on
+# release too.
+[profile.release]
+panic = "abort"
+opt-level = 2

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Install sudowhat. Idempotent. Must run as root.
 #
 # On any failure after a partial change, rolls back so the system is left
@@ -16,12 +16,12 @@ FORCE=0
 for arg in "$@"; do
     case "$arg" in
         --force) FORCE=1 ;;
-        *) echo "install.sh: unknown arg '$arg'" >&2; exit 2 ;;
+        *) echo "install.bash: unknown arg '$arg'" >&2; exit 2 ;;
     esac
 done
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "install.sh: must run as root" >&2
+    echo "install.bash: must run as root" >&2
     exit 1
 fi
 
@@ -39,7 +39,7 @@ SUDOERS_D="/etc/sudoers.d/sudowhat"
 PAM_LOCAL="/etc/pam.d/sudo_local"
 
 if [ ! -f "$PLUGIN_SRC" ] || [ ! -f "$AUDIT_SRC" ] || [ ! -f "$PAM_SRC" ]; then
-    echo "install.sh: build artifacts missing; run 'make sign' first" >&2
+    echo "install.bash: build artifacts missing; run 'make sign' first" >&2
     exit 1
 fi
 
@@ -64,7 +64,7 @@ if [ "$FORCE" -ne 1 ]; then
     done
     if [ "${#CONFLICTS[@]}" -gt 0 ]; then
         cat >&2 <<EOF
-install.sh: refusing to overwrite /etc files managed by another tool.
+install.bash: refusing to overwrite /etc files managed by another tool.
 
 The following paths are symlinks into /nix/store, which means a
 configuration manager (nix-darwin, home-manager, or similar) owns
@@ -99,7 +99,7 @@ fi
 ROLLBACK=()
 add_rollback() { ROLLBACK+=("$1"); }
 rollback() {
-    echo "install.sh: rolling back" >&2
+    echo "install.bash: rolling back" >&2
     for ((i=${#ROLLBACK[@]}-1; i>=0; i--)); do
         eval "${ROLLBACK[i]}" || true
     done
@@ -163,7 +163,7 @@ fi
 install -m 0644 "$REPO_DIR/config/pam.d/sudo_local.sample" "$PAM_LOCAL"
 
 # (6) Self-test. Failure here triggers rollback via trap.
-"$REPO_DIR/install/self-test.sh"
+"$REPO_DIR/install/self-test.bash"
 
 trap - ERR
 echo "sudowhat: installed"

@@ -1,0 +1,27 @@
+# /etc/sudo.conf for sudowhat on Linux (terminal command display).
+#
+# CRITICAL — the sudoers lines below are NOT optional. sudo auto-loads its
+# default sudoers policy ONLY when /etc/sudo.conf contains no Plugin line at all
+# (see sudo.conf(5): the defaults apply only when there are no Plugin lines). The
+# moment you add the sudowhat audit line, that auto-load stops — so the three
+# stock sudoers plugins MUST be listed here too, or sudo loses its policy and
+# every `sudo` fails. A bare `sudoers.so` resolves relative to sudo's own plugin
+# directory, so those three need no absolute path. sudo.conf has no include
+# directive: write the file whole, exactly like this.
+#
+# TRUST: sudo refuses to read this file, or load a plugin, unless it is owned by
+# user-ID 0 and writable only by its owner (sudo.conf(5)) — fail-closed. That
+# root-owned, non-writable enforcement IS the whole Linux trust model. There is
+# no code-signing anchor and no tamper-evidence here (unlike macOS); the audit
+# plugin is display = disclosure, never authentication. If it is absent or
+# misconfigured it shows nothing and never weakens sudo's own auth.
+
+Plugin sudoers_policy sudoers.so
+Plugin sudoers_io     sudoers.so
+Plugin sudoers_audit  sudoers.so
+
+# sudowhat: shows `user / directory / command` on the controlling terminal before
+# sudo's native password prompt. Its open() runs before any other plugin, so the
+# command is displayed first on every path. Adjust the path if you installed the
+# .so elsewhere.
+Plugin sudowhat_audit_plugin /usr/local/libexec/sudo/sudowhat_audit.so

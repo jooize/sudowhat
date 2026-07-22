@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Uninstall sudowhat. Idempotent. Must run as root.
 #
 # Removes the three bundles, both sudo.conf Plugin lines, the sudoers.d snippet,
@@ -8,7 +8,7 @@
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "uninstall.sh: must run as root" >&2
+    echo "uninstall.bash: must run as root" >&2
     exit 1
 fi
 

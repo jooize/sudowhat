@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Install only the sudowhat plugin and PAM bundles to /usr/local.
 # Does NOT touch /etc — prints the snippets you need to add yourself.
 #
@@ -19,7 +19,7 @@ PRINT_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --print) PRINT_ONLY=1 ;;
-        *) echo "install-binaries.sh: unknown arg '$arg'" >&2; exit 1 ;;
+        *) echo "install-binaries.bash: unknown arg '$arg'" >&2; exit 1 ;;
     esac
 done
 
@@ -32,7 +32,7 @@ AUDIT_DST="/usr/local/libexec/sudo/sudowhat_audit.so"
 PAM_DST="/usr/local/lib/pam/pam_sudowhat.so"
 
 if [ ! -f "$PLUGIN_SRC" ] || [ ! -f "$AUDIT_SRC" ] || [ ! -f "$PAM_SRC" ]; then
-    echo "install-binaries.sh: build artifacts missing; run 'make sign' first" >&2
+    echo "install-binaries.bash: build artifacts missing; run 'make sign' first" >&2
     exit 1
 fi
 
@@ -78,7 +78,7 @@ EOF
 fi
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "install-binaries.sh: must run as root (or use --print)" >&2
+    echo "install-binaries.bash: must run as root (or use --print)" >&2
     exit 1
 fi
 

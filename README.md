@@ -122,7 +122,7 @@ make print-install-binaries      # prints what install-binaries would do plus
                                  # the /etc snippets you need to add yourself
 ```
 
-`install.sh` refuses to overwrite `/etc` files that are symlinks into `/nix/store` (nix-darwin's signature), pointing you at one of the above flows. Override with `make install-force` if you really mean to clobber them.
+`install.bash` refuses to overwrite `/etc` files that are symlinks into `/nix/store` (nix-darwin's signature), pointing you at one of the above flows. Override with `make install-force` if you really mean to clobber them.
 
 ## How it works
 
@@ -249,6 +249,64 @@ make SUDOWHAT_TEAM_ID=XXXXXXXXXX DEVELOPER_NAME="Your Name" sign
 
 Bundles are signed with your Developer ID Application certificate. The team-identifier requirement is enforced at runtime: tampering breaks the signature, and replacement with a differently-signed binary is detected.
 
+## Linux (terminal command display)
+
+Linux has no Touch ID, so it gets the **display**, not the biometric. A sudo
+**audit plugin** — a single pure-Rust `.so` reusing the same anti-spoofing core
+as macOS — prints `user / directory / command` to your terminal *before* sudo's
+native `pam_unix` password prompt, so you read the exact command before you type
+your password:
+
+```
+$ sudo systemctl restart nginx
+sudowhat: user: root
+sudowhat: directory: /etc/nginx
+sudowhat: command: systemctl restart nginx
+[sudo] password for alice:
+```
+
+**Display-only, by design.** There is no verify code (no GUI sheet to bind one
+to), no approval plugin, and no PAM module — sudo's own authentication is
+untouched. The trust model is **sudo's own** enforcement: it refuses to load a
+plugin, or read `/etc/sudo.conf`, that is not owned by root and writable only by
+root (`sudo.conf(5)`), fail-closed. There is **no code-signing anchor and no
+tamper-evidence** on Linux (an attacker with root can swap the plugin) — Linux
+gets the UX, not the tamper-evidence. The plugin fails soft: no terminal, no
+command, or bad input means it shows nothing and never breaks sudo. Every token
+is shell-quoted and control-character escaped, written to `/dev/tty` only (never
+stderr), and the root invoker is exempt.
+
+**NixOS:**
+
+```nix
+{
+  inputs.sudowhat.url = "github:jooize/sudowhat";
+  # in your configuration:
+  imports = [ inputs.sudowhat.nixosModules.default ];
+  services.sudowhat.enable = true;
+}
+```
+
+The module writes `/etc/sudo.conf`. **Important:** on Linux, adding any `Plugin`
+line to `sudo.conf` stops sudo from auto-loading its default sudoers policy, so
+the file must re-declare the stock `sudoers.so` plugins alongside ours — the
+module (and `config/linux/sudo.conf.sample`) does this for you.
+
+**Manual install:**
+
+```sh
+make build-linux                 # builds linux/sudowhat_audit → a cdylib .so
+sudo make install-linux          # installs the .so, prints the /etc/sudo.conf to write
+```
+
+Then write `/etc/sudo.conf` from the printed snippet (or
+`config/linux/sudo.conf.sample`). Uninstall with `sudo make uninstall-linux`.
+
+This is Phase 2 (in progress); see `docs/design-linux-port.md`. It has not yet
+been exercised on a Linux host — the crate builds, its logic is unit-tested for
+byte-for-byte parity with the macOS display, and the on-hardware smoke tests are
+listed in the design note.
+
 ## Status
 
 | | |
@@ -256,6 +314,7 @@ Bundles are signed with your Developer ID Application certificate. The team-iden
 | Latest release | `v0.10.0` |
 | Tested on | macOS Tahoe (Darwin 25.4–25.5) |
 | Architecture | Apple silicon (arm64) |
+| Linux | Phase 2 in progress — audit-plugin display, native PAM password, no tamper-evidence (`docs/design-linux-port.md`) |
 | Signing | ad-hoc dev mode shipped; Developer ID release planned |
 
 ## Known limitations

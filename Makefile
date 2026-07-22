@@ -122,7 +122,8 @@ PAM_OBJS    = pam/pam_sudowhat.o \
 AUDIT_OBJS  = plugin/sudowhat_audit.o \
               build/audit_SignatureVerifier.o
 
-.PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit clean
+.PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit clean \
+        build-linux test-linux install-linux uninstall-linux
 
 TEST_CFLAGS = $(CFLAGS) -Itests
 TEST_FRAMEWORKS = -framework Foundation -framework CoreFoundation \
@@ -212,30 +213,30 @@ sign: all
 	fi
 
 install: sign
-	./install/install.sh
+	./install/install.bash
 
 # install-force: bypass the preflight that refuses to clobber /etc files
 # owned by another configuration manager (e.g. nix-darwin symlinks into
 # /nix/store). Use only when you know the override is what you want.
 install-force: sign
-	./install/install.sh --force
+	./install/install.bash --force
 
 # install-binaries: install only the .so bundles to /usr/local; leaves
 # /etc alone and prints the snippets the user must add themselves. For
 # users managing /etc declaratively (nix-darwin, home-manager, Ansible).
 install-binaries: sign
-	./install/install-binaries.sh
+	./install/install-binaries.bash
 
 # print-install-binaries: print the install-binaries commands and /etc
 # snippets without running anything. Does not require root.
 print-install-binaries: all
-	./install/install-binaries.sh --print
+	./install/install-binaries.bash --print
 
 uninstall:
-	./install/uninstall.sh
+	./install/uninstall.bash
 
 test: install
-	./install/self-test.sh
+	./install/self-test.bash
 
 # test-unit: offline unit tests for the pure helpers (no root, no install).
 # Builds standalone test executables and runs them; non-zero exit on failure.
@@ -270,6 +271,60 @@ build/test_plugin_internals: tests/test_plugin_internals.m tests/sw_test.h \
 	    tests/test_plugin_internals.m plugin/PromptFormatter.m \
 	    shared/SignatureVerifier.m shared/SessionGuard.m
 
+# --- Linux port (Phase 2): terminal command display via a pure-Rust audit
+# plugin (linux/sudowhat_audit, a cdylib reusing shared/escape_core). Every
+# target here is guarded by `uname -s` so a macOS `make` never runs them and the
+# macOS build above is byte-for-byte unchanged. On Linux they build / test /
+# install the single display-only .so (no approval plugin, no PAM module, no
+# code-signing — see docs/design-linux-port.md).
+UNAME_S := $(shell uname -s)
+LINUX_AUDIT_DIR = linux/sudowhat_audit
+
+# build-linux: compile the cdylib with the same display knobs the macOS bundle
+# takes (SUDOWHAT_AUDIT_DISPLAY / SUDOWHAT_ECHO_COLOR, validated above). --locked
+# pins the committed Cargo.lock; --offline forbids any network fetch (both crates
+# have no dependencies, so both always hold).
+build-linux:
+ifeq ($(UNAME_S),Linux)
+	cd $(LINUX_AUDIT_DIR) && \
+	    CARGO_HOME=$${CARGO_HOME:-$(CURDIR)/.cargo-home} \
+	    SW_AUDIT_DISPLAY=$(SUDOWHAT_AUDIT_DISPLAY) \
+	    SW_AUDIT_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) \
+	    $(CARGO) build --release --offline --locked
+else
+	@echo "build-linux: skipped (host is $(UNAME_S), not Linux)"
+endif
+
+# test-linux: the pure display.rs / tty.rs unit tests. They are host-portable
+# (cargo builds a test executable, not the cdylib), but this target is
+# Linux-guarded for consistency; on the macOS dev host run them directly with
+# `cd $(LINUX_AUDIT_DIR) && cargo test`.
+test-linux:
+ifeq ($(UNAME_S),Linux)
+	cd $(LINUX_AUDIT_DIR) && \
+	    CARGO_HOME=$${CARGO_HOME:-$(CURDIR)/.cargo-home} \
+	    $(CARGO) test --offline --locked
+else
+	@echo "test-linux: skipped (host is $(UNAME_S), not Linux)"
+endif
+
+# install-linux: build then install the .so to /usr/local and PRINT the
+# /etc/sudo.conf to write (install/linux/install.bash does not touch /etc itself).
+install-linux: build-linux
+ifeq ($(UNAME_S),Linux)
+	./install/linux/install.bash
+else
+	@echo "install-linux: skipped (host is $(UNAME_S), not Linux)"
+endif
+
+uninstall-linux:
+ifeq ($(UNAME_S),Linux)
+	./install/linux/uninstall.bash
+else
+	@echo "uninstall-linux: skipped (host is $(UNAME_S), not Linux)"
+endif
+
 clean:
 	rm -rf build $(PLUGIN_OBJS) $(PAM_OBJS) $(AUDIT_OBJS)
 	rm -rf $(ESCAPE_CORE_DIR)/target .cargo-home
+	rm -rf $(LINUX_AUDIT_DIR)/target
