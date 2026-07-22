@@ -65,6 +65,55 @@ static const char *utf8_or(NSString *s, const char *fallback) {
     return (p && *p) ? p : fallback;
 }
 
+/* Denial reason, in sudowhat's own voice.
+ *
+ * We interpret the auth outcome and phrase it ourselves rather than forwarding
+ * the framework's localizedDescription. That Apple string is GUI-facing: it is
+ * localized (non-ASCII on a non-English system), sentence-cased with a trailing
+ * period, and free to change across macOS releases - none of which belongs in a
+ * Unix errstr we emit, prefixed with our own name, next to sudo's own lowercase
+ * output. The phrase itself carries the provenance ("password ..." for the AS
+ * fallback vs a bare "authentication ..." for the biometric path), so no
+ * separate source tag is needed. An unmapped code still degrades to an ASCII
+ * "(... N)" - debuggable, still our voice, no locale leak. */
+static NSString *sw_denial_reason(NSError *err) {
+    if (err == nil) {
+        return @"authentication denied";
+    }
+    if ([err.domain isEqualToString:LAErrorDomain]) {
+        switch (err.code) {
+            case LAErrorUserCancel:
+            case LAErrorSystemCancel:
+            case LAErrorAppCancel:
+                return @"authentication canceled";
+            case LAErrorUserFallback:
+                return @"authentication canceled";
+            case LAErrorAuthenticationFailed:
+                return @"authentication failed";
+            case LAErrorBiometryLockout:
+                return @"biometry locked out";
+            case LAErrorPasscodeNotSet:
+                return @"no passcode set";
+            default:
+                return [NSString stringWithFormat:@"authentication error (LAError %ld)",
+                        (long)err.code];
+        }
+    }
+    if ([err.domain isEqualToString:NSOSStatusErrorDomain]) {
+        switch (err.code) {
+            case errAuthorizationCanceled:
+                return @"authentication canceled";
+            case errAuthorizationDenied:
+                return @"password authentication failed";
+            default:
+                return [NSString stringWithFormat:@"authentication error (OSStatus %ld)",
+                        (long)err.code];
+        }
+    }
+    return [NSString stringWithFormat:@"authentication error (%@ %ld)",
+            err.domain, (long)err.code];
+}
+
 /* Channel-binding nonce, uppercase only. Built from Crockford base32 (which
  * already drops I, O, U) with edits for the two surfaces this code is compared
  * across — the SF system font on the LAContext sheet and the monospace
@@ -883,7 +932,14 @@ static int sudowhat_check(char * const command_info[],
                                      error:&policyErr]) {
             (void)seteuid(0);
             close(preFd);
-            set_errstr(errstr, "sudowhat: cannot evaluate authentication policy: %s",
+            /* Not a routine denial but a "the auth stack can't even start"
+             * setup failure, where the framework's own detail ("Biometry is not
+             * available", a passcode/enrollment problem, ...) is the useful
+             * forensic. So unlike sw_denial_reason() we forward it verbatim -
+             * but attribute the source ("LocalAuthentication:") so the reader
+             * knows the sentence-cased, possibly-localized text is a quoted
+             * framework message, not sudowhat's own voice. */
+            set_errstr(errstr, "sudowhat: cannot evaluate authentication policy: LocalAuthentication: %s",
                        utf8_or(policyErr.localizedDescription, "unknown"));
             return 0;
         }
@@ -957,18 +1013,10 @@ static int sudowhat_check(char * const command_info[],
                     allowed = YES;
                     replyErr = nil;
                 } else {
-                    NSString *desc;
-                    if (asStatus == errAuthorizationCanceled) {
-                        desc = @"Authentication canceled.";
-                    } else if (asStatus == errAuthorizationDenied) {
-                        desc = @"Password authentication failed.";
-                    } else {
-                        desc = [NSString stringWithFormat:@"AuthorizationCreate failed: %d",
-                                (int)asStatus];
-                    }
+                    /* Carry the OSStatus; sw_denial_reason() phrases it. */
                     replyErr = [NSError errorWithDomain:NSOSStatusErrorDomain
                                                    code:asStatus
-                                               userInfo:@{NSLocalizedDescriptionKey: desc}];
+                                               userInfo:nil];
                 }
             }
         }
@@ -982,7 +1030,7 @@ static int sudowhat_check(char * const command_info[],
         if (!allowed) {
             close(preFd);
             set_errstr(errstr, "sudowhat: authorization denied: %s",
-                       utf8_or(replyErr.localizedDescription, "user canceled"));
+                       sw_denial_reason(replyErr).UTF8String);
             return 0;
         }
 
