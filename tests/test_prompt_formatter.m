@@ -261,8 +261,8 @@ static void test_format_basic_exact_systemsheet(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", @"hello"], SWPromptStyleSystemSheet);
     NSString *expected =
-        @"run a command.\n\nVerify Code: AB12\n\nUser: root\n"
-        @"Command: /bin/echo hello\n\nCode must match your terminal";
+        @"run a command.\n\nVerify Code: AB12\n\nUSER\nroot\n\n"
+        @"COMMAND\n/bin/echo hello\n\nCode must match your terminal";
     EQ(out, expected, "basic SystemSheet exact layout (lowercase, period at top)");
 }
 
@@ -270,38 +270,38 @@ static void test_format_basic_exact_selfcontained(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", @"hello"], SWPromptStyleSelfContained);
     NSString *expected =
-        @"Run a command.\n\nVerify Code: AB12\n\nUser: root\n"
-        @"Command: /bin/echo hello\n\nCode must match your terminal";
+        @"Run a command.\n\nVerify Code: AB12\n\nUSER\nroot\n\n"
+        @"COMMAND\n/bin/echo hello\n\nCode must match your terminal";
     EQ(out, expected, "basic SelfContained exact layout (capital Run, period at top)");
 }
 
 static void test_format_path_line(void) {
     NSString *out = fmt(@"/bin/echo", @"root", @"/tmp", @"AB12",
                         @[@"echo"], SWPromptStyleSystemSheet);
-    OK([out containsString:@"User: root\nDirectory: /tmp\nCommand: /bin/echo\n\n"],
-       "cwd rendered on its own Directory line, between User and Command");
-    /* no cwd -> no Directory line at all */
+    OK([out containsString:@"USER\nroot\n\nDIRECTORY\n/tmp\n\nCOMMAND\n/bin/echo\n\n"],
+       "cwd rendered under its own DIRECTORY label, between USER and COMMAND");
+    /* no cwd -> no DIRECTORY field at all */
     NSString *noPath = fmt(@"/bin/echo", @"root", nil, @"AB12",
                            @[@"echo"], SWPromptStyleSystemSheet);
-    OK(![noPath containsString:@"Directory:"], "absent cwd omits the Directory line");
+    OK(![noPath containsString:@"DIRECTORY"], "absent cwd omits the DIRECTORY field");
 }
 
 static void test_format_argv0_dedup(void) {
     /* argv[0] == basename -> dropped */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[@"echo", @"hi"], 0)
-        containsString:@"Command: /bin/echo hi"], "dedup basename argv0");
+        containsString:@"COMMAND\n/bin/echo hi"], "dedup basename argv0");
     /* argv[0] == full path -> dropped */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[@"/bin/echo", @"hi"], 0)
-        containsString:@"Command: /bin/echo hi"], "dedup full-path argv0");
+        containsString:@"COMMAND\n/bin/echo hi"], "dedup full-path argv0");
     /* argv[0] != path/basename -> kept */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[@"notecho", @"hi"], 0)
-        containsString:@"Command: /bin/echo notecho hi"], "non-matching argv0 kept");
+        containsString:@"COMMAND\n/bin/echo notecho hi"], "non-matching argv0 kept");
     /* no argv -> just the path */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[], 0)
-        containsString:@"Command: /bin/echo\n"], "empty argv -> path only");
+        containsString:@"COMMAND\n/bin/echo\n"], "empty argv -> path only");
     /* single argv == basename -> just the path */
     OK([fmt(@"/bin/echo", @"root", nil, @"X", @[@"echo"], 0)
-        containsString:@"Command: /bin/echo\n"], "single matching argv0 -> path only");
+        containsString:@"COMMAND\n/bin/echo\n"], "single matching argv0 -> path only");
 }
 
 static void test_format_quoting_in_command(void) {
@@ -322,14 +322,14 @@ static void test_format_user_overflow(void) {
     NSString *longUser = rep(@"u", 100);
     NSString *out = fmt_ov(@"/bin/echo", longUser, nil, @"X", @[@"echo"],
                            SWPromptStyleSystemSheet, &ov);
-    OK([out containsString:@"User: (see terminal)\n"], "long user -> (see terminal)");
+    OK([out containsString:@"USER\n(see terminal)\n"], "long user -> (see terminal)");
     OK(ov.user && !ov.path && !ov.command, "overflow flags user only");
     OK(![out containsString:@"…"], "no ellipsis anywhere in the prompt");
     /* a short user is shown whole with no marker */
     SWPromptOverflow ov2 = { NO, NO, NO };
     NSString *out2 = fmt_ov(@"/bin/echo", @"alice", nil, @"X", @[@"echo"],
                             SWPromptStyleSystemSheet, &ov2);
-    OK([out2 containsString:@"User: alice\n"] && !ov2.user, "short user shown whole");
+    OK([out2 containsString:@"USER\nalice\n"] && !ov2.user, "short user shown whole");
 }
 
 static void test_format_path_overflow(void) {
@@ -337,7 +337,7 @@ static void test_format_path_overflow(void) {
     NSString *longCwd = [@"/" stringByAppendingString:rep(@"c", 300)];
     NSString *out = fmt_ov(@"/bin/echo", @"root", longCwd, @"X", @[@"echo"],
                            SWPromptStyleSystemSheet, &ov);
-    OK([out containsString:@"Directory: (see terminal)\n"], "long cwd -> (see terminal)");
+    OK([out containsString:@"DIRECTORY\n(see terminal)\n"], "long cwd -> (see terminal)");
     OK(ov.path && !ov.user && !ov.command, "overflow flags path only");
 }
 
@@ -346,31 +346,33 @@ static void test_format_command_overflow(void) {
     NSString *out = fmt_ov(@"/bin/echo", @"root", nil, @"AB12",
                            @[@"echo", rep(@"x", 4000)],
                            SWPromptStyleSystemSheet, &ov);
-    OK([out containsString:@"Command: (see terminal)\n"], "long command -> (see terminal)");
+    OK([out containsString:@"COMMAND\n(see terminal)\n"], "long command -> (see terminal)");
     OK(ov.command && !ov.user && !ov.path, "overflow flags command only");
     OK([out containsString:BOTTOM_TRUNC], "closing line is the truncated variant");
     OK(![out containsString:BOTTOM_CLEAN], "clean closing line absent when truncated");
 }
 
 static void test_format_antiinjection_newline_count(void) {
-    /* A non-truncated, no-path layout has exactly 7 structural newlines. An
-     * argv token carrying a real newline must be escaped, so the count stays 7,
-     * never 8. This is the load-bearing anti-injection assertion. */
+    /* A non-truncated, no-path layout has exactly 10 structural newlines. An
+     * argv token carrying a real newline must be escaped, so the count stays 10,
+     * never 11. This is the load-bearing anti-injection assertion. */
     NSString *evilArg = [NSString stringWithFormat:@"a%@b", uni(0x0a)];
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", evilArg], SWPromptStyleSystemSheet);
-    OK(nlcount(out) == 7, "argv newline does not add a structural line");
+    OK(nlcount(out) == 10, "argv newline does not add a structural line");
     /* line/paragraph separators likewise must not introduce breaks */
     NSString *evil2 = [NSString stringWithFormat:@"a%@%@b", uni(0x2028), uni(0x2029)];
     NSString *out2 = fmt(@"/bin/echo", @"root", nil, @"AB12",
                          @[@"echo", evil2], SWPromptStyleSystemSheet);
-    OK(nlcount(out2) == 7, "U+2028/2029 in argv add no structural line");
-    /* a fake "Command:" line inside an arg must not forge structure: the colon
-     * survives but the leading newline is escaped, so it stays one line. */
-    NSString *evil3 = [NSString stringWithFormat:@"a%@Command: /bin/sh", uni(0x0a)];
+    OK(nlcount(out2) == 10, "U+2028/2029 in argv add no structural line");
+    /* a fake stacked COMMAND label inside an arg must not forge structure: the
+     * word survives but its surrounding newlines are escaped, so it can never
+     * sit alone on a line of its own, let alone after a blank line. */
+    NSString *evil3 = [NSString stringWithFormat:@"a%@%@COMMAND%@/bin/sh",
+                       uni(0x0a), uni(0x0a), uni(0x0a)];
     NSString *out3 = fmt(@"/bin/echo", @"root", nil, @"AB12",
                          @[@"echo", evil3], SWPromptStyleSystemSheet);
-    OK(nlcount(out3) == 7, "argv cannot forge an extra labelled line");
+    OK(nlcount(out3) == 10, "argv cannot forge an extra labelled field");
 }
 
 static void test_format_ellipsis_in_arg_escaped(void) {
@@ -429,7 +431,7 @@ static void test_format_surrogate_boundary(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12", argv,
                         SWPromptStyleSystemSheet);
     OK(out != nil && out.length <= kMaxTotal, "emoji flood stays in budget");
-    OK([out containsString:@"Command: (see terminal)"], "emoji flood -> (see terminal)");
+    OK([out containsString:@"COMMAND\n(see terminal)"], "emoji flood -> (see terminal)");
 }
 
 static void test_format_verifycode_bounded(void) {

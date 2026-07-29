@@ -258,14 +258,18 @@
     BOOL pathOverflow = (pathVal != nil && pathVal.length > kMaxCwdDisplay);
     NSString *pathShown = pathVal ? (pathOverflow ? kSeeTerminal : pathVal) : nil;
 
-    /* Layout: header \n\n verify \n\n "User: "u \n ["Directory: "p \n] "Command: "c
-     *         \n\n bottom. Fixed labels are 6/11/9 chars. */
+    /* Layout: header \n\n verify \n\n "USER\n"u \n\n ["DIRECTORY\n"p \n\n]
+     *         "COMMAND\n"c \n\n bottom. Stacked labels: each caps label sits
+     *         alone on its line, the value below it, a blank line between
+     *         fields — so a value wrapped by the narrow sheet cannot run into
+     *         the next label, and the value gets the full line width. Fixed
+     *         labels are 5/10/8 chars including their newline. */
     NSUInteger overhead =
         header.length + 2
         + verifyLine.length + 2
-        + 6 + userShown.length + 1
-        + (pathShown ? (11 + pathShown.length + 1) : 0)
-        + 9
+        + 5 + userShown.length + 2
+        + (pathShown ? (10 + pathShown.length + 2) : 0)
+        + 8
         + 2 + bottomReserve;
     NSUInteger cmdBudget = (kMaxTotal > overhead) ? kMaxTotal - overhead : 0;
 
@@ -282,12 +286,13 @@
         ? bottomTrunc : bottomClean;
 
     /* escapeControlChars scrubs newlines and Unicode line/paragraph separators
-     * from every value, so the blank lines here are unambiguously ours: no
-     * displayed value can forge an extra "User:"/"Directory:"/"Command:" line. */
+     * from every value, so the line structure here is unambiguously ours: no
+     * displayed value can forge a USER/DIRECTORY/COMMAND label line, nor
+     * fabricate the blank line that precedes every real label. */
     NSMutableString *out = [NSMutableString stringWithCapacity:kMaxTotal];
-    [out appendFormat:@"%@\n\n%@\n\nUser: %@\n", header, verifyLine, userShown];
-    if (pathShown) [out appendFormat:@"Directory: %@\n", pathShown];
-    [out appendFormat:@"Command: %@\n\n%@", cmdShown, bottom];
+    [out appendFormat:@"%@\n\n%@\n\nUSER\n%@\n\n", header, verifyLine, userShown];
+    if (pathShown) [out appendFormat:@"DIRECTORY\n%@\n\n", pathShown];
+    [out appendFormat:@"COMMAND\n%@\n\n%@", cmdShown, bottom];
     return out;
 }
 
