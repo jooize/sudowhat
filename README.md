@@ -29,6 +29,14 @@ You think you're unlocking your own file. The prompt looks identical. You biomet
 
 **sudowhat closes that wedge.** The system-trusted Touch ID dialog displays the resolved command path and arguments — the same bytes sudo will pass to `execve` — *before* you authorize. Argv tokens are shell-quoted; backslashes and control characters are escaped (named — `\n`, `\r`, `\t`, `\0`, `\\` — or hex — `\xNN`, `\uNNNN`) so the rendered prompt is unambiguous about its source bytes. An attacker cannot smuggle hidden lines into the prompt, nor can a literal `\n` in argv pose as a real newline.
 
+## Standalone by design
+
+sudowhat is a standalone tool that benefits **every** `sudo` invocation on the host, whatever launched it — a shell, a Makefile, a package manager, a bespoke ceremony. It is not a component of any one workflow and takes no direction from its callers.
+
+The corollary matters for anyone building on top of it: **no tool may assume sudowhat is installed.** A program that shells out to `sudo` must display what it is about to run, and must be safe and complete, entirely on its own — sudowhat is defense in depth *layered over* that, never a dependency it can lean on. Concretely, a caller must not drop its own pre-elevation command display on the assumption that sudowhat will show one; on a host without the plugin, that display would simply vanish.
+
+The relationship is deliberately one-way and unsuppressable in both directions: callers cannot rely on sudowhat (it may be absent), and sudowhat does not rely on — or obey — callers (its disclosure is unconditional, with no caller-settable knob to silence it; see [Console vs. non-console callers](#console-vs-non-console-callers)). Each stands alone.
+
 ## Authentication methods
 
 A single dialog accepts any of the following:
