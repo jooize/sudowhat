@@ -19,9 +19,9 @@
  * CLOSED if this bundle is present-but-tampered (the mutual-signature web), so a
  * swapped audit plugin that lies about the command cannot let sudo proceed.
  *
- * The untrusted-argv escaping/quoting is done in the Rust escape_core staticlib
- * (memory-safe), not in C here: this file is a thin ObjC shell doing the
- * code-signature check and the /dev/tty glue.
+ * The untrusted-argv escaping/quoting -- and the colouring layered over it -- is
+ * done in the Rust escape_core staticlib (memory-safe), not in C here: this file
+ * is a thin ObjC shell doing the code-signature check and the /dev/tty glue.
  */
 
 #import <Foundation/Foundation.h>
@@ -58,13 +58,22 @@
 enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
 
 /* Build-time colour policy, chosen by -DSW_AUDIT_ECHO_COLOR (echoColor in the
- * nix module / Makefile). Parsed here so the option surface is stable, but the
- * display is currently always plain: the anomaly colouriser lives in
- * PromptFormatter (a fixed ObjC class name that cannot be linked into this
- * second bundle without a duplicate-class collision), so colour lands only when
- * colorizeEscaped: is ported into escape_core (the documented fast-follow).
- * TODO(colorize fast-follow): route the escaped bytes through the Rust
- * colouriser here when sw_audit_color_mode == SW_ACOL_anomalies. */
+ * nix module / Makefile).
+ *
+ *   anomalies - (default) highlight the command line: the program's directory
+ *               part plain cyan and its basename bold cyan, option flags dim,
+ *               values plain, and escaped/anomalous spans (deceptive Unicode,
+ *               control bytes, shell metacharacters, notable whitespace) in the
+ *               fixed anomaly palette on top.
+ *   off       - the command line renders plain.
+ *
+ * The colouriser lives in escape_core (sw_full_command_line_colored), not in
+ * PromptFormatter: that class has a fixed ObjC name that cannot be linked into
+ * this second bundle without a duplicate-class collision. Colour is layout only,
+ * applied around the already-escaped, already-quoted tokens - strip the SGR and
+ * the bytes are the plain line's exactly - so it can neither add nor hide
+ * content. Runtime gates (NO_COLOR / TERM, then isatty) still apply on top, and
+ * any failure falls back to the plain line. */
 #ifndef SW_AUDIT_ECHO_COLOR
 #define SW_AUDIT_ECHO_COLOR anomalies
 #endif
@@ -112,12 +121,51 @@ static NSString *sw_audit_escape(const char *input) {
     return s;
 }
 
+/* The two escape_core command-line renderers share one signature, so the caller
+ * below can pick between them without duplicating the two-call sizing dance. */
+typedef int (*sw_cmdline_fn)(const uint8_t *path, size_t path_len,
+                             const uint8_t *const *argv,
+                             const size_t *argv_lens, size_t argv_count,
+                             uint8_t *out, size_t out_cap, size_t *needed);
+
+/* Run one renderer with the two-call sizing protocol: probe for the length,
+ * allocate, fill. Returns nil on allocation failure or a non-OK return, which is
+ * what makes the colour->plain fallback below a plain nil check. */
+static NSString *sw_audit_render(sw_cmdline_fn render,
+                                 const char *path, size_t path_len,
+                                 const uint8_t **argv, size_t *lens, size_t n) {
+    size_t needed = 0;
+    render((const uint8_t *)path, path_len, argv, lens, n, NULL, 0, &needed);
+    size_t cap = needed + 1;
+    uint8_t *buf = malloc(cap);
+    if (buf == NULL) return nil;
+    size_t got = 0;
+    NSString *s = nil;
+    if (render((const uint8_t *)path, path_len, argv, lens, n, buf, cap, &got)
+        == SW_ESCAPE_OK) {
+        s = [[NSString alloc] initWithBytes:buf length:got
+                                   encoding:NSUTF8StringEncoding];
+    }
+    free(buf);
+    return s;
+}
+
 /* Build the as-typed command line from submit_argv[submit_optind..] via the Rust
- * core. We pass argv[0] as the "path" so sw_full_command_line's argv0-dedup
- * collapses it to a single leading token — the command exactly as the user typed
- * it, with every token shell-quoted and control-char escaped. Returns nil when
- * there is no command word (nothing to display) or on allocation failure. */
-static NSString *sw_audit_command_line(char * const submit_argv[], int optind) {
+ * core. We pass argv[0] as the "path" so the argv0-dedup collapses it to a single
+ * leading token — the command exactly as the user typed it, with every token
+ * shell-quoted and control-char escaped. Returns nil when there is no command
+ * word (nothing to display) or on allocation failure.
+ *
+ * When colour is on, the coloured renderer is tried first and the plain one is
+ * the fallback: colour is layout over the same bytes, so degrading to plain
+ * loses emphasis and nothing else. A display tool must never fail to "show
+ * nothing". The two renderers are parameters (production passes the escape_core
+ * pair) to keep that fallback isolated and testable, the same reason
+ * sw_audit_write_tty takes its ttyPath. */
+static NSString *sw_audit_command_line_with(sw_cmdline_fn colored,
+                                            sw_cmdline_fn plain,
+                                            char * const submit_argv[],
+                                            int optind, BOOL color) {
     if (submit_argv == NULL || optind < 0) return nil;
     int n = 0;
     for (int i = optind; submit_argv[i] != NULL; i++) n++;
@@ -134,25 +182,20 @@ static NSString *sw_audit_command_line(char * const submit_argv[], int optind) {
         lens[i] = strlen(submit_argv[optind + i]);
     }
 
-    size_t needed = 0;
-    sw_full_command_line((const uint8_t *)path, path_len,
-                         argv, lens, (size_t)n, NULL, 0, &needed);
-    size_t cap = needed + 1;
-    uint8_t *buf = malloc(cap);
     NSString *s = nil;
-    if (buf != NULL) {
-        size_t got = 0;
-        if (sw_full_command_line((const uint8_t *)path, path_len,
-                                 argv, lens, (size_t)n, buf, cap, &got)
-            == SW_ESCAPE_OK) {
-            s = [[NSString alloc] initWithBytes:buf length:got
-                                       encoding:NSUTF8StringEncoding];
-        }
-        free(buf);
-    }
+    if (color) s = sw_audit_render(colored, path, path_len, argv, lens, (size_t)n);
+    if (s == nil) s = sw_audit_render(plain, path, path_len, argv, lens, (size_t)n);
+
     free(argv);
     free(lens);
     return s;
+}
+
+static NSString *sw_audit_command_line(char * const submit_argv[], int optind,
+                                       BOOL color) {
+    return sw_audit_command_line_with(sw_full_command_line_colored,
+                                      sw_full_command_line,
+                                      submit_argv, optind, color);
 }
 
 /* Write the assembled display block to the controlling terminal — and ONLY
@@ -166,7 +209,8 @@ static NSString *sw_audit_command_line(char * const submit_argv[], int optind) {
  *
  * ttyPath is a parameter (always "/dev/tty" in production) to keep the write
  * mechanism isolated and testable. The bytes are already escape_core-escaped, so
- * they carry no raw control byte regardless of what the user typed. */
+ * no control byte here came from what the user typed: the only escape sequences
+ * present are our own fixed SGR palette, added around the escaped tokens. */
 static void sw_audit_write_tty(const char *ttyPath, NSString *block) {
     NSData *data = [block dataUsingEncoding:NSUTF8StringEncoding];
     if (data == nil || data.length == 0) return;
@@ -259,9 +303,19 @@ static int sudowhat_audit_open(unsigned int version,
             return 1;
         }
 
+        /* Whether ANSI emphasis is permitted at all. Resolved before the command
+         * line because the command line is the one value that is coloured by
+         * role, not merely emphasised: build knob AND the env opt-outs, with
+         * sw_audit_write_tty's isatty() as the final gate. */
+        BOOL color = sw_audit_color_allowed(submit_envp);
+        BOOL colorCommand = color && (sw_audit_color_mode == SW_ACOL_anomalies);
+
         /* The command as typed — the star of the display. No command word -> the
-         * invocation is not something to preview (e.g. `sudo -v`); show nothing. */
-        NSString *commandLine = sw_audit_command_line(submit_argv, submit_optind);
+         * invocation is not something to preview (e.g. `sudo -v`); show nothing.
+         * Highlighted by role on one logical line (the terminal soft-wraps it);
+         * a colouriser failure degrades to the same line in plain. */
+        NSString *commandLine = sw_audit_command_line(submit_argv, submit_optind,
+                                                      colorCommand);
         if (commandLine.length == 0) return 1;
 
         /* Target user: sudo puts runas_user in settings[] only when -u was given;
@@ -281,12 +335,10 @@ static int sudowhat_audit_open(unsigned int version,
         if (userLine == nil || commandLine == nil) return 1;   /* alloc failure */
 
         /* Bold the label word purely for readability (our own fixed bytes, never
-         * user input — the values are escape_core-escaped). Gated by the same env
-         * opt-outs as the approval plugin's verify code (NO_COLOR / TERM), with
-         * sw_audit_write_tty's isatty() as the final gate, so a redirect or a
+         * user input — the values are escape_core-escaped). Same env gate as the
+         * approval plugin's verify code (resolved above), so a redirect or a
          * non-tty always renders plain. Restores the emphasis the pre-v0.10.0
          * emit_full_context applied before terminal display moved here. */
-        BOOL color = sw_audit_color_allowed(submit_envp);
         NSString *lb = color ? @"\033[1m" : @"";
         NSString *lo = color ? @"\033[0m" : @"";
 

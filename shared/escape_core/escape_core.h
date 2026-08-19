@@ -50,6 +50,23 @@ int sw_full_command_line(const uint8_t *path, size_t path_len,
                          const size_t *argv_lens, size_t argv_count,
                          uint8_t *out, size_t out_cap, size_t *needed);
 
+/* The same line as sw_full_command_line, with SGR colour layered on by role:
+ * the program's directory part plain cyan and its basename bold cyan, option
+ * flags dim, values plain, and anomalous spans (deceptive Unicode, control-byte
+ * escapes, shell metacharacters, notable whitespace runs) in the fixed anomaly
+ * palette on top. Still ONE logical line - nothing is wrapped, elided or
+ * reordered - and the colour is purely additive: strip the SGR and the bytes are
+ * exactly sw_full_command_line's.
+ *
+ * Identical parameters and buffer contract. The caller decides whether colour is
+ * permitted at all (build-time knob plus the NO_COLOR / TERM / isatty gates) and
+ * MUST fall back to sw_full_command_line on anything but SW_ESCAPE_OK - a
+ * display tool degrades to the plain line, never to showing nothing. */
+int sw_full_command_line_colored(const uint8_t *path, size_t path_len,
+                                 const uint8_t *const *argv,
+                                 const size_t *argv_lens, size_t argv_count,
+                                 uint8_t *out, size_t out_cap, size_t *needed);
+
 #ifdef __cplusplus
 }
 #endif

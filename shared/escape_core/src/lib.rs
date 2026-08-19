@@ -184,20 +184,15 @@ fn last_path_component(p: &str) -> &str {
     }
 }
 
-/// The full command line: quoted path, then argv minus argv[0] when it dups the
-/// path or its basename. Port of
-/// `-[SudoWhatPromptFormatter fullCommandLineForCommandPath:argv:]`.
-pub fn full_command_line(path: &str, argv: &[&str], out: &mut String) {
-    let mut first = true;
-    let mut emit = |tok: &str, out: &mut String| {
-        if !first {
-            out.push(' ');
-        }
-        first = false;
-        quote_token(tok, out);
-    };
-
-    emit(path, out);
+/// The displayable token list: the command path, then argv minus argv[0] when it
+/// dups the path or its basename. Raw (unescaped) tokens -- quoting happens in the
+/// renderers below. Port of
+/// `+[SudoWhatPromptFormatter commandPartsForPath:argv:]`, and for the same
+/// reason: the plain and the coloured renderer share one token list, so the two
+/// can never disagree on which tokens the line has.
+fn command_tokens<'a>(path: &'a str, argv: &'a [&'a str]) -> Vec<&'a str> {
+    let mut toks: Vec<&str> = Vec::with_capacity(argv.len() + 1);
+    toks.push(path);
 
     let basename = last_path_component(path);
     let mut start = 0usize;
@@ -207,8 +202,192 @@ pub fn full_command_line(path: &str, argv: &[&str], out: &mut String) {
             start = 1;
         }
     }
-    for tok in &argv[start..] {
-        emit(tok, out);
+    toks.extend_from_slice(&argv[start..]);
+    toks
+}
+
+/// The full command line: quoted path, then argv minus argv[0] when it dups the
+/// path or its basename. Port of
+/// `-[SudoWhatPromptFormatter fullCommandLineForCommandPath:argv:]`.
+pub fn full_command_line(path: &str, argv: &[&str], out: &mut String) {
+    for (i, tok) in command_tokens(path, argv).iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        quote_token(tok, out);
+    }
+}
+
+// -------------------------------------------------------------------------
+// Colouriser. Layout over an already-escaped, already-quoted line: SGR
+// sequences go only AROUND existing bytes, never between or instead of them,
+// so stripping the SGR yields `full_command_line`'s bytes exactly (the
+// round-trip invariant the tests pin). No wrapping, no elision, no reordering
+// -- one logical line that the terminal soft-wraps.
+// -------------------------------------------------------------------------
+
+/// Fixed SGR palette. Kept in one reviewed place so the only escape bytes that
+/// can reach the terminal are this closed set -- the classifier below is their
+/// sole producer. The anomaly colours are the ones
+/// `+[SudoWhatPromptFormatter colorizeEscaped:]` already ships; the role colours
+/// are pinned's `prog_disp` treatment (dirname plain cyan, basename bold cyan)
+/// and its dim for flags, so one house palette spans both tools.
+const SGR_RESET: &str = "\x1b[0m";
+/// deceptive Unicode escapes: \uNNNN
+const SGR_UNICODE: &str = "\x1b[1;31m";
+/// control-byte escapes: \n \r \t \0 \xNN
+const SGR_CONTROL: &str = "\x1b[1;35m";
+/// shell metacharacters: ' " ` and the escaped backslash \\
+const SGR_META: &str = "\x1b[1;36m";
+/// notable whitespace runs: grey background, so invisible padding reads as a block
+const SGR_SPACE: &str = "\x1b[100m";
+/// program path, directory part
+const SGR_PROG_DIR: &str = "\x1b[36m";
+/// program path, basename -- the one token worth reading at the head of the line
+const SGR_PROG_BASE: &str = "\x1b[1;36m";
+/// option flags (a token whose rendered form starts with '-')
+const SGR_FLAG: &str = "\x1b[2m";
+
+/// Emit one plain char, arming `base` first if it is not already in effect.
+fn push_plain(c: char, base: &str, armed: &mut bool, out: &mut String) {
+    if !base.is_empty() && !*armed {
+        out.push_str(base);
+        *armed = true;
+    }
+    out.push(c);
+}
+
+/// Emit an anomaly span in `color`, dropping any armed role colour around it so
+/// the anomaly reads the same whatever role it sits in.
+fn push_span(text: &str, color: &str, armed: &mut bool, out: &mut String) {
+    if *armed {
+        out.push_str(SGR_RESET);
+        *armed = false;
+    }
+    out.push_str(color);
+    out.push_str(text);
+    out.push_str(SGR_RESET);
+}
+
+/// Colourise one ALREADY-escaped, already-quoted span: anomaly runs take the
+/// fixed palette, everything else takes `base` (empty = plain). Port of
+/// `+[SudoWhatPromptFormatter colorizeEscaped:]`, with the role colour added
+/// underneath. Purely additive -- stripping the SGR returns `s`.
+fn colorize_escaped(s: &str, base: &str, out: &mut String) {
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut i = 0usize;
+    let mut armed = false;
+
+    while i < len {
+        let c = chars[i];
+
+        // Backslash escapes emitted by escape_control. Every '\' it produces is
+        // followed by one of {\ n r t 0 x u}; quote_token adds only the shell
+        // idiom '\'' (a '\' before a single quote). We classify by the second
+        // char and wrap the whole fixed-width sequence as one unit -- so a "\\"
+        // is consumed together and its second '\' is never re-read as the start
+        // of another escape. A '\' before anything else (the quote idiom, or an
+        // input that cannot arise from our escapers) is emitted plain.
+        if c == '\\' && i + 1 < len {
+            let n = chars[i + 1];
+            let (color, span) = match n {
+                'u' => (SGR_UNICODE, 6),                    // \uNNNN
+                'x' => (SGR_CONTROL, 4),                    // \xNN
+                'n' | 'r' | 't' | '0' => (SGR_CONTROL, 2),  // \n \r \t \0
+                '\\' => (SGR_META, 2),                      // literal '\'
+                _ => ("", 0),
+            };
+            if !color.is_empty() && i + span <= len {
+                let text: String = chars[i..i + span].iter().collect();
+                push_span(&text, color, &mut armed, out);
+                i += span;
+                continue;
+            }
+            push_plain(c, base, &mut armed, out);   // lone '\' (the '\'' idiom)
+            i += 1;
+            continue;
+        }
+
+        // Shell metacharacters that survive into the displayed string: our
+        // wrapping single quotes, and any ' " ` inside a quoted token. One
+        // colour = "shell-significant character".
+        if c == '\'' || c == '"' || c == '`' {
+            push_span(&c.to_string(), SGR_META, &mut armed, out);
+            i += 1;
+            continue;
+        }
+
+        // Whitespace runs. Mark a run of spaces that is >=2 long or touches the
+        // start/end of the span -- the invisible-padding cases (a trailing space
+        // on a path, a hidden double space). A single interior space is a normal
+        // separator and stays plain, so ordinary commands are unmarked. Note the
+        // span, not the line, bounds "start/end" here: the only extra boundary a
+        // per-span walk introduces is the program's dirname/basename seam, and a
+        // space there gets MARKED where the line-level walk left it plain -- more
+        // emphasis on invisible padding, never less.
+        if c == ' ' {
+            let mut j = i + 1;
+            while j < len && chars[j] == ' ' {
+                j += 1;
+            }
+            let run: String = chars[i..j].iter().collect();
+            if j - i >= 2 || i == 0 || j == len {
+                push_span(&run, SGR_SPACE, &mut armed, out);
+            } else {
+                for ch in run.chars() {
+                    push_plain(ch, base, &mut armed, out);
+                }
+            }
+            i = j;
+            continue;
+        }
+
+        push_plain(c, base, &mut armed, out);
+        i += 1;
+    }
+
+    if armed {
+        out.push_str(SGR_RESET);
+    }
+}
+
+/// The full command line as [`full_command_line`] builds it, with SGR colour
+/// layered on by role: the program's directory part plain cyan and its basename
+/// bold cyan, option flags dim, values plain, and anomalous spans (deceptive
+/// Unicode, control-byte escapes, shell metacharacters, notable whitespace) in
+/// the anomaly palette on top. One logical line -- nothing is wrapped, elided or
+/// reordered, and the bytes between the SGR sequences are exactly the plain
+/// line's bytes.
+///
+/// A token is treated as a flag only when its RENDERED form starts with '-', so
+/// a hostile token that needed quoting lands quoted and coloured as data rather
+/// than borrowing a flag's look.
+pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
+    for (i, tok) in command_tokens(path, argv).iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        let mut rendered = String::new();
+        quote_token(tok, &mut rendered);
+
+        if i == 0 {
+            // Split at the last '/' of the RENDERED token: escape_control emits
+            // '/' for nothing but a literal '/', so this is the same separator
+            // last_path_component would find, and slicing after it stays on a
+            // char boundary. No '/' -> the whole token is the basename.
+            match rendered.rfind('/') {
+                Some(idx) => {
+                    colorize_escaped(&rendered[..=idx], SGR_PROG_DIR, out);
+                    colorize_escaped(&rendered[idx + 1..], SGR_PROG_BASE, out);
+                }
+                None => colorize_escaped(&rendered, SGR_PROG_BASE, out),
+            }
+        } else if rendered.starts_with('-') {
+            colorize_escaped(&rendered, SGR_FLAG, out);
+        } else {
+            colorize_escaped(&rendered, "", out);
+        }
     }
 }
 
@@ -229,6 +408,25 @@ fn read_input(ptr: *const u8, len: usize) -> String {
     // SAFETY: caller guarantees `ptr` is valid for `len` bytes.
     let bytes = unsafe { slice::from_raw_parts(ptr, len) };
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Decode the `argv_count` tokens of a C argv array, lossily. A null `argv` or
+/// `argv_lens` yields no tokens.
+///
+/// # Safety
+/// `argv` and `argv_lens` must be valid for `argv_count` elements (or null), and
+/// each `argv[i]` valid for `argv_lens[i]` bytes.
+fn read_argv(argv: *const *const u8, argv_lens: *const usize, argv_count: usize) -> Vec<String> {
+    let mut owned: Vec<String> = Vec::new();
+    if !argv.is_null() && !argv_lens.is_null() {
+        for i in 0..argv_count {
+            // SAFETY: caller guarantees argv/argv_lens hold argv_count elements.
+            let tok_ptr = unsafe { *argv.add(i) };
+            let tok_len = unsafe { *argv_lens.add(i) };
+            owned.push(read_input(tok_ptr, tok_len));
+        }
+    }
+    owned
 }
 
 /// Emit `result` into the caller buffer following the contract documented on
@@ -320,20 +518,42 @@ pub extern "C" fn sw_full_command_line(
     needed: *mut usize,
 ) -> c_int {
     let p = read_input(path, path_len);
-
-    let mut owned: Vec<String> = Vec::new();
-    if !argv.is_null() && !argv_lens.is_null() {
-        for i in 0..argv_count {
-            // SAFETY: caller guarantees argv/argv_lens hold argv_count elements.
-            let tok_ptr = unsafe { *argv.add(i) };
-            let tok_len = unsafe { *argv_lens.add(i) };
-            owned.push(read_input(tok_ptr, tok_len));
-        }
-    }
+    let owned = read_argv(argv, argv_lens, argv_count);
     let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
 
     let mut result = String::new();
     full_command_line(&p, &refs, &mut result);
+    write_result(&result, out, out_cap, needed)
+}
+
+/// The same line as [`sw_full_command_line`], with SGR colour layered on by role
+/// (program dirname / basename, option flags, values) and the anomaly palette on
+/// escaped spans. Byte-identical to that function once the SGR is stripped, and
+/// still one logical line. Same buffer contract as [`sw_escape_control`].
+///
+/// The caller decides whether colour is permitted at all (build-time knob plus
+/// the NO_COLOR / TERM / isatty gates) and must fall back to
+/// [`sw_full_command_line`] if this returns anything but [`SW_ESCAPE_OK`].
+///
+/// # Safety
+/// See [`sw_full_command_line`].
+#[unsafe(no_mangle)]
+pub extern "C" fn sw_full_command_line_colored(
+    path: *const u8,
+    path_len: usize,
+    argv: *const *const u8,
+    argv_lens: *const usize,
+    argv_count: usize,
+    out: *mut u8,
+    out_cap: usize,
+    needed: *mut usize,
+) -> c_int {
+    let p = read_input(path, path_len);
+    let owned = read_argv(argv, argv_lens, argv_count);
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+
+    let mut result = String::new();
+    colored_command_line(&p, &refs, &mut result);
     write_result(&result, out, out_cap, needed)
 }
 
@@ -468,6 +688,270 @@ mod tests {
         assert_eq!(rc, SW_ESCAPE_OK);
         assert_eq!(&buf[..n2], b"'a b'");
         assert_eq!(buf[n2], 0);
+    }
+
+    // --- colouriser -------------------------------------------------------
+
+    fn colored(path: &str, argv: &[&str]) -> String {
+        let mut o = String::new();
+        colored_command_line(path, argv, &mut o);
+        o
+    }
+
+    /// Remove every SGR sequence, so what is left is the bytes the terminal
+    /// actually shows. Deliberately dumb (ESC '[' ... 'm') -- the colouriser
+    /// emits nothing else, and a stricter parser would hide a regression that
+    /// emitted something else.
+    fn strip_sgr(s: &str) -> String {
+        let mut out = String::new();
+        let mut it = s.chars();
+        while let Some(c) = it.next() {
+            if c == '\x1b' {
+                // consume "[...m"
+                for c2 in it.by_ref() {
+                    if c2 == 'm' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    /// The cases the byte-preservation invariant is checked over: clean lines,
+    /// quoting triggers, every escape family, and the hostile tokens the display
+    /// exists to expose.
+    fn color_cases() -> Vec<(&'static str, Vec<&'static str>)> {
+        vec![
+            ("/bin/echo", vec!["echo", "hello"]),
+            ("/bin/echo", vec![]),
+            ("id", vec!["id"]),
+            ("", vec![]),
+            ("", vec![""]),
+            ("/usr/bin/git", vec!["git", "status", "--porcelain"]),
+            (
+                "/run/current-system/sw/bin/pinned",
+                vec!["pinned", "review", "--file", "/Library/App Support/x.json"],
+            ),
+            ("/bin/echo", vec!["echo", "a b", "a'b", "-", "--", "-x"]),
+            ("/bin/echo", vec!["echo", "sudowhat: user: evil"]),
+            ("/bin/echo", vec!["echo", "a\nb", "a\tb", "a\\b", "a\u{202e}b"]),
+            ("/bin/echo", vec!["echo", "...", "  padded  ", ""]),
+            ("/usr/bin/日本", vec!["日本", "café", "😀"]),
+            ("/a b/prog name", vec!["prog name"]),
+            ("/usr/bin/", vec!["-v"]),
+            ("prog", vec!["prog", "-f", "v"]),
+        ]
+    }
+
+    #[test]
+    fn colored_preserves_bytes() {
+        // The invariant: colour is layout, never content. Strip the SGR and the
+        // plain line must come back byte for byte.
+        for (path, argv) in color_cases() {
+            let c = colored(path, &argv);
+            assert_eq!(strip_sgr(&c), full(path, &argv), "path={path:?} argv={argv:?}");
+        }
+    }
+
+    #[test]
+    fn colored_never_emits_a_raw_control_byte() {
+        // Every ESC in the output must start one of our SGR sequences, and no
+        // other C0 byte may appear -- the input is attacker-influenced.
+        for (path, argv) in color_cases() {
+            let c = colored(path, &argv);
+            let chars: Vec<char> = c.chars().collect();
+            for (i, ch) in chars.iter().enumerate() {
+                let u = *ch as u32;
+                if u == 0x1b {
+                    assert_eq!(chars.get(i + 1), Some(&'['), "ESC not starting a CSI");
+                } else {
+                    assert!(u >= 0x20 || u == 0x1b, "raw control byte {u:#x} in output");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn colored_program_roles() {
+        // dirname plain cyan, basename bold cyan, each closed by a reset.
+        assert_eq!(
+            colored("/bin/echo", &["echo"]),
+            "\x1b[36m/bin/\x1b[0m\x1b[1;36mecho\x1b[0m"
+        );
+        // no '/' at all -> the whole program token is the basename.
+        assert_eq!(colored("id", &["id"]), "\x1b[1;36mid\x1b[0m");
+    }
+
+    #[test]
+    fn colored_flag_and_value_roles() {
+        // flags dim, values plain, the separator spaces untouched.
+        assert_eq!(
+            colored("/bin/git", &["git", "--file", "x"]),
+            "\x1b[36m/bin/\x1b[0m\x1b[1;36mgit\x1b[0m \x1b[2m--file\x1b[0m x"
+        );
+        // a bare "-" and "--" are flags too (rendered form starts with '-').
+        assert_eq!(
+            colored("p", &["p", "--"]),
+            "\x1b[1;36mp\x1b[0m \x1b[2m--\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn colored_hostile_token_reads_as_data() {
+        // A token spelled like one of our own lines lands quoted, and the quotes
+        // are metachar-coloured, so it cannot pass for a real sudowhat line.
+        let c = colored("/bin/echo", &["echo", "sudowhat: user: evil"]);
+        assert!(c.ends_with("\x1b[1;36m'\x1b[0m"), "unterminated quote: {c:?}");
+        assert!(c.contains("\x1b[1;36m'\x1b[0msudowhat:"), "opening quote: {c:?}");
+        // the whitespace run rule marks the interior spaces of the quoted token
+        // only when they are runs or at an edge; single ones stay plain.
+        assert_eq!(strip_sgr(&c), "/bin/echo 'sudowhat: user: evil'");
+    }
+
+    #[test]
+    fn colored_anomaly_palette() {
+        // control-byte, deceptive-Unicode and metachar escapes each take their
+        // own colour, over whatever role colour the token carries.
+        let c = colored("/bin/echo", &["echo", "a\nb"]);
+        assert!(c.contains("\x1b[1;35m\\n\x1b[0m"), "control escape: {c:?}");
+        let c = colored("/bin/echo", &["echo", "\u{202e}x"]);
+        assert!(c.contains("\x1b[1;31m\\u202e\x1b[0m"), "unicode escape: {c:?}");
+        let c = colored("/bin/echo", &["echo", "a\\b"]);
+        assert!(c.contains("\x1b[1;36m\\\\\x1b[0m"), "backslash: {c:?}");
+        // notable whitespace keeps its grey background inside a dim flag token.
+        let c = colored("p", &["p", "-x  y"]);
+        assert!(c.contains("\x1b[100m  \x1b[0m"), "space run: {c:?}");
+    }
+
+    #[test]
+    fn colored_anomaly_in_the_program_token() {
+        // An escape inside the program path drops the role colour for its span
+        // and the role resumes after it -- the bytes still round-trip.
+        let c = colored("/bin/\u{202e}sh", &[]);
+        assert_eq!(strip_sgr(&c), "'/bin/\\u202esh'");
+        assert!(c.contains("\x1b[1;31m\\u202e\x1b[0m"), "{c:?}");
+    }
+
+    #[test]
+    fn colored_empty_argv() {
+        // an empty command word renders as the empty quoted token, both quotes
+        // taking the metachar colour (no plain byte is left to carry a role).
+        assert_eq!(colored("", &[]), "\x1b[1;36m'\x1b[0m\x1b[1;36m'\x1b[0m");
+        assert_eq!(strip_sgr(&colored("", &[])), "''");
+        assert_eq!(strip_sgr(&colored("/bin/ls", &[])), "/bin/ls");
+    }
+
+    #[test]
+    fn ffi_colored_two_call_sizing() {
+        let path = b"/bin/echo";
+        let a0 = b"echo";
+        let argv: [*const u8; 1] = [a0.as_ptr()];
+        let lens: [usize; 1] = [a0.len()];
+
+        let mut needed = 0usize;
+        let rc = sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            std::ptr::null_mut(), 0, &mut needed,
+        );
+        assert_eq!(rc, SW_ESCAPE_TRUNCATED);
+
+        let mut buf = vec![0u8; needed + 1];
+        let mut got = 0usize;
+        let rc = sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            buf.as_mut_ptr(), buf.len(), &mut got,
+        );
+        assert_eq!(rc, SW_ESCAPE_OK);
+        assert_eq!(buf[got], 0);
+        assert_eq!(
+            std::str::from_utf8(&buf[..got]).unwrap(),
+            "\x1b[36m/bin/\x1b[0m\x1b[1;36mecho\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn ffi_colored_null_argv_and_invalid_utf8() {
+        // null argv -> path-only line, no panic.
+        let path = b"/bin/ls";
+        let mut needed = 0usize;
+        sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            std::ptr::null(), std::ptr::null(), 3,
+            std::ptr::null_mut(), 0, &mut needed,
+        );
+        let mut buf = vec![0u8; needed + 1];
+        let mut got = 0usize;
+        let rc = sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            std::ptr::null(), std::ptr::null(), 3,
+            buf.as_mut_ptr(), buf.len(), &mut got,
+        );
+        assert_eq!(rc, SW_ESCAPE_OK);
+        assert_eq!(
+            std::str::from_utf8(&buf[..got]).unwrap(),
+            "\x1b[36m/bin/\x1b[0m\x1b[1;36mls\x1b[0m"
+        );
+
+        // an invalid UTF-8 byte in a token becomes U+FFFD, never a panic, and
+        // the coloured line still strips back to the plain one.
+        let bad = [b'a', 0xff, b'b'];
+        let argv: [*const u8; 1] = [bad.as_ptr()];
+        let lens: [usize; 1] = [bad.len()];
+        let mut needed = 0usize;
+        sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            std::ptr::null_mut(), 0, &mut needed,
+        );
+        let mut buf = vec![0u8; needed + 1];
+        let mut got = 0usize;
+        let rc = sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            buf.as_mut_ptr(), buf.len(), &mut got,
+        );
+        assert_eq!(rc, SW_ESCAPE_OK);
+        let s = std::str::from_utf8(&buf[..got]).unwrap();
+        assert_eq!(strip_sgr(s), "/bin/ls 'a\u{fffd}b'");
+    }
+
+    #[test]
+    fn ffi_colored_matches_plain_after_stripping() {
+        // The FFI pair, not just the Rust pair: the two entry points the plugin
+        // picks between must agree byte for byte modulo SGR.
+        let path = b"/usr/bin/git";
+        let toks: [&[u8]; 3] = [b"git", b"commit", b"--amend"];
+        let argv: Vec<*const u8> = toks.iter().map(|t| t.as_ptr()).collect();
+        let lens: Vec<usize> = toks.iter().map(|t| t.len()).collect();
+
+        let render = |f: unsafe extern "C" fn(
+            *const u8, usize, *const *const u8, *const usize, usize,
+            *mut u8, usize, *mut usize,
+        ) -> c_int| {
+            let mut needed = 0usize;
+            unsafe {
+                f(path.as_ptr(), path.len(), argv.as_ptr(), lens.as_ptr(), toks.len(),
+                  std::ptr::null_mut(), 0, &mut needed);
+            }
+            let mut buf = vec![0u8; needed + 1];
+            let mut got = 0usize;
+            let rc = unsafe {
+                f(path.as_ptr(), path.len(), argv.as_ptr(), lens.as_ptr(), toks.len(),
+                  buf.as_mut_ptr(), buf.len(), &mut got)
+            };
+            assert_eq!(rc, SW_ESCAPE_OK);
+            String::from_utf8(buf[..got].to_vec()).unwrap()
+        };
+
+        let plain = render(sw_full_command_line);
+        let color = render(sw_full_command_line_colored);
+        assert_eq!(strip_sgr(&color), plain);
+        assert_ne!(color, plain);
     }
 
     #[test]

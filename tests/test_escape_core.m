@@ -10,6 +10,12 @@
  * string, so it is out of scope here; the ObjC-only surrogate passthrough is
  * covered in test_prompt_formatter.m). Invalid-UTF-8 handling deliberately
  * differs (Rust: U+FFFD; ObjC: drops the token) and is likewise not compared.
+ *
+ * The colouriser (sw_full_command_line_colored, Rust-only -- the audit bundle
+ * cannot link PromptFormatter) is guarded here too, against the same reference:
+ * strip its SGR and the bytes must equal the plain line from BOTH renderers. It
+ * has no ObjC twin to diverge from, but it must never diverge from the plain
+ * line it decorates.
  */
 #import "PromptFormatter.h"
 #import "sw_test.h"
@@ -82,6 +88,54 @@ static NSString *rustFullCmd(NSString *path, NSArray<NSString *> *argv) {
     free(ap);
     free(al);
     return out;
+}
+
+static NSString *rustColoredCmd(NSString *path, NSArray<NSString *> *argv) {
+    NSData *pd = [path dataUsingEncoding:NSUTF8StringEncoding];
+    NSUInteger n = argv.count;
+    const uint8_t **ap = calloc(n ? n : 1, sizeof(*ap));
+    size_t *al = calloc(n ? n : 1, sizeof(*al));
+    NSMutableArray<NSData *> *hold = [NSMutableArray array];  /* keep bytes alive */
+    for (NSUInteger i = 0; i < n; i++) {
+        NSData *d = [argv[i] dataUsingEncoding:NSUTF8StringEncoding];
+        [hold addObject:d];
+        ap[i] = d.bytes;
+        al[i] = d.length;
+    }
+    size_t needed = 0;
+    sw_full_command_line_colored(pd.bytes, pd.length, ap, al, n, NULL, 0, &needed);
+    uint8_t *buf = malloc(needed + 1);
+    size_t got = 0;
+    NSString *out = nil;
+    if (buf && sw_full_command_line_colored(pd.bytes, pd.length, ap, al, n,
+                                            buf, needed + 1, &got) == SW_ESCAPE_OK) {
+        out = bytesToStr(buf, got);
+    }
+    free(buf);
+    free(ap);
+    free(al);
+    return out;
+}
+
+/* Drop every SGR sequence, leaving the bytes the terminal actually shows.
+ * Deliberately dumb (ESC '[' ... 'm'): the colouriser emits nothing else, and a
+ * stricter parser would hide a regression that emitted something else. */
+static NSString *stripSGR(NSString *s) {
+    if (s == nil) return nil;
+    NSMutableString *o = [NSMutableString stringWithCapacity:s.length];
+    NSUInteger len = s.length, i = 0;
+    while (i < len) {
+        unichar c = [s characterAtIndex:i];
+        if (c == 0x1b) {
+            i++;
+            while (i < len && [s characterAtIndex:i] != 'm') i++;
+            i++;                                   /* consume the 'm' */
+            continue;
+        }
+        [o appendFormat:@"%C", c];
+        i++;
+    }
+    return o;
 }
 
 /* unichar -> length-1 NSString (reliable for NUL and other controls). */
@@ -179,6 +233,75 @@ static void test_fullcmd_equivalence(void) {
        "full command with unicode byte-identical");
 }
 
+/* The coloured command line is the SAME line with SGR layered on: strip the
+ * colour and the bytes must equal what BOTH plain renderers produce (the Rust
+ * one and the ObjC reference). That is the invariant the whole design rests on --
+ * colour is layout, never content, so no highlight can add, hide, or reorder a
+ * byte of the command the user is about to authorize. */
+static void test_colored_preserves_bytes(void) {
+    NSArray *cases = @[
+        @[@"/bin/echo", @[@"echo", @"hello"]],
+        @[@"/bin/echo", @[]],
+        @[@"id", @[@"id"]],
+        @[@"/usr/bin/git", @[@"git", @"status", @"--porcelain"]],
+        @[@"/run/current-system/sw/bin/pinned",
+          @[@"pinned", @"review", @"--file", @"/Library/App Support/x.json"]],
+        @[@"/bin/echo", @[@"echo", @"a b", @"a'b", @"-", @"--", @"-x"]],
+        @[@"/bin/echo", @[@"echo", @"sudowhat: user: evil"]],
+        @[@"/bin/echo", @[@"echo", @"...", @"  padded  ", @""]],
+        @[@"/usr/bin/日本", @[@"日本", @"café", @"😀"]],
+        @[@"/a b/prog name", @[@"prog name"]],
+    ];
+    for (NSArray *c in cases) {
+        NSString *path = c[0];
+        NSArray *argv = c[1];
+        EQ(stripSGR(rustColoredCmd(path, argv)), fullcmd(path, argv),
+           "coloured command strips back to the ObjC plain line");
+        EQ(stripSGR(rustColoredCmd(path, argv)), rustFullCmd(path, argv),
+           "coloured command strips back to the Rust plain line");
+    }
+
+    /* control chars, bidi override and a literal backslash: the escapes must
+     * survive the colouriser byte for byte, wrapped but never rewritten. */
+    NSString *evil = cat(cat(@"a", uni(0x0a)), cat(uni(0x202e), @"b\\c"));
+    EQ(stripSGR(rustColoredCmd(@"/bin/echo", @[@"echo", evil])),
+       fullcmd(@"/bin/echo", @[@"echo", evil]),
+       "coloured command with escapes strips back to the plain line");
+}
+
+/* Role assignment, pinned to exact bytes: the program's directory part plain
+ * cyan, its basename bold cyan, option flags dim, values plain. */
+static void test_colored_roles(void) {
+    EQ(rustColoredCmd(@"/bin/echo", @[@"echo"]),
+       @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m",
+       "program dirname plain cyan, basename bold cyan");
+    EQ(rustColoredCmd(@"id", @[@"id"]), @"\033[1;36mid\033[0m",
+       "a bare command word is all basename");
+    EQ(rustColoredCmd(@"/bin/git", @[@"git", @"--file", @"x"]),
+       @"\033[36m/bin/\033[0m\033[1;36mgit\033[0m \033[2m--file\033[0m x",
+       "flags dim, values plain, separators untouched");
+}
+
+/* A hostile token spelled like one of our own display lines lands quoted, and
+ * the quotes carry the metachar colour -- it reads as data, not as a real
+ * sudowhat line. The anomaly palette is the one PromptFormatter already ships. */
+static void test_colored_hostile_and_anomalies(void) {
+    NSString *hostile = rustColoredCmd(@"/bin/echo", @[@"echo", @"sudowhat: user: evil"]);
+    OK([hostile containsString:@"\033[1;36m'\033[0msudowhat:"],
+       "hostile token opens with a coloured quote");
+    OK([hostile hasSuffix:@"\033[1;36m'\033[0m"],
+       "hostile token closes with a coloured quote");
+    EQ(stripSGR(hostile), @"/bin/echo 'sudowhat: user: evil'",
+       "hostile token is quoted, not structural");
+
+    NSString *nl = rustColoredCmd(@"/bin/echo", @[@"echo", cat(cat(@"a", uni(0x0a)), @"b")]);
+    OK([nl containsString:@"\033[1;35m\\n\033[0m"], "control escape is magenta");
+
+    NSString *bidi = rustColoredCmd(@"/bin/echo", @[@"echo", cat(uni(0x202e), @"x")]);
+    OK([bidi containsString:@"\033[1;31m\\u202e\033[0m"],
+       "deceptive Unicode escape is red");
+}
+
 /* A couple of explicit sanity checks so a totally broken Rust build fails
  * loudly, not just silently matching a broken ObjC side. */
 static void test_explicit_values(void) {
@@ -195,6 +318,9 @@ int main(void) {
         test_escape_equivalence();
         test_quote_equivalence();
         test_fullcmd_equivalence();
+        test_colored_preserves_bytes();
+        test_colored_roles();
+        test_colored_hostile_and_anomalies();
         SW_SUMMARY("escape_core equivalence (Rust C-ABI == ObjC PromptFormatter)");
     }
 }

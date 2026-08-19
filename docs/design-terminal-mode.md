@@ -8,12 +8,14 @@ path, with the escape/quote core ported to Rust (`shared/escape_core/`, a
 display + native PAM password, no code-signing anchor) is now in progress — a
 pure-Rust `cdylib` reusing escape_core, with its own design note at
 `docs/design-linux-port.md` (audit-only, trust = sudo's own file perms, the
-`sudo.conf`/`sudoers` re-declaration wrinkle). Still future: the **no-biometric
-terminal password for a console user** (open decision #1 — dropping the
-console-gate + approval step-aside), the as-typed vs resolved split, the
-resolved-path last-look, and the anomaly colouriser (echoColor). Original design
-captured 2026-07-20; sibling to `docs/design-noncon-sudo.md` (non-console +
-policy deference, shipped).
+`sudo.conf`/`sudoers` re-declaration wrinkle). The **`command:` colouriser**
+(`echoColor`) has landed on macOS — see "Highlighting the command line" below.
+Still future: the **no-biometric terminal password for a console user** (open
+decision #1 — dropping the console-gate + approval step-aside), the as-typed vs
+resolved split, the resolved-path last-look, and the restyle of the block
+*around* the command line (scope (b) below). Original design captured
+2026-07-20; sibling to `docs/design-noncon-sudo.md` (non-console + policy
+deference, shipped).
 
 ## Goal
 
@@ -125,6 +127,71 @@ being fused into the biometric sheet.
    sites, clearer ownership. (Mind the ordering: the verify code still emits at
    sheet time in the approval plugin, so on the biometric path the tty shows the
    command first (audit), then the code + sheet (approval) — verify on hardware.)
+
+## Highlighting the command line — scope (a), SHIPPED
+
+The `command:` value is the star of the display and the hardest thing to read: a
+real invocation runs to several hundred characters and wraps blind, burying the
+one token worth reading (the program path) at the front of the wrap. The fix is
+**highlight, not split**, and it is deliberately confined to the command line.
+
+**One logical line.** No per-option splitting, no break points, no elision, no
+reordering — the terminal soft-wraps and that is enough. Splitting would invent
+structure that is not in the bytes and would drift from the caller's own
+`display == exact argv` rule (a caller such as `pinned` shows the same argv
+before it elevates; two renderings that disagree are worse than one that wraps).
+A disclosure tool that abbreviates is worthless.
+
+**Colour is layout over content, never content.** `escape_core` escapes and
+quotes first; the SGR sequences go only *around* the finished tokens. Strip the
+SGR and the bytes are `sw_full_command_line`'s exactly — the round-trip
+invariant, pinned by unit tests on both sides of the FFI. So the highlight can
+neither add nor hide a byte, and colouring attacker-influenced content is safe:
+emphasis is not a trust signal (the anchor stays the verify code matching the
+system-rendered sheet), and the input is already free of raw control bytes, so
+no attacker byte can become an escape sequence.
+
+**Role palette** (`sw_full_command_line_colored`, `shared/escape_core`), one
+house palette shared with `pinned`'s `prog_disp`:
+
+| role | SGR | note |
+|---|---|---|
+| program path, directory part | `36` (plain cyan) | |
+| program path, basename | `1;36` (bold cyan) | the token worth reading |
+| option flag (rendered form starts with `-`) | `2` (dim) | |
+| value | none | |
+| deceptive Unicode escape `\uNNNN` | `1;31` | anomaly palette, |
+| control-byte escape `\n \r \t \0 \xNN` | `1;35` | as already shipped in |
+| shell metacharacter (`'`, `"`, backtick, `\\`) | `1;36` | `colorizeEscaped:` |
+| notable whitespace run | `100` (grey background) | leading/trailing/doubled |
+
+The role colour is the base for a token; an anomaly span drops it, takes its own
+colour, and the role resumes after. A token is treated as a flag only when its
+*rendered* form starts with `-`, so a hostile token that needed quoting lands
+quoted and coloured as data rather than borrowing a flag's look.
+
+**Gating and fail-soft.** The build-time `echoColor` token (baked into the signed
+bundle) plus the existing runtime `NO_COLOR` / `TERM` gate, with `isatty()` in
+`sw_audit_write_tty` as the final say. **No new runtime knob** — any knob the
+caller can set is a knob a hostile script sets first, and sudowhat's disclosure
+is unconditional by construction. Any colouriser failure (allocation, a non-OK
+return) falls back to the same line in plain: the plugin picks between the two
+`escape_core` renderers, so degrading loses emphasis and nothing else.
+
+## Restyling the block around it — scope (b), NOT DONE
+
+Deliberately a separate round: any plugin change is a signed-bundle rebuild plus
+a reinstall ceremony, and these touch every caller.
+
+- label gutter: pad `user:` / `directory:` / `command:` to one column;
+- colour roles for the `user:` / `directory:` lines (paths cyan, etc.);
+- the blank-line seam — the block fires mid-screen in an arbitrary caller's
+  output, so it is a candidate for a single leading blank;
+- the verify-code line's phrasing (already build-time styled via `verifyStyle`).
+
+**Boundary: (a) = highlight the `command:` value, one line. (b) = the block
+around it.** The Linux port's `display.rs` still renders the command plain —
+adopting `colored_command_line` there is part of finishing Phase 2, not of (a).
 
 ## Open design decisions (resolve before coding)
 

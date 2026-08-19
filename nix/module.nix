@@ -135,22 +135,25 @@ in {
         is coloured to draw the eye to the bytes that matter.
 
         - `off` emits the display with no colour at all.
-        - `anomalies` (the default) wraps only anomaly spans in a fixed,
-          reviewed palette:
+        - `anomalies` (the default) highlights the `command:` line by role — the
+          program's directory part in plain cyan and its basename in bold cyan,
+          option flags dim, values plain — and wraps anomaly spans in a fixed,
+          reviewed palette on top:
           deceptive Unicode escapes (`\uNNNN` — bidi, zero-width, homoglyphs)
           in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
           metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
           and notable whitespace runs (leading, trailing, or doubled spaces)
-          shown on a grey background. Ordinary command structure is left
+          shown on a grey background. The `user:` and `directory:` lines stay
           uncoloured.
 
-        NOTE: the colouriser is a fast-follow — the escape_core port of the
-        anomaly colourer is not done yet — so `anomalies` is accepted but the
-        display currently renders plain regardless. Once it lands it is emphasis
-        only, never a trust signal (the anchor stays the verify code matching the
-        system-rendered sheet), and the runtime opt-outs still force plain:
-        NO_COLOR or TERM=dumb in the invoking environment, or a non-tty target.
-        Baked into the signed bundle at build time.
+        The command stays one logical line: the colour goes around tokens that
+        are already escaped and quoted, so it never splits, elides or reorders
+        anything, and stripping it returns the plain line byte for byte. It is
+        emphasis only, never a trust signal (the anchor stays the verify code
+        matching the system-rendered sheet), the runtime opt-outs still force
+        plain — NO_COLOR or TERM=dumb in the invoking environment, or a non-tty
+        target — and any colouriser failure falls back to the plain line rather
+        than showing nothing. Baked into the signed bundle at build time.
       '';
     };
 

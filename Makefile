@@ -39,16 +39,15 @@ ifeq ($(filter $(SUDOWHAT_AUDIT_DISPLAY),$(SUDOWHAT_VALID_AUDIT_DISPLAY)),)
 endif
 
 # Build-time policy for colouring the audit plugin's terminal command display:
-# "off" (default) or "anomalies" (highlight deceptive Unicode / control-byte
-# escapes, shell metacharacters, and notable whitespace in a fixed reviewed
-# palette). The nix module exposes the same names via services.sudowhat.echoColor.
-# Passed as a bare token to -DSW_AUDIT_ECHO_COLOR (audit bundle only). Default
-# "anomalies": coloring is anomaly-only, so a clean command renders identically
-# and colour appears only for genuinely deceptive bytes (bidi / zero-width /
-# homoglyph / control) — sudowhat's threat model — and the isatty / NO_COLOR /
-# TERM=dumb gates keep it off non-terminals. NOTE: the colouriser is a
-# fast-follow — the escape_core port of colorizeEscaped: is not done yet, so this
-# is accepted but currently renders plain. An unknown value normalizes to
+# "anomalies" (default) or "off". The nix module exposes the same names via
+# services.sudowhat.echoColor. Passed as a bare token to -DSW_AUDIT_ECHO_COLOR
+# (audit bundle only). Under "anomalies" the command line is highlighted by role
+# (program dirname plain cyan, basename bold cyan, option flags dim, values
+# plain) with deceptive Unicode / control-byte escapes, shell metacharacters and
+# notable whitespace in a fixed reviewed palette on top - sudowhat's threat
+# model. It stays ONE line: the SGR goes around the already-escaped tokens, so
+# stripping it returns the plain line byte for byte, and the isatty / NO_COLOR /
+# TERM=dumb gates keep it off non-terminals. An unknown value normalizes to
 # "anomalies" with a warning, rather than failing.
 SUDOWHAT_ECHO_COLOR ?= anomalies
 SUDOWHAT_VALID_ECHO_COLOR := off anomalies
@@ -242,10 +241,12 @@ test: install
 # Builds standalone test executables and runs them; non-zero exit on failure.
 # test_escape_core is the cross-language guard: it links the Rust staticlib and
 # asserts it escapes byte-identically to the ObjC PromptFormatter.
-test-unit: build/test_prompt_formatter build/test_plugin_internals build/test_escape_core
+test-unit: build/test_prompt_formatter build/test_plugin_internals \
+		build/test_escape_core build/test_audit_internals
 	@build/test_prompt_formatter
 	@build/test_plugin_internals
 	@build/test_escape_core
+	@build/test_audit_internals
 
 build/test_prompt_formatter: tests/test_prompt_formatter.m tests/sw_test.h \
 		plugin/PromptFormatter.m plugin/PromptFormatter.h | build
@@ -270,6 +271,19 @@ build/test_plugin_internals: tests/test_plugin_internals.m tests/sw_test.h \
 	    $(TEST_FRAMEWORKS) -o $@ \
 	    tests/test_plugin_internals.m plugin/PromptFormatter.m \
 	    shared/SignatureVerifier.m shared/SessionGuard.m
+
+# Includes plugin/sudowhat_audit.m directly to reach its static helpers, so that
+# file is compiled into the binary - do NOT also pass it as a source. Its own
+# binary rather than part of test_plugin_internals: the two plugins cannot share
+# a translation unit (each has a file-static find_kv, and each needs a different
+# -DSW_SIGVERIFIER_CLASS). Links the Rust staticlib, where the colouriser lives.
+build/test_audit_internals: tests/test_audit_internals.m tests/sw_test.h \
+		plugin/sudowhat_audit.m shared/SignatureVerifier.m \
+		$(ESCAPE_CORE_DIR)/escape_core.h $(ESCAPE_CORE_LIB) | build
+	$(CC) $(TEST_CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatAuditSigVerifier \
+	    -framework Foundation -framework CoreFoundation -framework Security \
+	    -o $@ tests/test_audit_internals.m shared/SignatureVerifier.m \
+	    $(ESCAPE_CORE_LIB)
 
 # --- Linux port (Phase 2): terminal command display via a pure-Rust audit
 # plugin (linux/sudowhat_audit, a cdylib reusing shared/escape_core). Every
