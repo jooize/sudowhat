@@ -93,8 +93,8 @@ static void test_command_line_colored(void) {
     NSString *color = sw_audit_command_line(argv, 1, YES);
 
     EQ(plain, @"/bin/echo --flag value", "plain line");
-    EQ(color, @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m --flag value",
-       "coloured line: dirname plain cyan, basename bold cyan, flag UNSTYLED");
+    EQ(color, @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m \033[1;34m--flag\033[0m value",
+       "coloured line: dirname plain cyan, basename bold cyan, flag bold blue");
     EQ(stripSGR(color), plain, "stripping the SGR returns the plain line exactly");
 
     /* One logical line: never split, never elided, whatever the length. */

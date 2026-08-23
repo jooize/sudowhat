@@ -281,11 +281,19 @@ static void test_colored_roles(void) {
     EQ(rustColoredCmd(@"id", @[@"id"]), @"\033[1;36mid\033[0m",
        "a bare command word is all basename");
     EQ(rustColoredCmd(@"/bin/git", @[@"git", @"--file", @"x"]),
-       @"\033[36m/bin/\033[0m\033[1;36mgit\033[0m --file x",
-       "flags and values render alike, separators untouched");
+       @"\033[36m/bin/\033[0m\033[1;36mgit\033[0m \033[1;34m--file\033[0m x",
+       "flags bold blue, values plain, separators untouched");
     OK([rustColoredCmd(@"/bin/rm", @[@"rm", @"-rf", @"/"]) rangeOfString:@"\033[2m"].location
        == NSNotFound,
        "no dim anywhere on a line that needed no quoting");
+    OK([rustColoredCmd(@"/bin/rm", @[@"rm", @"-rf", @"/"]) rangeOfString:@"\033[1;34m-rf\033[0m"].location
+       != NSNotFound,
+       "a flag is bold blue (lexical: starts with a dash)");
+    /* A hostile token that needed quoting renders '...' (leading quote, not
+     * dash) -- it must NOT borrow the flag colour. */
+    OK([rustColoredCmd(@"/bin/echo", @[@"echo", @"-rf x"]) rangeOfString:@"\033[1;34m"].location
+       == NSNotFound,
+       "a quoted token is never flag-coloured");
 }
 
 /* Dim means exactly one thing: these bytes are ours. sudo hands the plugin an

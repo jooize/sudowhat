@@ -263,6 +263,14 @@ const SGR_PROG_BASE: &str = "\x1b[1;36m";
 /// `'\''` idiom, which are the only way a quote the argument really contained
 /// can be represented.
 const SGR_OURS: &str = "\x1b[2m";
+/// option flags: a rendered token that starts with '-'. Bold blue -- distinct
+/// from the program's bold cyan and the frame's yellow, readable where plain
+/// blue is not. This is a deliberately LEXICAL mark (by user choice: colour any
+/// flag, no judgement): "starts with a dash" is not a claim about which flag is
+/// dangerous -- sudowhat cannot know that (-rf looks like a flag, if=/dev/zero
+/// does not), and a token that needed quoting renders as '...' (leading quote,
+/// not dash) so hostile input still reads as data, never borrows the flag look.
+const SGR_FLAG: &str = "\x1b[1;34m";
 
 /// Emit one plain char, arming `base` first if it is not already in effect.
 fn push_plain(c: char, base: &str, armed: &mut bool, out: &mut String) {
@@ -392,20 +400,20 @@ fn colorize_escaped(s: &str, base: &str, out: &mut String) {
 
 /// The full command line as [`full_command_line`] builds it, with SGR colour
 /// layered on by role: the program's directory part plain cyan and its basename
-/// bold cyan, every other token plain, our own quotes dim, and anomalous spans
-/// (deceptive Unicode, control-byte escapes, shell metacharacters, notable
-/// whitespace) in the anomaly palette on top. One logical line -- nothing is
-/// wrapped, elided or reordered, and the bytes between the SGR sequences are
-/// exactly the plain line's bytes.
+/// bold cyan, option flags bold blue, every other token plain, our own quotes
+/// dim, and anomalous spans (deceptive Unicode, control-byte escapes, shell
+/// metacharacters, notable whitespace) in the anomaly palette on top. One
+/// logical line -- nothing is wrapped, elided or reordered, and the bytes
+/// between the SGR sequences are exactly the plain line's bytes.
 ///
-/// Option flags are DELIBERATELY unstyled. An earlier revision dimmed a token
-/// whose rendered form started with '-', inherited from pinned's `prog_disp`,
-/// where dim flags are right because that display is about which program runs.
-/// Here the display is about what happens as root, and `--no-preserve-root`
-/// must not be the faintest thing on the line. "Starts with a dash" was also
-/// the one guess in the palette: it is lexical, not semantic -- wrong by
-/// definition after `--`, and blind to `dd if=...` or `tar xvf`. Retiring it
-/// leaves dim with exactly one meaning everywhere: these bytes are ours.
+/// Option flags (a rendered token starting with '-') are coloured by user
+/// choice: colour any flag, no judgement. This is a LEXICAL mark, not a claim
+/// about which flag is dangerous -- "starts with a dash" is wrong after `--`
+/// and blind to `dd if=...` or `tar xvf`, and sudowhat has no standing to say
+/// which is which. It stays honest about hostile input because a token that
+/// needed quoting renders as '...' (leading quote, not dash) and so is never
+/// mistaken for a flag. Dim therefore still means exactly one thing (our own
+/// quotes); the flag colour is a separate role, not a second meaning for dim.
 pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
     for (i, tok) in command_tokens(path, argv).iter().enumerate() {
         if i > 0 {
@@ -426,9 +434,14 @@ pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
                 }
                 None => colorize_escaped(&rendered, SGR_PROG_BASE, out),
             }
+        } else if rendered.starts_with('-') {
+            // Option flag (lexical: the rendered token starts with '-'). A token
+            // that needed quoting renders as '...' with a leading quote, so it
+            // never reaches here -- hostile input stays data-coloured.
+            colorize_escaped(&rendered, SGR_FLAG, out);
         } else {
-            // Every argument carries the same (empty) role colour; only the
-            // anomaly palette and our own quotes mark anything inside it.
+            // Values carry no role colour; only the anomaly palette and our own
+            // quotes mark anything inside them.
             colorize_escaped(&rendered, "", out);
         }
     }
@@ -830,16 +843,17 @@ mod tests {
 
     #[test]
     fn colored_flag_and_value_roles() {
-        // Flags and values render THE SAME: unstyled. Nothing on the line but
-        // the program token, our own quotes and the anomaly palette carries a
-        // colour, so a consequential flag can never be the faintest thing shown.
+        // Flags are bold blue (by user choice: colour any flag, no judgement);
+        // values stay unstyled. The flag colour is a role of its own, so dim
+        // continues to mean exactly one thing: our own quotes.
         assert_eq!(
             colored("/bin/git", &["git", "--file", "x"]),
-            "\x1b[36m/bin/\x1b[0m\x1b[1;36mgit\x1b[0m --file x"
+            "\x1b[36m/bin/\x1b[0m\x1b[1;36mgit\x1b[0m \x1b[1;34m--file\x1b[0m x"
         );
-        // a bare "-" and "--" are just tokens now; no dash heuristic survives.
-        assert_eq!(colored("p", &["p", "--"]), "\x1b[1;36mp\x1b[0m --");
-        // and dim no longer appears anywhere on a line with no quoting in it.
+        // a bare "-" / "--" is lexically a flag too -- the mark is lexical, not a
+        // judgement about what the token means.
+        assert_eq!(colored("p", &["p", "--"]), "\x1b[1;36mp\x1b[0m \x1b[1;34m--\x1b[0m");
+        // dim still appears only where our quoting does, never on a flag.
         assert!(!colored("/bin/git", &["git", "-rf", "x"]).contains("\x1b[2m"));
     }
 
