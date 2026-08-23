@@ -197,7 +197,7 @@ static void test_verify_code_to_tty(void) {
      * the bytes plain, so no escape sequence can ever corrupt a captured log. */
     OK(write_verify_code_to_tty(path, "3SNJ", YES),
        "write_verify_code_to_tty succeeds on a writable path");
-    EQ(sw_read_utf8(path), @"sudowhat: verify code 3SNJ in the prompt\n",
+    EQ(sw_read_utf8(path), @"sudowhat: verify:     3SNJ  (compare with the prompt)\n",
        "a non-tty stays plain even when color is allowed");
     unlink(path);
 
@@ -215,7 +215,7 @@ static void test_emit_verify_code_tty_only(void) {
     if (fd >= 0) close(fd);
 
     emit_verify_code(path, "3SNJ", YES);
-    EQ(sw_read_utf8(path), @"sudowhat: verify code 3SNJ in the prompt\n",
+    EQ(sw_read_utf8(path), @"sudowhat: verify:     3SNJ  (compare with the prompt)\n",
        "emit_verify_code wrote the line to the tty path");
     unlink(path);
 
@@ -226,21 +226,44 @@ static void test_emit_verify_code_tty_only(void) {
     OK(1, "no controlling terminal -> silent (no fallback), no crash");
 }
 
-/* The bold rendering wraps ONLY the code in SGR 1 / reset, and sw_color_allowed
- * honours the env opt-outs. Color is a legibility aid on the tty echo, never a
- * trust signal (the anchor is the code matching the system-rendered Touch ID
- * sheet, which cannot be colored), so these only pin bytes and env logic. */
+/* The line is a field in the audit block's label gutter: "verify:" padded to
+ * column 12, the code, then what to do with it. Styled, the label is bold like
+ * the audit plugin's labels, the code carries the build-time verifyStyle
+ * emphasis (bold here), and the trailing instruction is dim because it is our
+ * own chrome. sw_color_allowed honours the env opt-outs. Color is a legibility
+ * aid on the tty echo, never a trust signal (the anchor is the code matching the
+ * system-rendered Touch ID sheet, which cannot be colored), so these only pin
+ * bytes and env logic. */
 static void test_verify_line_format_and_color(void) {
-    char buf[96];
+    char buf[128];
 
     int n = format_verify_line(buf, sizeof buf, "3SNJ", NO);
-    OK(n > 0 && strcmp(buf, "sudowhat: verify code 3SNJ in the prompt\n") == 0,
+    OK(n > 0 && strcmp(buf, "sudowhat: verify:     3SNJ  (compare with the prompt)\n") == 0,
        "plain rendering carries no escape bytes");
 
     n = format_verify_line(buf, sizeof buf, "3SNJ", YES);
     OK(n > 0 && strcmp(buf,
-       "sudowhat: verify code \033[1m3SNJ\033[0m in the prompt\n") == 0,
-       "bold rendering wraps only the code in SGR 1 / reset");
+       "sudowhat: \033[1mverify:\033[0m     \033[1m3SNJ\033[0m"
+       "  \033[2m(compare with the prompt)\033[0m\n") == 0,
+       "styled rendering: bold label, bold code, dim tail, same gutter");
+
+    /* Layout is identical either way: strip every SGR sequence from the styled
+     * line and the plain line comes back, byte for byte. */
+    char plain[128], styled[128];
+    format_verify_line(plain, sizeof plain, "3SNJ", NO);
+    format_verify_line(styled, sizeof styled, "3SNJ", YES);
+    char stripped[128];
+    size_t si = 0;
+    for (size_t i = 0; styled[i] != '\0' && si + 1 < sizeof stripped; i++) {
+        if (styled[i] == '\033') {
+            while (styled[i] != '\0' && styled[i] != 'm') i++;
+            continue;                                   /* the for-loop eats 'm' */
+        }
+        stripped[si++] = styled[i];
+    }
+    stripped[si] = '\0';
+    OK(strcmp(stripped, plain) == 0,
+       "the styled line strips back to the plain line exactly");
 
     /* sw_color_allowed reads the captured invoking-context snapshot. */
     sw_invoking_ctx saved = g_inv;

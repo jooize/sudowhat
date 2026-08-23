@@ -46,9 +46,9 @@ plaintext password in-plugin is complex and dangerous, and unnecessary).
 
 ```
 $ sudo systemctl restart nginx
-sudowhat: user: root                    <- audit plugin open(), BEFORE auth
-sudowhat: directory: /etc/nginx         <- the invoking cwd (user_info["cwd"])
-sudowhat: command: systemctl restart nginx  <- as-typed (see "resolved path" below)
+sudowhat: user:       root              <- audit plugin open(), BEFORE auth
+sudowhat: directory:  /etc/nginx        <- the invoking cwd (user_info["cwd"])
+sudowhat: command:    systemctl restart nginx  <- as-typed (see "resolved path" below)
 Password: ****                          <- sudo's native PAM, on the terminal
 sudowhat: will exec /run/.../systemctl restart nginx   <- resolved last-look (optional)
 <runs>
@@ -158,17 +158,44 @@ house palette shared with `pinned`'s `prog_disp`:
 |---|---|---|
 | program path, directory part | `36` (plain cyan) | |
 | program path, basename | `1;36` (bold cyan) | the token worth reading |
-| option flag (rendered form starts with `-`) | `2` (dim) | |
-| value | none | |
+| every other token (flag or value alike) | none | see below |
+| a single quote *we* added | `2` (dim) | our own chrome |
 | deceptive Unicode escape `\uNNNN` | `1;31` | anomaly palette, |
 | control-byte escape `\n \r \t \0 \xNN` | `1;35` | as already shipped in |
-| shell metacharacter (`'`, `"`, backtick, `\\`) | `1;36` | `colorizeEscaped:` |
+| shell metacharacter (`"`, backtick, `\\`, a data `'`) | `1;36` | `colorizeEscaped:` |
 | notable whitespace run | `100` (grey background) | leading/trailing/doubled |
 
 The role colour is the base for a token; an anomaly span drops it, takes its own
-colour, and the role resumes after. A token is treated as a flag only when its
-*rendered* form starts with `-`, so a hostile token that needed quoting lands
-quoted and coloured as data rather than borrowing a flag's look.
+colour, and the role resumes after.
+
+Colour asserts only what sudowhat KNOWS, which is exactly three things: a
+**structural fact** (token[0] is the program, because sudo will execve it), a
+**fact about bytes** (control chars, deceptive Unicode, invisible padding —
+observations about the data, never readings of it), and **our own chrome** (the
+quotes invented to render an argv array as one pasteable line). Anything else
+would be a guess about someone else's command grammar.
+
+That is why **option flags carry no colour**. An earlier revision dimmed a token
+whose rendered form started with `-`, inherited from `pinned`'s `prog_disp`,
+where dim flags are right because that display is about *which program runs*.
+Here the display is about *what happens as root*, and `--no-preserve-root` must
+not be the faintest thing on the line. "Starts with a dash" was also the one
+guess in the palette: lexical, not semantic — wrong by definition after `--`,
+blind to `dd if=...` and `tar xvf`. Retiring it leaves dim with exactly one
+meaning: *these bytes are ours, not the data's*.
+
+**Quote attribution.** Nothing reaching sudo contains a quote — sudo hands the
+plugin an argv ARRAY — so every quote on screen is one `quote_token` added,
+except those spliced through the POSIX `'\''` idiom, the only way a quote the
+argument really contained can be represented. Ours render dim, the data's stay
+lit. The rule is decided inside `colorize_escaped`'s left-to-right walk and
+nowhere else: the walk consumes `\\` as one unit first, so a lone `\` can only
+be the idiom's, and the `'` after it is the data's. As a regex lookbehind over
+the finished string the same rule is WRONG — input `\'` renders `\\'\''`, whose
+third character is our closing quote and *is* preceded by a backslash. An
+attribution-oracle test pins it: for an adversarial token set, the count of lit
+quotes equals the count of `'` in `escape_control(input)`, and every other quote
+sits in a dim span.
 
 **Gating and fail-soft.** The build-time `echoColor` token (baked into the signed
 bundle) plus the existing runtime `NO_COLOR` / `TERM` gate, with `isatty()` in
@@ -178,16 +205,40 @@ is unconditional by construction. Any colouriser failure (allocation, a non-OK
 return) falls back to the same line in plain: the plugin picks between the two
 `escape_core` renderers, so degrading loses emphasis and nothing else.
 
-## Restyling the block around it — scope (b), NOT DONE
+## Restyling the block around it — scope (b), DONE
 
-Deliberately a separate round: any plugin change is a signed-bundle rebuild plus
-a reinstall ceremony, and these touch every caller.
+A separate round, because any plugin change is a signed-bundle rebuild plus a
+reinstall ceremony, and these touch every caller.
 
-- label gutter: pad `user:` / `directory:` / `command:` to one column;
-- colour roles for the `user:` / `directory:` lines (paths cyan, etc.);
-- the blank-line seam — the block fires mid-screen in an arbitrary caller's
-  output, so it is a candidate for a single leading blank;
-- the verify-code line's phrasing (already build-time styled via `verifyStyle`).
+- **Label gutter.** `user:` / `directory:` / `command:` are padded so every value
+  starts in one column: the longest label (`directory:`, 10) plus two spaces,
+  measured after the `sudowhat: ` prefix. That prefix stays on every row rather
+  than being hoisted into a header — the block lands in the middle of somebody
+  else's output, so each line has to carry its own provenance.
+- **Colour on the frame rows.** The `directory:` value takes the same
+  dirname-plain-cyan / basename-bold-cyan split as the program path (done in the
+  plugin, not by routing the cwd through `sw_full_command_line_colored`, which
+  would also shell-quote it and make the coloured and plain blocks differ in
+  bytes). The `user:` value is plain for `root` — the expected target earns no
+  emphasis — and plain yellow for any other target. The frame stays clear of
+  `escape_core`'s anomaly palette (`1;31`, `1;35`, `1;36`, `100`).
+- **The seam: flush, no leading blank.** Reversed from the first draft. The
+  courtesy-blank exception assumes a program owns both sides of the seam;
+  sudowhat owns neither and cannot know what preceded it. Generalization test:
+  if every program opened with a courtesy blank, a session would be a column of
+  holes. Spacing belongs to the caller — `pinned` or `claude-update-nix` may
+  print their own blank before invoking sudo.
+- **The verify-code line** became a fourth field in the same gutter:
+  `sudowhat: verify:     Z96E  (compare with the prompt)` — label bold like the
+  other rows, code carrying the build-time `verifyStyle` emphasis, the trailing
+  instruction dim. No attention colour: yellow already means "the target user is
+  not root", and spending it here would say something the reader knows and give
+  one colour two meanings. Emitted by the APPROVAL plugin at a later stage, not
+  by the audit block.
+
+Not carried across: the Linux port's `display.rs` still renders the unpadded
+block, since it renders the command plain too. Adopting both is part of
+finishing Phase 2.
 
 **Boundary: (a) = highlight the `command:` value, one line. (b) = the block
 around it.** The Linux port's `display.rs` still renders the command plain —

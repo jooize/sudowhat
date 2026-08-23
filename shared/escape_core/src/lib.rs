@@ -229,15 +229,26 @@ pub fn full_command_line(path: &str, argv: &[&str], out: &mut String) {
 /// Fixed SGR palette. Kept in one reviewed place so the only escape bytes that
 /// can reach the terminal are this closed set -- the classifier below is their
 /// sole producer. The anomaly colours are the ones
-/// `+[SudoWhatPromptFormatter colorizeEscaped:]` already ships; the role colours
-/// are pinned's `prog_disp` treatment (dirname plain cyan, basename bold cyan)
-/// and its dim for flags, so one house palette spans both tools.
+/// `+[SudoWhatPromptFormatter colorizeEscaped:]` already ships; the program-path
+/// pair is pinned's `prog_disp` treatment (dirname plain cyan, basename bold
+/// cyan), so one house palette spans both tools.
+///
+/// Colour asserts only what sudowhat KNOWS, which is exactly three kinds of
+/// thing: a structural fact (token[0] is the program, because sudo will execve
+/// it), a fact about the bytes (control chars, deceptive Unicode, invisible
+/// padding -- observations about the data, never readings of it), and our own
+/// chrome (the quotes we invented to render an argv array as one pasteable
+/// line). Dim is reserved for that third kind and means nothing else: THESE
+/// BYTES ARE OURS, NOT THE DATA'S. Anything beyond those three would be a guess
+/// about someone else's command grammar, which is why there is no flag colour
+/// here -- see `colored_command_line`.
 const SGR_RESET: &str = "\x1b[0m";
 /// deceptive Unicode escapes: \uNNNN
 const SGR_UNICODE: &str = "\x1b[1;31m";
 /// control-byte escapes: \n \r \t \0 \xNN
 const SGR_CONTROL: &str = "\x1b[1;35m";
-/// shell metacharacters: ' " ` and the escaped backslash \\
+/// shell metacharacters the DATA contained: " ` , the escaped backslash \\, and
+/// a ' that arrived through the `'\''` idiom (see `colorize_escaped`)
 const SGR_META: &str = "\x1b[1;36m";
 /// notable whitespace runs: grey background, so invisible padding reads as a block
 const SGR_SPACE: &str = "\x1b[100m";
@@ -245,8 +256,13 @@ const SGR_SPACE: &str = "\x1b[100m";
 const SGR_PROG_DIR: &str = "\x1b[36m";
 /// program path, basename -- the one token worth reading at the head of the line
 const SGR_PROG_BASE: &str = "\x1b[1;36m";
-/// option flags (a token whose rendered form starts with '-')
-const SGR_FLAG: &str = "\x1b[2m";
+/// our own chrome: the single quotes `quote_token` added, which were never bytes
+/// of an argument. Nothing reaching sudo contains a quote -- sudo hands the
+/// plugin an argv ARRAY -- so every quote on screen is one we invented while
+/// rendering that array as a line, EXCEPT the ones that arrived through the
+/// `'\''` idiom, which are the only way a quote the argument really contained
+/// can be represented.
+const SGR_OURS: &str = "\x1b[2m";
 
 /// Emit one plain char, arming `base` first if it is not already in effect.
 fn push_plain(c: char, base: &str, armed: &mut bool, out: &mut String) {
@@ -270,9 +286,11 @@ fn push_span(text: &str, color: &str, armed: &mut bool, out: &mut String) {
 }
 
 /// Colourise one ALREADY-escaped, already-quoted span: anomaly runs take the
-/// fixed palette, everything else takes `base` (empty = plain). Port of
+/// fixed palette, everything else takes `base` (empty = plain). Grew out of
 /// `+[SudoWhatPromptFormatter colorizeEscaped:]`, with the role colour added
-/// underneath. Purely additive -- stripping the SGR returns `s`.
+/// underneath and single quotes split by who wrote them (see the walk below);
+/// that ObjC method has no production callers and is not kept in step on this
+/// point. Purely additive -- stripping the SGR returns `s`.
 fn colorize_escaped(s: &str, base: &str, out: &mut String) {
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
@@ -306,13 +324,33 @@ fn colorize_escaped(s: &str, base: &str, out: &mut String) {
             }
             push_plain(c, base, &mut armed, out);   // lone '\' (the '\'' idiom)
             i += 1;
+            // Quote attribution, and the ONLY place it is decided. A lone '\'
+            // surviving the match above can only be the one quote_token splices
+            // in front of a quote the ARGUMENT contained, so the ' right after
+            // it is the data's and stays lit -- consumed here so it cannot reach
+            // the branch below, which treats every ' it sees as ours. Doing it
+            // inside this left-to-right walk is what makes the rule correct: the
+            // walk has already eaten "\\" as one unit, so the second '\' of a
+            // doubled backslash never masquerades as this one. As a regex
+            // lookbehind over the finished string the same rule is WRONG --
+            // input \' renders \\'\'' , whose third char is OUR closing quote
+            // and IS preceded by a backslash.
+            if i < len && chars[i] == '\'' {
+                push_span("'", SGR_META, &mut armed, out);
+                i += 1;
+            }
             continue;
         }
 
-        // Shell metacharacters that survive into the displayed string: our
-        // wrapping single quotes, and any ' " ` inside a quoted token. One
-        // colour = "shell-significant character".
-        if c == '\'' || c == '"' || c == '`' {
+        // A single quote reached directly, i.e. not through the idiom above, is
+        // one WE added -- chrome, not content -- so it renders dim. '"' and '`'
+        // are never added by us at all, so they are unconditionally the data's.
+        if c == '\'' {
+            push_span("'", SGR_OURS, &mut armed, out);
+            i += 1;
+            continue;
+        }
+        if c == '"' || c == '`' {
             push_span(&c.to_string(), SGR_META, &mut armed, out);
             i += 1;
             continue;
@@ -354,15 +392,20 @@ fn colorize_escaped(s: &str, base: &str, out: &mut String) {
 
 /// The full command line as [`full_command_line`] builds it, with SGR colour
 /// layered on by role: the program's directory part plain cyan and its basename
-/// bold cyan, option flags dim, values plain, and anomalous spans (deceptive
-/// Unicode, control-byte escapes, shell metacharacters, notable whitespace) in
-/// the anomaly palette on top. One logical line -- nothing is wrapped, elided or
-/// reordered, and the bytes between the SGR sequences are exactly the plain
-/// line's bytes.
+/// bold cyan, every other token plain, our own quotes dim, and anomalous spans
+/// (deceptive Unicode, control-byte escapes, shell metacharacters, notable
+/// whitespace) in the anomaly palette on top. One logical line -- nothing is
+/// wrapped, elided or reordered, and the bytes between the SGR sequences are
+/// exactly the plain line's bytes.
 ///
-/// A token is treated as a flag only when its RENDERED form starts with '-', so
-/// a hostile token that needed quoting lands quoted and coloured as data rather
-/// than borrowing a flag's look.
+/// Option flags are DELIBERATELY unstyled. An earlier revision dimmed a token
+/// whose rendered form started with '-', inherited from pinned's `prog_disp`,
+/// where dim flags are right because that display is about which program runs.
+/// Here the display is about what happens as root, and `--no-preserve-root`
+/// must not be the faintest thing on the line. "Starts with a dash" was also
+/// the one guess in the palette: it is lexical, not semantic -- wrong by
+/// definition after `--`, and blind to `dd if=...` or `tar xvf`. Retiring it
+/// leaves dim with exactly one meaning everywhere: these bytes are ours.
 pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
     for (i, tok) in command_tokens(path, argv).iter().enumerate() {
         if i > 0 {
@@ -383,9 +426,9 @@ pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
                 }
                 None => colorize_escaped(&rendered, SGR_PROG_BASE, out),
             }
-        } else if rendered.starts_with('-') {
-            colorize_escaped(&rendered, SGR_FLAG, out);
         } else {
+            // Every argument carries the same (empty) role colour; only the
+            // anomaly palette and our own quotes mark anything inside it.
             colorize_escaped(&rendered, "", out);
         }
     }
@@ -527,7 +570,7 @@ pub extern "C" fn sw_full_command_line(
 }
 
 /// The same line as [`sw_full_command_line`], with SGR colour layered on by role
-/// (program dirname / basename, option flags, values) and the anomaly palette on
+/// (program dirname / basename, our own quotes) and the anomaly palette on
 /// escaped spans. Byte-identical to that function once the SGR is stripped, and
 /// still one logical line. Same buffer contract as [`sw_escape_control`].
 ///
@@ -787,25 +830,29 @@ mod tests {
 
     #[test]
     fn colored_flag_and_value_roles() {
-        // flags dim, values plain, the separator spaces untouched.
+        // Flags and values render THE SAME: unstyled. Nothing on the line but
+        // the program token, our own quotes and the anomaly palette carries a
+        // colour, so a consequential flag can never be the faintest thing shown.
         assert_eq!(
             colored("/bin/git", &["git", "--file", "x"]),
-            "\x1b[36m/bin/\x1b[0m\x1b[1;36mgit\x1b[0m \x1b[2m--file\x1b[0m x"
+            "\x1b[36m/bin/\x1b[0m\x1b[1;36mgit\x1b[0m --file x"
         );
-        // a bare "-" and "--" are flags too (rendered form starts with '-').
-        assert_eq!(
-            colored("p", &["p", "--"]),
-            "\x1b[1;36mp\x1b[0m \x1b[2m--\x1b[0m"
-        );
+        // a bare "-" and "--" are just tokens now; no dash heuristic survives.
+        assert_eq!(colored("p", &["p", "--"]), "\x1b[1;36mp\x1b[0m --");
+        // and dim no longer appears anywhere on a line with no quoting in it.
+        assert!(!colored("/bin/git", &["git", "-rf", "x"]).contains("\x1b[2m"));
     }
 
     #[test]
     fn colored_hostile_token_reads_as_data() {
         // A token spelled like one of our own lines lands quoted, and the quotes
         // are metachar-coloured, so it cannot pass for a real sudowhat line.
+        // The wrapping quotes are OURS, so they read dim -- the token's own
+        // bytes stay at full weight, which is the point: the reader sees data
+        // inside chrome, not a second sudowhat line.
         let c = colored("/bin/echo", &["echo", "sudowhat: user: evil"]);
-        assert!(c.ends_with("\x1b[1;36m'\x1b[0m"), "unterminated quote: {c:?}");
-        assert!(c.contains("\x1b[1;36m'\x1b[0msudowhat:"), "opening quote: {c:?}");
+        assert!(c.ends_with("\x1b[2m'\x1b[0m"), "unterminated quote: {c:?}");
+        assert!(c.contains("\x1b[2m'\x1b[0msudowhat:"), "opening quote: {c:?}");
         // the whitespace run rule marks the interior spaces of the quoted token
         // only when they are runs or at an edge; single ones stay plain.
         assert_eq!(strip_sgr(&c), "/bin/echo 'sudowhat: user: evil'");
@@ -821,7 +868,7 @@ mod tests {
         assert!(c.contains("\x1b[1;31m\\u202e\x1b[0m"), "unicode escape: {c:?}");
         let c = colored("/bin/echo", &["echo", "a\\b"]);
         assert!(c.contains("\x1b[1;36m\\\\\x1b[0m"), "backslash: {c:?}");
-        // notable whitespace keeps its grey background inside a dim flag token.
+        // notable whitespace keeps its grey background inside a quoted token.
         let c = colored("p", &["p", "-x  y"]);
         assert!(c.contains("\x1b[100m  \x1b[0m"), "space run: {c:?}");
     }
@@ -837,11 +884,131 @@ mod tests {
 
     #[test]
     fn colored_empty_argv() {
-        // an empty command word renders as the empty quoted token, both quotes
-        // taking the metachar colour (no plain byte is left to carry a role).
-        assert_eq!(colored("", &[]), "\x1b[1;36m'\x1b[0m\x1b[1;36m'\x1b[0m");
+        // an empty command word renders as the empty quoted token: the token
+        // contributed no bytes at all, so BOTH quotes are ours and both dim.
+        assert_eq!(colored("", &[]), "\x1b[2m'\x1b[0m\x1b[2m'\x1b[0m");
         assert_eq!(strip_sgr(&colored("", &[])), "''");
         assert_eq!(strip_sgr(&colored("/bin/ls", &[])), "/bin/ls");
+    }
+
+    /// Colourise ONE token exactly as `colored_command_line` does for a non-
+    /// program token: quote it, then walk it with no role colour underneath.
+    fn colored_token(t: &str) -> String {
+        let mut rendered = String::new();
+        quote_token(t, &mut rendered);
+        let mut out = String::new();
+        colorize_escaped(&rendered, "", &mut out);
+        out
+    }
+
+    /// Count the ' characters in a colourised span by the SGR span each one sits
+    /// in: (lit metachar, dim ours). Panics if a quote reaches the terminal with
+    /// no attributing span at all -- that would be a quote the walk classified
+    /// as neither, which is exactly the regression this oracle exists to catch.
+    fn quote_attribution(span: &str) -> (usize, usize) {
+        let mut lit = 0usize;
+        let mut dim = 0usize;
+        let mut cur = String::new();
+        let mut it = span.chars();
+        while let Some(c) = it.next() {
+            if c == '\x1b' {
+                let mut seq = String::from("\x1b");
+                for c2 in it.by_ref() {
+                    seq.push(c2);
+                    if c2 == 'm' {
+                        break;
+                    }
+                }
+                cur = if seq == SGR_RESET { String::new() } else { seq };
+                continue;
+            }
+            if c == '\'' {
+                if cur == SGR_META {
+                    lit += 1;
+                } else if cur == SGR_OURS {
+                    dim += 1;
+                } else {
+                    panic!("quote outside any attributing span ({cur:?}) in {span:?}");
+                }
+            }
+        }
+        (lit, dim)
+    }
+
+    #[test]
+    fn quote_attribution_oracle() {
+        // Ground truth, countable WITHOUT carrying it out of the quoter: sudo
+        // hands the plugin an argv ARRAY, so nothing that reaches us contains a
+        // quote we did not write ourselves. The data's quotes in a rendered
+        // token are therefore exactly the ' characters escape_control leaves in
+        // it; every OTHER ' on screen is chrome and must be dim. Pinning that
+        // count is what makes the walk's inference as trustworthy as a span list
+        // carried from quote_token, while keeping quoting and colour separate.
+        //
+        // The bad direction is a DATA quote rendered dim -- it would understate
+        // hostile content. Under the current escapers it is unreachable (the
+        // only lone '\' surviving the walk is the idiom's), and this test is
+        // what keeps it unreachable.
+        let cases = [
+            "",                 // both quotes ours, no data at all
+            "no_quotes_here",   // safe set: no quoting, so no quotes at all
+            "a b",              // quoted for the space; both quotes ours
+            "'",                // a lone quote
+            "'a",               // quote at the head
+            "a'",               // quote at the tail
+            "'a'",              // a quote at each end
+            "a'b",              // the plain idiom
+            "'''",              // three spliced idioms in a row
+            "''",               // two
+            "don't",
+            "it's a 'test'",
+            "\\",               // one literal backslash, no quote
+            "\\\\",             // two
+            "\\'",              // the trap: renders \\'\'' , third char is OURS
+            "\\\\'",            // and with the doubling one deeper
+            "a\\'b",
+            "\\n'",             // literal backslash-n before a data quote
+            "\n'",              // a REAL newline before a data quote
+            "'\n'",             // data quotes around a real newline
+            "'\t'",
+            "\u{202e}'",        // bidi override then a data quote
+            "'\u{202e}",
+            "caf\u{e9}'x",      // non-ASCII either side of a data quote
+            "\u{1f600}'",       // astral scalar then a data quote
+            "\u{65e5}\u{672c}'",
+        ];
+        for t in cases {
+            let span = colored_token(t);
+            let (lit, dim) = quote_attribution(&span);
+
+            let expected_lit = esc(t).chars().filter(|&c| c == '\'').count();
+            assert_eq!(lit, expected_lit, "data-quote count for {t:?} in {span:?}");
+
+            // Nothing went unattributed: every ' the plain token shows was
+            // counted into exactly one of the two buckets.
+            let rendered = q(t);
+            let total = rendered.chars().filter(|&c| c == '\'').count();
+            assert_eq!(lit + dim, total, "unattributed quote for {t:?} in {span:?}");
+
+            // And the round-trip invariant holds at token granularity too.
+            assert_eq!(strip_sgr(&span), rendered, "round trip for {t:?}");
+        }
+    }
+
+    #[test]
+    fn colored_quote_roles() {
+        // The idiom pinned to exact bytes, so a future escaping change has to
+        // walk past this. 'a'\''b' is five quotes: open(ours), close(ours),
+        // a plain '\', the DATA's, reopen(ours), close(ours).
+        assert_eq!(
+            colored_token("a'b"),
+            "\x1b[2m'\x1b[0ma\x1b[2m'\x1b[0m\\\x1b[1;36m'\x1b[0m\
+             \x1b[2m'\x1b[0mb\x1b[2m'\x1b[0m"
+        );
+        // '"' and '`' are never ours, so they are lit wherever they appear.
+        let c = colored_token("a\"b`c");
+        assert!(c.contains("\x1b[1;36m\"\x1b[0m"), "double quote lit: {c:?}");
+        assert!(c.contains("\x1b[1;36m`\x1b[0m"), "backtick lit: {c:?}");
     }
 
     #[test]

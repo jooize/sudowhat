@@ -267,13 +267,37 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
     }
 }
 
-/* The verify-code line. One set of pieces so the /dev/tty path and the stderr
- * fallback below can never drift apart. The substituted code is the plugin's
- * own nonce — no caller-controlled bytes reach this line — so it needs no
- * escaping. */
-#define SW_VERIFY_PREFIX "sudowhat: verify code "
-#define SW_VERIFY_SUFFIX " in the prompt\n"
+/* The verify-code line. One set of pieces so the styled and the unstyled
+ * rendering can never drift apart. The substituted code is the plugin's own
+ * nonce -- no caller-controlled bytes reach this line -- so it needs no escaping.
+ *
+ * The line is a FOURTH FIELD in the audit plugin's label gutter, not a sentence:
+ * the same "sudowhat: " provenance prefix, the label padded so the value starts
+ * in the same column as user / directory / command (SW_AUDIT_GUTTER, 12 -- the
+ * longest label "directory:" plus two spaces), then the code, then what to do
+ * with it. The two plugins are separate bundles that never share a translation
+ * unit, so the width is duplicated rather than shared; if one moves, move both.
+ *
+ *   sudowhat: verify:     Z96E  (compare with the prompt)
+ *
+ * Styling is deliberately thin: the label bold like the other rows, the code
+ * carrying the build-time verifyStyle emphasis (bold by default), the trailing
+ * instruction dim because it is our own chrome, not a value. No attention
+ * colour -- yellow in this block means "the target user is not root", and
+ * spending it here would both say something the reader already knows and give
+ * one colour two meanings. */
+#define SW_VERIFY_LABEL  "verify:"
+#define SW_VERIFY_GAP    "     "     /* pads "verify:" (7) out to the 12-col gutter */
+#define SW_VERIFY_TAIL   "(compare with the prompt)"
+
+#define SW_VERIFY_PREFIX "sudowhat: " SW_VERIFY_LABEL SW_VERIFY_GAP
+#define SW_VERIFY_SUFFIX "  " SW_VERIFY_TAIL "\n"
 #define SW_VERIFY_LINE_FMT      SW_VERIFY_PREFIX "%s" SW_VERIFY_SUFFIX
+
+#define SW_VERIFY_PREFIX_STYLED \
+    "sudowhat: \033[1m" SW_VERIFY_LABEL "\033[0m" SW_VERIFY_GAP
+#define SW_VERIFY_SUFFIX_STYLED \
+    "  \033[2m" SW_VERIFY_TAIL "\033[0m\n"
 
 /* Build-time emphasis preset for the tty echo, chosen by -DSW_VERIFY_STYLE
  * (services.sudowhat.verifyStyle in the nix module; SUDOWHAT_VERIFY_STYLE in the
@@ -344,19 +368,23 @@ static const char *sw_verify_sgr(void) {
 static const char *sw_verify_sgr(void) { return SW_SGR_SEL(SW_VERIFY_STYLE); }
 #endif
 
-/* Render the verify-code line into buf. Styled (the resolved SGR wrapping only
- * the code) when colorize is YES and the style is not "plain" (empty SGR);
- * unstyled otherwise. The SGR comes only from the fixed table above, never from
- * input, so substituting it via %s adds no more surface than the nonce already
- * does. Returns snprintf's count so callers can fail closed on truncation.
- * Deterministic for every fixed style (unit-testable); "random" is the sole
- * non-deterministic case. */
+/* Render the verify-code line into buf. Styled (bold label, the resolved SGR
+ * around the code, dim tail) when colorize is YES and the style is not "plain"
+ * (empty SGR); entirely unstyled otherwise -- style "plain" is a compile-time
+ * NO_COLOR, so it silences the label and tail emphasis too, not just the code.
+ * Both branches lay out the SAME field widths, so the plain line is the styled
+ * one with every escape sequence removed. The SGR comes only from the fixed
+ * table above, never from input, so substituting it via %s adds no more surface
+ * than the nonce already does. Returns snprintf's count so callers can fail
+ * closed on truncation. Deterministic for every fixed style (unit-testable);
+ * "random" is the sole non-deterministic case. */
 static int format_verify_line(char *buf, size_t bufsz, const char *code,
                               BOOL colorize) {
     const char *sgr = sw_verify_sgr();
     if (colorize && sgr[0] != '\0') {
         return snprintf(buf, bufsz,
-                        SW_VERIFY_PREFIX "\033[%sm%s\033[0m" SW_VERIFY_SUFFIX,
+                        SW_VERIFY_PREFIX_STYLED "\033[%sm%s\033[0m"
+                        SW_VERIFY_SUFFIX_STYLED,
                         sgr, code);
     }
     return snprintf(buf, bufsz, SW_VERIFY_LINE_FMT, code);
@@ -406,7 +434,11 @@ static BOOL write_verify_code_to_tty(const char *ttyPath, const char *code,
 
     BOOL colorize = colorAllowed && isatty(fd);
 
-    char line[96];
+    /* Sized for the widest line the styled branch can produce (the gutter field,
+     * a 4-char code, the tail, and five SGR sequences -- about 81 bytes) with
+     * room to spare, because truncation here fails the whole write: the user
+     * would get NO code on the terminal, which is exactly the cue to distrust. */
+    char line[128];
     int n = format_verify_line(line, sizeof(line), code, colorize);
     if (n < 0 || (size_t)n >= sizeof(line)) { close(fd); return NO; }
 

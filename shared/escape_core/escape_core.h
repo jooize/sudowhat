@@ -51,10 +51,14 @@ int sw_full_command_line(const uint8_t *path, size_t path_len,
                          uint8_t *out, size_t out_cap, size_t *needed);
 
 /* The same line as sw_full_command_line, with SGR colour layered on by role:
- * the program's directory part plain cyan and its basename bold cyan, option
- * flags dim, values plain, and anomalous spans (deceptive Unicode, control-byte
- * escapes, shell metacharacters, notable whitespace runs) in the fixed anomaly
- * palette on top. Still ONE logical line - nothing is wrapped, elided or
+ * the program's directory part plain cyan and its basename bold cyan, every
+ * other token plain, the quotes the renderer itself added dim, and anomalous
+ * spans (deceptive Unicode, control-byte escapes, shell metacharacters, notable
+ * whitespace runs) in the fixed anomaly palette on top. Option flags are
+ * deliberately unstyled: "starts with a dash" is a guess about someone else's
+ * command grammar, and this display is about what happens as root, so
+ * --no-preserve-root must not be the faintest thing on the line.
+ * Still ONE logical line - nothing is wrapped, elided or
  * reordered - and the colour is purely additive: strip the SGR and the bytes are
  * exactly sw_full_command_line's.
  *

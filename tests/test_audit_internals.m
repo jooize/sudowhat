@@ -6,6 +6,8 @@
  *   - sw_audit_command_line_with() : the colour -> plain fail-soft fallback,
  *                                    reachable here through its renderer
  *                                    parameters.
+ *   - sw_audit_row()               : the label gutter every row shares.
+ *   - sw_audit_color_dir/user()    : the two frame values that carry emphasis.
  *
  * A SEPARATE binary from test_plugin_internals: that one #includes
  * plugin/sudowhat_approval.m, and the two plugins cannot share a translation
@@ -91,9 +93,8 @@ static void test_command_line_colored(void) {
     NSString *color = sw_audit_command_line(argv, 1, YES);
 
     EQ(plain, @"/bin/echo --flag value", "plain line");
-    EQ(color, @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m "
-              @"\033[2m--flag\033[0m value",
-       "coloured line: dirname plain cyan, basename bold cyan, flag dim");
+    EQ(color, @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m --flag value",
+       "coloured line: dirname plain cyan, basename bold cyan, flag UNSTYLED");
     EQ(stripSGR(color), plain, "stripping the SGR returns the plain line exactly");
 
     /* One logical line: never split, never elided, whatever the length. */
@@ -109,7 +110,8 @@ static void test_command_line_colored(void) {
     NSString *e = sw_audit_command_line(evil, 1, YES);
     EQ(stripSGR(e), @"/bin/echo 'sudowhat: user: evil'",
        "hostile token stays quoted under colour");
-    OK([e hasSuffix:@"\033[1;36m'\033[0m"], "its closing quote is coloured");
+    OK([e hasSuffix:@"\033[2m'\033[0m"],
+       "its closing quote is dim -- our chrome around the data, not data");
 }
 
 static void test_command_line_nothing_to_show(void) {
@@ -117,6 +119,63 @@ static void test_command_line_nothing_to_show(void) {
     OK(sw_audit_command_line(argv, 1, YES) == nil, "no command word -> nil");
     OK(sw_audit_command_line(NULL, 0, YES) == nil, "NULL argv -> nil");
     OK(sw_audit_command_line(argv, -1, YES) == nil, "negative optind -> nil");
+}
+
+/* The frame: one gutter, three rows, and colour that asserts only what the
+ * plugin knows. The values all start in the same column, so the block reads as
+ * a table; the "sudowhat: " prefix stays on every row because the block lands
+ * mid-stream in output we do not own. */
+static void test_frame_gutter(void) {
+    EQ(sw_audit_row(@"user:", @"root", NO),
+       @"sudowhat: user:       root\n", "user: padded to the gutter");
+    EQ(sw_audit_row(@"directory:", @"/x", NO),
+       @"sudowhat: directory:  /x\n", "the longest label keeps its two spaces");
+    EQ(sw_audit_row(@"command:", @"id", NO),
+       @"sudowhat: command:    id\n", "command: padded to the gutter");
+
+    /* Every value lands in the same column -- the whole point of the gutter. */
+    NSArray<NSString *> *labels = @[ @"user:", @"directory:", @"command:" ];
+    for (NSString *l in labels) {
+        NSRange v = [sw_audit_row(l, @"VALUE", NO) rangeOfString:@"VALUE"];
+        OK(v.location == 22, "value column is identical across rows");
+    }
+
+    /* Coloured: only the label wears the bold, and the padding stays plain. */
+    EQ(sw_audit_row(@"user:", @"root", YES),
+       @"sudowhat: \033[1muser:\033[0m       root\n",
+       "colour bolds the label only, never the padding");
+    EQ(stripSGR(sw_audit_row(@"user:", @"root", YES)),
+       sw_audit_row(@"user:", @"root", NO),
+       "the coloured row strips back to the plain row");
+}
+
+static void test_frame_value_colour(void) {
+    /* root is the expected target and earns no emphasis; any other target is
+     * the case worth catching an eye, in plain yellow. */
+    EQ(sw_audit_color_user(@"root"), @"root", "root renders plain");
+    EQ(sw_audit_color_user(@"postgres"), @"\033[33mpostgres\033[0m",
+       "a non-root target is attention-yellow");
+
+    /* The cwd takes the program-path split: dirname plain cyan, last component
+     * bold cyan. No quoting is added, so the bytes match the plain row. */
+    EQ(sw_audit_color_dir(@"/home/alice"),
+       @"\033[36m/home/\033[0m\033[1;36malice\033[0m",
+       "cwd dirname plain cyan, basename bold cyan");
+    EQ(sw_audit_color_dir(@"relative"), @"\033[1;36mrelative\033[0m",
+       "no slash at all -> the whole value is the last component");
+    EQ(sw_audit_color_dir(@"/"), @"\033[36m/\033[0m",
+       "a trailing slash leaves no last component, and no empty span");
+    EQ(stripSGR(sw_audit_color_dir(@"/a b/c d")), @"/a b/c d",
+       "a spacey cwd gains no quotes: colour is layout, never content");
+
+    /* The frame palette stays clear of escape_core's anomaly colours, so a
+     * highlighted directory can never be mistaken for a flagged anomaly. */
+    NSArray<NSString *> *reserved = @[ @"\033[1;31m", @"\033[1;35m", @"\033[100m" ];
+    NSString *row = sw_audit_row(@"directory:", sw_audit_color_dir(@"/home/alice"), YES);
+    for (NSString *r in reserved) {
+        OK([row rangeOfString:r].location == NSNotFound,
+           "frame row uses no reserved anomaly colour");
+    }
 }
 
 /* Renderer stubs for the fail-soft path. They match sw_cmdline_fn exactly, so
@@ -180,7 +239,10 @@ int main(void) {
         test_command_line_plain();
         test_command_line_colored();
         test_command_line_nothing_to_show();
+        test_frame_gutter();
+        test_frame_value_colour();
         test_fail_soft_fallback();
-        SW_SUMMARY("audit plugin internals (colour gate, command line, fail-soft)");
+        SW_SUMMARY("audit plugin internals (colour gate, frame, command line, "
+                   "fail-soft)");
     }
 }

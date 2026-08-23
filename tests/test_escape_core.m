@@ -270,7 +270,10 @@ static void test_colored_preserves_bytes(void) {
 }
 
 /* Role assignment, pinned to exact bytes: the program's directory part plain
- * cyan, its basename bold cyan, option flags dim, values plain. */
+ * cyan, its basename bold cyan, every other token unstyled. Flags carry no
+ * colour of their own -- "starts with a dash" is a guess about someone else's
+ * command grammar, and on a display about what happens as root the most
+ * consequential option must not be the faintest thing on the line. */
 static void test_colored_roles(void) {
     EQ(rustColoredCmd(@"/bin/echo", @[@"echo"]),
        @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m",
@@ -278,8 +281,38 @@ static void test_colored_roles(void) {
     EQ(rustColoredCmd(@"id", @[@"id"]), @"\033[1;36mid\033[0m",
        "a bare command word is all basename");
     EQ(rustColoredCmd(@"/bin/git", @[@"git", @"--file", @"x"]),
-       @"\033[36m/bin/\033[0m\033[1;36mgit\033[0m \033[2m--file\033[0m x",
-       "flags dim, values plain, separators untouched");
+       @"\033[36m/bin/\033[0m\033[1;36mgit\033[0m --file x",
+       "flags and values render alike, separators untouched");
+    OK([rustColoredCmd(@"/bin/rm", @[@"rm", @"-rf", @"/"]) rangeOfString:@"\033[2m"].location
+       == NSNotFound,
+       "no dim anywhere on a line that needed no quoting");
+}
+
+/* Dim means exactly one thing: these bytes are ours. sudo hands the plugin an
+ * argv ARRAY, so every quote on screen is one the renderer added -- except the
+ * ones that arrived through the POSIX '\'' idiom, which are the only way a
+ * quote the argument really contained can be represented. Those stay lit. The
+ * exhaustive attribution oracle lives in the Rust test module; this is the
+ * cross-language sighting of the same rule. */
+static void test_colored_quote_attribution(void) {
+    /* a'b -> 'a'\''b' : ours, ours, a plain backslash, the DATA's, ours, ours. */
+    EQ(rustColoredCmd(@"p", @[@"p", @"a'b"]),
+       @"\033[1;36mp\033[0m \033[2m'\033[0ma\033[2m'\033[0m\\\033[1;36m'\033[0m"
+       @"\033[2m'\033[0mb\033[2m'\033[0m",
+       "our quotes dim, the argument's own quote lit");
+
+    /* The trap a regex lookbehind gets wrong: a literal backslash renders
+     * doubled, so \' becomes \\'\'' whose third char is OUR closing quote and
+     * IS preceded by a backslash. Only the left-to-right walk gets this right. */
+    NSString *trap = rustColoredCmd(@"p", @[@"p", @"\\'"]);
+    EQ(stripSGR(trap), @"p '\\\\'\\'''", "the doubled-backslash token round-trips");
+    OK([trap hasSuffix:@"\033[2m'\033[0m\033[2m'\033[0m"],
+       "the two closing quotes of the trap token are both ours");
+
+    /* An empty token is entirely chrome: both quotes ours. */
+    EQ(rustColoredCmd(@"p", @[@"p", @""]),
+       @"\033[1;36mp\033[0m \033[2m'\033[0m\033[2m'\033[0m",
+       "the empty token is all chrome, both quotes dim");
 }
 
 /* A hostile token spelled like one of our own display lines lands quoted, and
@@ -287,10 +320,10 @@ static void test_colored_roles(void) {
  * sudowhat line. The anomaly palette is the one PromptFormatter already ships. */
 static void test_colored_hostile_and_anomalies(void) {
     NSString *hostile = rustColoredCmd(@"/bin/echo", @[@"echo", @"sudowhat: user: evil"]);
-    OK([hostile containsString:@"\033[1;36m'\033[0msudowhat:"],
-       "hostile token opens with a coloured quote");
-    OK([hostile hasSuffix:@"\033[1;36m'\033[0m"],
-       "hostile token closes with a coloured quote");
+    OK([hostile containsString:@"\033[2m'\033[0msudowhat:"],
+       "hostile token opens with one of our own (dim) quotes");
+    OK([hostile hasSuffix:@"\033[2m'\033[0m"],
+       "hostile token closes with one of our own (dim) quotes");
     EQ(stripSGR(hostile), @"/bin/echo 'sudowhat: user: evil'",
        "hostile token is quoted, not structural");
 
@@ -320,6 +353,7 @@ int main(void) {
         test_fullcmd_equivalence();
         test_colored_preserves_bytes();
         test_colored_roles();
+        test_colored_quote_attribution();
         test_colored_hostile_and_anomalies();
         SW_SUMMARY("escape_core equivalence (Rust C-ABI == ObjC PromptFormatter)");
     }

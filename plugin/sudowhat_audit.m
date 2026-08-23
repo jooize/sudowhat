@@ -61,11 +61,17 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
  * nix module / Makefile).
  *
  *   anomalies - (default) highlight the command line: the program's directory
- *               part plain cyan and its basename bold cyan, option flags dim,
- *               values plain, and escaped/anomalous spans (deceptive Unicode,
- *               control bytes, shell metacharacters, notable whitespace) in the
- *               fixed anomaly palette on top.
+ *               part plain cyan and its basename bold cyan, every other token
+ *               plain, the quotes escape_core itself added dim, and
+ *               escaped/anomalous spans (deceptive Unicode, control bytes,
+ *               shell metacharacters, notable whitespace) in the fixed anomaly
+ *               palette on top.
  *   off       - the command line renders plain.
+ *
+ * This knob governs the COMMAND VALUE only. The frame around it (the label
+ * gutter, the bold labels, the directory and target-user emphasis) is governed
+ * by the NO_COLOR / TERM / isatty gates alone, because it is our own fixed
+ * chrome rather than a rendering of untrusted argv.
  *
  * The colouriser lives in escape_core (sw_full_command_line_colored), not in
  * PromptFormatter: that class has a fixed ObjC name that cannot be linked into
@@ -249,6 +255,74 @@ static BOOL sw_audit_color_allowed(char * const envp[]) {
     return YES;
 }
 
+/* The label gutter. Every value on the block starts in the same column, so the
+ * rows read as a table instead of as three sentences, and a long directory can
+ * never shove the command value out of line. Width is the longest label
+ * ("directory:", 10 characters) plus two spaces -- the house minimum for a
+ * gutter -- measured from the first byte AFTER the "sudowhat: " prefix. That
+ * prefix stays on every row rather than being hoisted into a header: the block
+ * lands in the middle of somebody else's output, so each line has to carry its
+ * own provenance. The approval plugin's verify line (SW_VERIFY_PREFIX) is a
+ * fourth field in the same gutter; keep the two in step. */
+#define SW_AUDIT_GUTTER 12
+
+/* One frame row: prefix, the bolded label padded out to the gutter, the value.
+ * The padding sits OUTSIDE the emphasis -- bold spaces render as nothing, and
+ * keeping them plain means the only bytes wearing SGR 1 are the label itself.
+ * The label is our own fixed literal; the value is already escape_core-escaped
+ * (and, when it is the command, already coloured). */
+static NSString *sw_audit_row(NSString *label, NSString *value, BOOL color) {
+    NSUInteger pad = (label.length < SW_AUDIT_GUTTER)
+        ? SW_AUDIT_GUTTER - label.length : 1;
+    NSString *gap = [@"" stringByPaddingToLength:pad withString:@" "
+                                     startingAtIndex:0];
+    if (color) {
+        return [NSString stringWithFormat:@"sudowhat: \033[1m%@\033[0m%@%@\n",
+                                          label, gap, value];
+    }
+    return [NSString stringWithFormat:@"sudowhat: %@%@%@\n", label, gap, value];
+}
+
+/* The cwd, coloured the way escape_core renders a program path: the directory
+ * part plain cyan, the last component bold cyan -- the one word the reader is
+ * actually checking. Done here rather than by routing the cwd through
+ * sw_full_command_line_colored, which would give the same split for free but
+ * would also SHELL-QUOTE the token: a directory with a space in it would then
+ * gain quotes the uncoloured row does not have, and the block would stop being
+ * the same bytes with and without colour. It would also drag the anomaly
+ * palette onto a value the frame is supposed to keep to bold/plain/yellow plus
+ * this one cyan pair.
+ *
+ * The input is already escape_control-escaped, so it holds no control byte and
+ * a '/' can only be a literal '/'. A trailing slash (or no slash at all) leaves
+ * one half empty; that half is simply not emitted, so no empty SGR span is
+ * ever written. */
+static NSString *sw_audit_color_dir(NSString *dir) {
+    NSRange slash = [dir rangeOfString:@"/" options:NSBackwardsSearch];
+    if (slash.location == NSNotFound) {
+        return [NSString stringWithFormat:@"\033[1;36m%@\033[0m", dir];
+    }
+    NSUInteger cut = slash.location + slash.length;
+    NSString *head = [dir substringToIndex:cut];
+    NSString *base = [dir substringFromIndex:cut];
+    if (base.length == 0) {
+        return [NSString stringWithFormat:@"\033[36m%@\033[0m", head];
+    }
+    return [NSString stringWithFormat:@"\033[36m%@\033[0m\033[1;36m%@\033[0m",
+                                      head, base];
+}
+
+/* Attention colour on an unexpected target. root is what `sudo` means with no
+ * -u, so it is the expected value and earns no emphasis; anything else is the
+ * case worth catching an eye. Plain yellow, not bold: it says "look" without
+ * competing with the bold labels, and it stays clear of the anomaly palette
+ * escape_core owns (1;31m, 1;35m, 1;36m, 100m). Yellow means exactly this one
+ * thing anywhere in the block. */
+static NSString *sw_audit_color_user(NSString *user) {
+    if ([user isEqualToString:@"root"]) return user;
+    return [NSString stringWithFormat:@"\033[33m%@\033[0m", user];
+}
+
 static int sudowhat_audit_open(unsigned int version,
                                sudo_conv_t conversation,
                                sudo_printf_t plugin_printf,
@@ -334,20 +408,26 @@ static int sudowhat_audit_open(unsigned int version,
 
         if (userLine == nil || commandLine == nil) return 1;   /* alloc failure */
 
-        /* Bold the label word purely for readability (our own fixed bytes, never
-         * user input — the values are escape_core-escaped). Same env gate as the
-         * approval plugin's verify code (resolved above), so a redirect or a
-         * non-tty always renders plain. Restores the emphasis the pre-v0.10.0
-         * emit_full_context applied before terminal display moved here. */
-        NSString *lb = color ? @"\033[1m" : @"";
-        NSString *lo = color ? @"\033[0m" : @"";
+        /* Assemble the block. Labels are bolded purely for readability (our own
+         * fixed bytes, never user input -- the values are escape_core-escaped),
+         * and the values carry the emphasis their meaning earns: the target
+         * user yellow when it is not root, the cwd split dirname/basename like
+         * a program path. Same env gate as the approval plugin's verify code
+         * (resolved above), so a redirect or a non-tty renders the identical
+         * block with no SGR at all.
+         *
+         * No leading blank line. The block lands mid-stream in output sudowhat
+         * does not own either side of, and it cannot know what preceded it;
+         * spacing belongs to whoever invoked sudo. */
+        NSString *userValue = color ? sw_audit_color_user(userLine) : userLine;
 
         NSMutableString *block = [NSMutableString string];
-        [block appendFormat:@"sudowhat: %@user:%@ %@\n", lb, lo, userLine];
+        [block appendString:sw_audit_row(@"user:", userValue, color)];
         if (dirLine.length > 0) {
-            [block appendFormat:@"sudowhat: %@directory:%@ %@\n", lb, lo, dirLine];
+            NSString *dirValue = color ? sw_audit_color_dir(dirLine) : dirLine;
+            [block appendString:sw_audit_row(@"directory:", dirValue, color)];
         }
-        [block appendFormat:@"sudowhat: %@command:%@ %@\n", lb, lo, commandLine];
+        [block appendString:sw_audit_row(@"command:", commandLine, color)];
 
         sw_audit_write_tty("/dev/tty", block);
         return 1;
