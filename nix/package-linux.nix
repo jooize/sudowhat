@@ -23,7 +23,7 @@
 # and /etc/sudo.conf is the whole trust model (see docs/design-linux-port.md).
 stdenv.mkDerivation (finalAttrs: {
   pname = "sudowhat";
-  version = "0.10.1";
+  version = "0.12.0";
 
   src = lib.cleanSource ../.;
 
