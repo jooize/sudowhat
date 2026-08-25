@@ -104,6 +104,37 @@ by accident:
 Both render command lines through the shared escape core, so the split cannot
 produce two spellings of one command. The seam is commented on both sides.
 
+## Terminal-mode asymmetry, and the `exec_confirm` option
+
+In biometric mode the `exec:` line lands pre-decision; in terminal-password
+mode it lands post-password. That asymmetry is forced: the password prompt
+runs inside the policy step that resolves the command, PAM modules never
+receive the command, and the only component holding the resolved path
+pre-auth is sudo's policy plugin itself, which sudowhat deliberately does not
+replace. "Resolved before the password" is impossible through any supported
+hook.
+
+"Before the password" is not the only place a decision can complete, though.
+**`exec_confirm` (config key, DEFAULT OFF):** in terminal-password mode, after
+auth, the approval plugin prints `exec:` and then asks one `run? [y/N]` on the
+tty via sudo's conversation API. The decision then completes AFTER the
+resolved path is visible -- the same guarantee biometric mode gives, split
+into authenticate-then-confirm. No password ever touches plugin code; decline
+is a quiet abort (nothing wedges; re-run at will). Tty-gated: no controlling
+terminal means no prompt, so piped/automated invocations behave identically
+with the key on or off. Off (default) keeps the plain last-look.
+
+A divergence-triggered variant (prompt only when typed differs from resolved)
+was considered and cut: every bare name "diverges", so it would fire on
+essentially every sudo while being less predictable than a mode-wide key.
+
+**Rejected: approval-owned authentication.** Full symmetry is achievable by
+having sudoers defer (NOPASSWD) and the approval plugin run its own PAM
+conversation post-resolution. Rejected: it reopens plugin-side password
+handling (explicitly rejected in design-terminal-mode.md), and it couples
+safety to deployment config -- a NOPASSWD rule over an absent or broken
+approval plugin fails OPEN.
+
 ## Cut: the writable-target check
 
 Considered: warn (on sheet + terminal) when the resolved executable or its
@@ -129,8 +160,9 @@ field evidence shows the display alone is not enough.
 
 ## Not in scope
 
-- No new prompts, no denials, no config keys. The one existing decision
-  (sheet, or PAM password) stays the only decision.
+- No new prompts or denials by default; the only optional addition is the
+  off-by-default `exec_confirm` key above. With it off, the one existing
+  decision (sheet, or PAM password) stays the only decision.
 - No plugin-side PATH resolution, ever.
 - Policy deference / NOPASSWD behavior unchanged: where the decision is
   deferred today, only the `exec:` line is added, nothing else.
