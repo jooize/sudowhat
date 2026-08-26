@@ -204,6 +204,13 @@ guess in the palette: lexical, not semantic — wrong by definition after `--`,
 blind to `dd if=...` and `tar xvf`. Retiring it leaves dim with exactly one
 meaning: *these bytes are ours, not the data's*.
 
+*[2026-08-23 — reversed at the owner's request (`d169403`): flags render bold
+blue after all. What survived the reversal is the no-judgement principle — the
+mark is openly lexical (any token whose rendered form starts with `-`, so a
+quoted hostile token, rendering as `'...'`, never borrows it), it colours every
+flag identically rather than guessing which one matters, and dim keeps its one
+meaning. The table row above ("none") describes the design as first shipped.]*
+
 **Quote attribution.** Nothing reaching sudo contains a quote — sudo hands the
 plugin an argv ARRAY — so every quote on screen is one `quote_token` added,
 except those spliced through the POSIX `'\''` idiom, the only way a quote the
