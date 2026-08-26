@@ -1,15 +1,25 @@
 /*
  * sudowhat audit plugin (sudo plugin API: SUDO_AUDIT_PLUGIN, type 3).
  *
- * The single owner of TERMINAL command display. sudo calls an audit plugin's
- * open() before any other plugin API function — in particular before the policy
+ * The owner of the PRE-AUTH terminal block. sudo calls an audit plugin's open()
+ * before any other plugin API function -- in particular before the policy
  * plugin's check_policy, where PAM collects the password — so this plugin prints
- *   user / path / command
+ *   user / directory / typed
  * to the controlling terminal FIRST, on every path: the local console (before
  * the approval plugin's verify code + Touch ID sheet) and the non-console / SSH
  * case (before sudo's native PAM `Password:`). That closes the gap where a
  * non-console sudo used to step aside silently, showing a bare `Password:` with
  * no command. See docs/design-terminal-mode.md.
+ *
+ * DISPLAY OWNERSHIP CARVE-OUT (docs/design-resolved-exec.md, section 3). This
+ * plugin owns everything that exists BEFORE resolution: user:, directory:, and
+ * typed: -- the command as the user typed it, which is all sudo has produced at
+ * this point. The approval plugin (plugin/sudowhat_approval.m) owns
+ * DECISION-ADJACENT display: verify:, the LAContext sheet, and the exec: line
+ * carrying sudo's resolved command_info["command"] -- everything that exists only
+ * after resolution. Both bundles render command lines through the same Rust
+ * escape core, so the split cannot produce two spellings of one command; the
+ * seam is commented on both sides, and if one moves, move both.
  *
  * This plugin NEVER handles the password and is NEVER a trust anchor: display is
  * disclosure, not authentication. Auth stays governed by sudo's native PAM and
@@ -43,7 +53,7 @@
  * the Makefile). Same fail-closed token machinery as the approval plugin's
  * knobs: a bare token names a fixed mode baked into the signed bundle.
  *
- *   on  - (default) show user / path / command on the controlling terminal.
+ *   on  - (default) show user / directory / typed on the controlling terminal.
  *   off - never display (the bundle loads but its open() shows nothing).
  *
  * An unknown token yields an undefined SW_AD_<name> and fails the compile — the
@@ -262,8 +272,9 @@ static BOOL sw_audit_color_allowed(char * const envp[]) {
  * gutter -- measured from the first byte AFTER the "sudowhat: " prefix. That
  * prefix stays on every row rather than being hoisted into a header: the block
  * lands in the middle of somebody else's output, so each line has to carry its
- * own provenance. The approval plugin's verify line (SW_VERIFY_PREFIX) is a
- * fourth field in the same gutter; keep the two in step. */
+ * own provenance. The approval plugin's verify: and exec: lines
+ * (SW_VERIFY_PREFIX, SW_EXEC_PREFIX) are further fields in the same gutter, so
+ * five labels across two bundles share this one width; keep them in step. */
 #define SW_AUDIT_GUTTER 12
 
 /* One frame row: prefix, the bolded label padded out to the gutter, the value.
@@ -384,10 +395,18 @@ static int sudowhat_audit_open(unsigned int version,
         BOOL color = sw_audit_color_allowed(submit_envp);
         BOOL colorCommand = color && (sw_audit_color_mode == SW_ACOL_anomalies);
 
-        /* The command as typed — the star of the display. No command word -> the
-         * invocation is not something to preview (e.g. `sudo -v`); show nothing.
-         * Highlighted by role on one logical line (the terminal soft-wraps it);
-         * a colouriser failure degrades to the same line in plain. */
+        /* The command as typed -- the star of the display, and the reason its
+         * label is `typed:` rather than `command:`: at audit open() sudo has not
+         * resolved anything, so this line can only ever state what the user
+         * asked for. The label carries that epistemic status honestly; the
+         * approval plugin's `exec:` states what sudo will actually run, and the
+         * juxtaposition of the two IS the anomaly display (a shadowed bare name
+         * shows up as typed/exec divergence, with no heuristic needed).
+         *
+         * No command word -> the invocation is not something to preview (e.g.
+         * `sudo -v`); show nothing. Highlighted by role on one logical line (the
+         * terminal soft-wraps it); a colouriser failure degrades to the same
+         * line in plain. */
         NSString *commandLine = sw_audit_command_line(submit_argv, submit_optind,
                                                       colorCommand);
         if (commandLine.length == 0) return 1;
@@ -427,7 +446,7 @@ static int sudowhat_audit_open(unsigned int version,
             NSString *dirValue = color ? sw_audit_color_dir(dirLine) : dirLine;
             [block appendString:sw_audit_row(@"directory:", dirValue, color)];
         }
-        [block appendString:sw_audit_row(@"command:", commandLine, color)];
+        [block appendString:sw_audit_row(@"typed:", commandLine, color)];
 
         sw_audit_write_tty("/dev/tty", block);
         return 1;
@@ -436,9 +455,17 @@ static int sudowhat_audit_open(unsigned int version,
 
 /* Minimal tail. close() gets the exit disposition (nothing to clean up — open()
  * holds no persistent state). accept/reject/error return 1 (success) so sudo is
- * satisfied; accept() will host the future resolved-path last-look, which is why
- * the members are wired rather than NULL. The optional struct tail
- * (show_version, register_hooks, deregister_hooks, event_alloc) stays NULL. */
+ * satisfied.
+ *
+ * accept() was once earmarked for a resolved-path last-look. That last-look now
+ * exists as the approval plugin's exec: line, and it lives THERE by design, not
+ * by convenience: accept() fires after the decision on every path, whereas the
+ * approval plugin's check() runs before it raises the sheet -- which is what lets
+ * the biometric mode show the resolved path PRE-decision rather than merely
+ * pre-exec (docs/design-resolved-exec.md). The members stay wired rather than
+ * NULL so the plugin presents a complete audit interface to sudo. The optional
+ * struct tail (show_version, register_hooks, deregister_hooks, event_alloc)
+ * stays NULL. */
 static void sudowhat_audit_close(int status_type, int status) {
     (void)status_type; (void)status;
 }

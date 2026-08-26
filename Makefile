@@ -70,12 +70,29 @@ ifeq ($(filter $(SUDOWHAT_POLICY_DEFERENCE),$(SUDOWHAT_VALID_DEFERENCE)),)
   override SUDOWHAT_POLICY_DEFERENCE := on
 endif
 
+# Master switch for the post-resolution run confirmation: "off" (default) prints
+# the resolved `exec:` line on the terminal-password path and allows, a last-look
+# before exec; "on" additionally asks one `run? [y/N]` there via sudo's
+# conversation API, so the decision completes after the resolved path is visible
+# -- the same guarantee biometric mode gives. Tty-gated either way, so a piped or
+# automated invocation behaves identically with it on or off. The nix module
+# exposes the same names via services.sudowhat.execConfirm. Passed as a bare
+# token to -DSW_EXEC_CONFIRM. An unknown value normalizes to "off" with a
+# warning, rather than failing.
+SUDOWHAT_EXEC_CONFIRM ?= off
+SUDOWHAT_VALID_EXEC_CONFIRM := on off
+ifeq ($(filter $(SUDOWHAT_EXEC_CONFIRM),$(SUDOWHAT_VALID_EXEC_CONFIRM)),)
+  $(warning sudowhat: unknown SUDOWHAT_EXEC_CONFIRM '$(SUDOWHAT_EXEC_CONFIRM)', falling back to off)
+  override SUDOWHAT_EXEC_CONFIRM := off
+endif
+
 CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
           -Iplugin -Ipam -Ishared -Ishared/escape_core \
           -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"' \
           -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE) \
-          -DSW_POLICY_DEFERENCE=$(SUDOWHAT_POLICY_DEFERENCE)
+          -DSW_POLICY_DEFERENCE=$(SUDOWHAT_POLICY_DEFERENCE) \
+          -DSW_EXEC_CONFIRM=$(SUDOWHAT_EXEC_CONFIRM)
 LDFLAGS = -bundle \
           -framework Foundation \
           -framework CoreFoundation \
@@ -157,8 +174,13 @@ build/sudowhat_audit.so:    CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatAuditSigVer
                                       -DSW_AUDIT_DISPLAY=$(SUDOWHAT_AUDIT_DISPLAY) \
                                       -DSW_AUDIT_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR)
 
-build/sudowhat_approval.so: $(PLUGIN_OBJS) | build
-	$(CC) $(LDFLAGS) -o $@ $(PLUGIN_OBJS)
+# The approval bundle links the Rust staticlib too: its `exec:` line renders the
+# resolved command through the same escape core the audit bundle uses, so the
+# two plugins cannot disagree on how a token is spelled. Each bundle gets its own
+# copy of the archive (they are separate Mach-O images), which is the same
+# deliberate duplication as the per-bundle SignatureVerifier class.
+build/sudowhat_approval.so: $(PLUGIN_OBJS) $(ESCAPE_CORE_LIB) | build
+	$(CC) $(LDFLAGS) -o $@ $(PLUGIN_OBJS) $(ESCAPE_CORE_LIB)
 
 # The audit bundle links the Rust staticlib (a plain archive) after its objects.
 build/sudowhat_audit.so: $(AUDIT_OBJS) $(ESCAPE_CORE_LIB) | build
@@ -262,15 +284,19 @@ build/test_escape_core: tests/test_escape_core.m tests/sw_test.h \
 	    tests/test_escape_core.m plugin/PromptFormatter.m $(ESCAPE_CORE_LIB)
 
 # Includes plugin/sudowhat_approval.m directly to reach its static helpers, so
-# that file is compiled into the binary - do NOT also pass it as a source.
+# that file is compiled into the binary - do NOT also pass it as a source. Links
+# the Rust staticlib because the approval plugin now renders its `exec:` line
+# through escape_core, exactly as the bundle does.
 build/test_plugin_internals: tests/test_plugin_internals.m tests/sw_test.h \
 		plugin/sudowhat_approval.m plugin/PromptFormatter.m \
-		shared/SignatureVerifier.m shared/SessionGuard.m | build
+		shared/SignatureVerifier.m shared/SessionGuard.m \
+		$(ESCAPE_CORE_DIR)/escape_core.h $(ESCAPE_CORE_LIB) | build
 	$(CC) $(TEST_CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier \
 	    -DSW_SESSIONGUARD_CLASS=SudoWhatSessionGuard \
 	    $(TEST_FRAMEWORKS) -o $@ \
 	    tests/test_plugin_internals.m plugin/PromptFormatter.m \
-	    shared/SignatureVerifier.m shared/SessionGuard.m
+	    shared/SignatureVerifier.m shared/SessionGuard.m \
+	    $(ESCAPE_CORE_LIB)
 
 # Includes plugin/sudowhat_audit.m directly to reach its static helpers, so that
 # file is compiled into the binary - do NOT also pass it as a source. Its own

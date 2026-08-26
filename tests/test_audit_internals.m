@@ -130,11 +130,13 @@ static void test_frame_gutter(void) {
        @"sudowhat: user:       root\n", "user: padded to the gutter");
     EQ(sw_audit_row(@"directory:", @"/x", NO),
        @"sudowhat: directory:  /x\n", "the longest label keeps its two spaces");
-    EQ(sw_audit_row(@"command:", @"id", NO),
-       @"sudowhat: command:    id\n", "command: padded to the gutter");
+    EQ(sw_audit_row(@"typed:", @"id", NO),
+       @"sudowhat: typed:      id\n", "typed: padded to the gutter");
 
-    /* Every value lands in the same column -- the whole point of the gutter. */
-    NSArray<NSString *> *labels = @[ @"user:", @"directory:", @"command:" ];
+    /* Every value lands in the same column -- the whole point of the gutter,
+     * and the reason the approval plugin's verify: and exec: lines can join the
+     * same table from a different bundle. */
+    NSArray<NSString *> *labels = @[ @"user:", @"directory:", @"typed:" ];
     for (NSString *l in labels) {
         NSRange v = [sw_audit_row(l, @"VALUE", NO) rangeOfString:@"VALUE"];
         OK(v.location == 22, "value column is identical across rows");

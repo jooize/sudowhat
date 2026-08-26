@@ -101,14 +101,19 @@ in {
         Whether sudowhat shows the command on the controlling terminal before
         authentication, via a sudo audit plugin.
 
-        - `on` (the default): the audit plugin prints `user`, `path` (the
-          working directory), and the `command` as typed to the controlling
-          terminal on EVERY path — the local console (before the Touch ID sheet
-          and its verify code) and non-console / SSH sessions (before sudo's
-          native password prompt). This closes the gap where a non-console sudo
-          used to step aside silently, showing a bare `Password:` with no
-          command.
+        - `on` (the default): the audit plugin prints `user:`, `directory:` (the
+          working directory), and `typed:` (the command as typed) to the
+          controlling terminal on EVERY path — the local console (before the
+          Touch ID sheet and its verify code) and non-console / SSH sessions
+          (before sudo's native password prompt). This closes the gap where a
+          non-console sudo used to step aside silently, showing a bare
+          `Password:` with no command.
         - `off`: the audit plugin loads but displays nothing.
+
+        The `typed:` label states its own epistemic status: at audit-plugin time
+        sudo has not resolved the command yet, so this line can only show what
+        the user asked for. The resolved absolute path is shown separately, by
+        the approval plugin, on the `exec:` line.
 
         The display is disclosure, never a trust signal: any process that can
         write your terminal can forge the same bytes, so the anchor stays the
@@ -135,7 +140,7 @@ in {
         is coloured to draw the eye to the bytes that matter.
 
         - `off` emits the display with no colour at all.
-        - `anomalies` (the default) highlights the `command:` line by role — the
+        - `anomalies` (the default) highlights the `typed:` line by role — the
           program's directory part in plain cyan and its basename in bold cyan,
           option flags dim, values plain — and wraps anomaly spans in a fixed,
           reviewed palette on top:
@@ -144,7 +149,10 @@ in {
           metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
           and notable whitespace runs (leading, trailing, or doubled spaces)
           shown on a grey background. The `user:` and `directory:` lines stay
-          uncoloured.
+          uncoloured. The approval plugin's `exec:` line renders through the same
+          core, so the two command lines can never disagree on a token; this
+          option is the audit bundle's alone, though, and `exec:` follows the
+          runtime NO_COLOR / TERM / non-tty gates only.
 
         The command stays one logical line: the colour goes around tokens that
         are already escaped and quoted, so it never splits, elides or reorders
@@ -193,17 +201,57 @@ in {
       '';
     };
 
+    execConfirm = lib.mkOption {
+      type = lib.types.enum [ "on" "off" ];
+      default = "off";
+      description = ''
+        Whether the terminal-password path asks one `run? [y/N]` after showing
+        the resolved `exec:` line.
+
+        Background: sudo resolves the command inside the same policy step that
+        collects the password, and no plugin hook exists between resolution and
+        authentication. In biometric mode that does not matter — the sheet *is*
+        the decision, sudowhat raises it, and the resolved `exec:` line is
+        printed before it. In terminal-password mode the password is already
+        spent by the time sudowhat sees the resolved path, so `exec:` can only
+        be a last-look.
+
+        - `off` (the default): the resolved line prints and the command runs.
+          The one existing decision — the sheet, or sudo's own password — stays
+          the only decision.
+        - `on`: after sudo's own authentication has succeeded, the approval
+          plugin prints `exec:` and asks one `run? [y/N]` on the terminal via
+          sudo's conversation API. The decision then completes *after* the
+          resolved path is visible, which is the guarantee biometric mode gives,
+          split into authenticate-then-confirm.
+
+        No password ever touches plugin code: this is a yes/no on a caller sudo
+        has already authenticated and sudoers has already authorized, so it can
+        only ever withhold an allow, never grant one. Declining is a quiet abort
+        — nothing is wedged or cached, and the command can simply be re-run.
+
+        Tty-gated: with no controlling terminal there is no prompt and behaviour
+        is identical to `off`, so piped and automated invocations can never newly
+        block. The prompt applies to the terminal-password path only; the root
+        exemption and `policyDeference` skips are untouched, and the biometric
+        path already decides after resolution. Baked into the signed bundle at
+        build time. macOS only — the Linux port ships the display plugin without
+        an approval plugin.
+      '';
+    };
+
   };
 
   config = lib.mkIf cfg.enable (let
     # Bake the chosen build-time presets into the bundle. The defaults
     # (verifyStyle "bold", echoColor "anomalies", policyDeference "on",
-    # auditDisplay "on") reproduce the package's own defaults, so default users get the same
-    # store path with no rebuild; any other value produces a distinct derivation
-    # whose embedded paths and the /etc references below stay consistent (both
-    # come from `pkg`), preserving mutual signature verification.
+    # auditDisplay "on", execConfirm "off") reproduce the package's own defaults, so
+    # default users get the same store path with no rebuild; any other value
+    # produces a distinct derivation whose embedded paths and the /etc references
+    # below stay consistent (both come from `pkg`), preserving mutual signature
+    # verification.
     pkg = cfg.package.override {
-      inherit (cfg) verifyStyle echoColor policyDeference auditDisplay;
+      inherit (cfg) verifyStyle echoColor policyDeference auditDisplay execConfirm;
     };
   in {
     # The store-path approach: binaries live in /nix/store, /etc files

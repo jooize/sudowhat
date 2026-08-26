@@ -26,11 +26,17 @@ in {
         Whether sudowhat shows the command on the controlling terminal before
         authentication, via a sudo audit plugin.
 
-        - `on` (the default): the audit plugin prints `user`, `directory` (the
-          invoking working directory), and the `command` as typed to the
-          controlling terminal before sudo's native `pam_unix` password prompt,
-          on every path.
+        - `on` (the default): the audit plugin prints `user:`, `directory:` (the
+          invoking working directory), and `typed:` (the command as typed) to
+          the controlling terminal before sudo's native `pam_unix` password
+          prompt, on every path.
         - `off`: the audit plugin loads but displays nothing.
+
+        The `typed:` label states its own epistemic status: at audit-plugin time
+        sudo has not resolved the command yet, so this line can only show what
+        the user asked for. On macOS the resolved absolute path follows on an
+        `exec:` line from the approval plugin; there is no approval plugin on
+        Linux, so `typed:` is the whole display here.
 
         The display is disclosure, never a trust signal: any process that can
         write your terminal can forge the same bytes. On Linux there is no

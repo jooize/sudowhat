@@ -25,6 +25,7 @@
 
 #include "sudo_plugin.h"
 #include "Constants.h"
+#include "escape_core.h"
 #import "SignatureVerifier.h"
 #import "SessionGuard.h"
 #import "PromptFormatter.h"
@@ -59,6 +60,14 @@ static sw_invoking_ctx g_inv = { .uid = (uid_t)-1 };
  * always gets a diagnostic line on the same stderr sudo writes its own
  * messages to. */
 static sudo_printf_t g_plugin_printf = NULL;
+
+/* sudo's conversation callback, delivered to open() only -- check() has no
+ * conversation parameter -- so it is stashed here for the one caller that needs
+ * it: the exec_confirm prompt (see sw_step_aside_allow). Cleared in close()
+ * alongside g_plugin_printf, so a stale pointer can never outlive the plugin
+ * session. NULL means "no conversation available", which every caller must treat
+ * as a conversation failure rather than as a silent success. */
+static sudo_conv_t g_conversation = NULL;
 
 static const char *utf8_or(NSString *s, const char *fallback) {
     const char *p = s.UTF8String;
@@ -271,12 +280,17 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * rendering can never drift apart. The substituted code is the plugin's own
  * nonce -- no caller-controlled bytes reach this line -- so it needs no escaping.
  *
- * The line is a FOURTH FIELD in the audit plugin's label gutter, not a sentence:
- * the same "sudowhat: " provenance prefix, the label padded so the value starts
- * in the same column as user / directory / command (SW_AUDIT_GUTTER, 12 -- the
+ * The line is a FIELD in the audit plugin's label gutter, not a sentence: the
+ * same "sudowhat: " provenance prefix, the label padded so the value starts in
+ * the same column as user / directory / typed (SW_AUDIT_GUTTER, 12 -- the
  * longest label "directory:" plus two spaces), then the code, then what to do
  * with it. The two plugins are separate bundles that never share a translation
  * unit, so the width is duplicated rather than shared; if one moves, move both.
+ *
+ * The gutter family is now five labels across the two bundles: user:, directory:
+ * and typed: from the audit plugin, then verify: and exec: from this one. Every
+ * value starts at column 22 (10 bytes of "sudowhat: " plus the 12-wide gutter),
+ * so the whole ceremony reads as one table however it is split between bundles.
  *
  *   sudowhat: verify:     Z96E  (compare with the prompt)
  *
@@ -483,6 +497,219 @@ static void emit_verify_code(const char *ttyPath, const char *code,
     write_verify_code_to_tty(ttyPath, code, colorAllowed);
 }
 
+/* ---------------------------------------------------------------------------
+ * The `exec:` line -- the RESOLVED command.
+ *
+ * DISPLAY OWNERSHIP (docs/design-resolved-exec.md, section 3). The audit plugin
+ * (plugin/sudowhat_audit.m) owns the PRE-AUTH block -- user:, directory:,
+ * typed: -- everything that exists before sudo has resolved the command. This
+ * plugin owns DECISION-ADJACENT display -- verify:, the LAContext sheet, and
+ * this exec: line -- everything that exists only after resolution. The audit
+ * plugin's open() runs before the policy step, where the command is still only
+ * what the user typed; check() here runs after it, holding sudo's own
+ * command_info["command"]. The seam is stated on both sides; if one moves, move
+ * both.
+ *
+ * INVARIANT: the path displayed is NEVER resolved plugin-side. Only
+ * command_info["command"] (plus run_argv) is ever shown, because an independent
+ * PATH walk here could diverge from what sudo actually execve()s -- i.e. it
+ * could display a lie, which is worse than displaying nothing.
+ *
+ * Both bundles render command lines through the same Rust escape core, so
+ * typed: and exec: cannot disagree about how a token is spelled: any difference
+ * the reader sees between the two lines is a real difference in the command,
+ * which IS the anomaly display (a shadowed bare name shows up as typed/exec
+ * divergence, with no heuristic needed).
+ * ------------------------------------------------------------------------- */
+
+#define SW_EXEC_LABEL  "exec:"
+#define SW_EXEC_GAP    "       "   /* pads "exec:" (5) out to the 12-col gutter */
+
+#define SW_EXEC_PREFIX "sudowhat: " SW_EXEC_LABEL SW_EXEC_GAP
+#define SW_EXEC_PREFIX_STYLED \
+    "sudowhat: \033[1m" SW_EXEC_LABEL "\033[0m" SW_EXEC_GAP
+
+/* The two escape_core command-line renderers share one signature, so the caller
+ * below can pick between them without duplicating the two-call sizing dance.
+ * Deliberately duplicated from plugin/sudowhat_audit.m (sw_cmdline_fn,
+ * sw_audit_render, sw_audit_command_line_with): the two bundles are separate
+ * Mach-O images that never share a translation unit, so this small machinery is
+ * copied rather than linked. If one moves, move both. */
+typedef int (*sw_cmdline_fn)(const uint8_t *path, size_t path_len,
+                             const uint8_t *const *argv,
+                             const size_t *argv_lens, size_t argv_count,
+                             uint8_t *out, size_t out_cap, size_t *needed);
+
+/* Run one renderer with the two-call sizing protocol: probe for the length,
+ * allocate, fill. Returns nil on allocation failure or a non-OK return, which is
+ * what makes the colour->plain fallback below a plain nil check. */
+static NSString *sw_exec_render(sw_cmdline_fn render,
+                                const char *path, size_t path_len,
+                                const uint8_t **argv, size_t *lens, size_t n) {
+    size_t needed = 0;
+    render((const uint8_t *)path, path_len, argv, lens, n, NULL, 0, &needed);
+    size_t cap = needed + 1;
+    uint8_t *buf = malloc(cap);
+    if (buf == NULL) return nil;
+    size_t got = 0;
+    NSString *s = nil;
+    if (render((const uint8_t *)path, path_len, argv, lens, n, buf, cap, &got)
+        == SW_ESCAPE_OK) {
+        s = [[NSString alloc] initWithBytes:buf length:got
+                                   encoding:NSUTF8StringEncoding];
+    }
+    free(buf);
+    return s;
+}
+
+/* Build the RESOLVED command line: sudo's command_info["command"] as the path,
+ * then run_argv, with the escape core dropping run_argv[0] when it duplicates
+ * the path or its basename (the same dedup the sheet's commandPartsForPath
+ * does, from the same token list). Every token is shell-quoted and
+ * control-character escaped there, so nothing a caller typed can reach the
+ * terminal as a raw escape sequence.
+ *
+ * When colour is on the coloured renderer is tried first and the plain one is
+ * the fallback: colour is layout over the same bytes, so degrading to plain
+ * loses emphasis and nothing else. The renderers are parameters (production
+ * passes the escape_core pair) to keep that fallback isolated and testable, the
+ * same reason write_exec_line_to_tty takes its ttyPath. Returns nil with no
+ * path, or on allocation failure. */
+static NSString *sw_exec_command_line_with(sw_cmdline_fn colored,
+                                           sw_cmdline_fn plain,
+                                           const char *path,
+                                           char * const run_argv[],
+                                           BOOL color) {
+    if (path == NULL) return nil;
+    size_t path_len = strlen(path);
+
+    size_t n = 0;
+    if (run_argv != NULL) {
+        while (run_argv[n] != NULL) n++;
+    }
+
+    const uint8_t **argv = NULL;
+    size_t *lens = NULL;
+    if (n > 0) {
+        argv = calloc(n, sizeof(*argv));
+        lens = calloc(n, sizeof(*lens));
+        if (argv == NULL || lens == NULL) { free(argv); free(lens); return nil; }
+        for (size_t i = 0; i < n; i++) {
+            argv[i] = (const uint8_t *)run_argv[i];
+            lens[i] = strlen(run_argv[i]);
+        }
+    }
+
+    NSString *s = nil;
+    if (color) s = sw_exec_render(colored, path, path_len, argv, lens, n);
+    if (s == nil) s = sw_exec_render(plain, path, path_len, argv, lens, n);
+
+    free(argv);
+    free(lens);
+    return s;
+}
+
+static NSString *sw_exec_command_line(const char *path,
+                                      char * const run_argv[], BOOL color) {
+    return sw_exec_command_line_with(sw_full_command_line_colored,
+                                     sw_full_command_line,
+                                     path, run_argv, color);
+}
+
+/* Render the whole exec: line -- gutter frame plus value -- as one string.
+ *
+ * Pure and deterministic, so the exact bytes are unit-testable without a
+ * terminal, exactly like format_verify_line above. The frame is ours (the
+ * provenance prefix and the bold label); the value's styling belongs entirely
+ * to the escape-core renderer, which colours the program path and the anomaly
+ * spans by role. Both branches lay out the SAME field widths, so the plain line
+ * is the styled one with every escape sequence removed.
+ *
+ * Returns nil when there is no path or the renderers produced nothing, which
+ * makes "show nothing" a plain nil check at the write site rather than a
+ * half-built line reaching a terminal. */
+static NSString *sw_format_exec_line(const char *path,
+                                     char * const run_argv[], BOOL colorize) {
+    if (path == NULL) return nil;
+    NSString *value = sw_exec_command_line(path, run_argv, colorize);
+    if (value.length == 0) return nil;
+    return [NSString stringWithFormat:@"%s%@\n",
+            colorize ? SW_EXEC_PREFIX_STYLED : SW_EXEC_PREFIX, value];
+}
+
+/* Write the exec: line straight to the controlling terminal -- and ONLY there,
+ * exactly like write_verify_code_to_tty above and the audit plugin's block:
+ * /dev/tty is the one channel a shell's fd redirects (`>f`, `2>f`, `&>f`) cannot
+ * touch, and a captured `2>file` must never receive a possibly-confidential
+ * command. There is no stderr fallback and no printf parameter that could carry
+ * one, so this function structurally CANNOT write anywhere but the tty.
+ *
+ * O_NOCTTY: never acquire a controlling terminal as a side effect. O_CLOEXEC:
+ * never leak the fd into the execed target. Opened with EUID still root (the
+ * seteuid drop happens later on the console path), which may write the user's
+ * tty, exactly as sudo's own prompt does.
+ *
+ * isatty() on the opened fd is the final colour gate, so SGR bytes only ever
+ * reach a real terminal -- never a file or a pipe, where they would corrupt a
+ * captured log rather than emphasise anything. ttyPath is a parameter (always
+ * "/dev/tty" in production) so the offline unit test can point it at a temp file
+ * and read the bytes back. Returns YES iff the whole line was written. */
+static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
+                                   char * const run_argv[], BOOL colorAllowed) {
+    if (path == NULL) return NO;
+
+    int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) return NO;
+
+    BOOL colorize = colorAllowed && isatty(fd);
+
+    /* The value is unbounded (a command line can be arbitrarily long), so the
+     * line is assembled as an NSString and written as bytes rather than through
+     * a fixed stack buffer the way the 4-char verify code is. Nothing is
+     * truncated: an elided exec: line would be worse than none, because the
+     * reader would trust an incomplete command. */
+    NSString *line = sw_format_exec_line(path, run_argv, colorize);
+    if (line == nil) { close(fd); return NO; }
+
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (data == nil || data.length == 0) { close(fd); return NO; }
+
+    const char *bytes = data.bytes;
+    size_t total = data.length;
+    size_t off = 0;
+    while (off < total) {
+        ssize_t w = write(fd, bytes + off, total - off);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            close(fd);
+            return NO;
+        }
+        off += (size_t)w;
+    }
+    close(fd);
+    return YES;
+}
+
+/* Emit the resolved command line to the controlling terminal, or nowhere.
+ *
+ * Called on every ALLOW path (root bypass, non-console step-aside, policy
+ * deference, and -- pre-decision -- the console biometric path), which is the
+ * point: a predictable ceremony beats a clever conditional, and a line that is
+ * "only sometimes present" would itself need explaining. With no controlling
+ * terminal there is nowhere to print, so nothing happens and behaviour is
+ * otherwise unchanged; no invocation can newly block on this.
+ *
+ * A NULL path (sudo did not give us command_info["command"]) is a silent skip
+ * rather than an error: this is a display, and the console path's own fatal
+ * check on that key is still where it always was. Note that the confirm gate in
+ * sw_step_aside_allow does NOT share that tolerance -- it fails closed, because
+ * asking a human to approve a command it cannot show them would be theatre. */
+static void emit_exec_line(const char *ttyPath, const char *path,
+                           char * const run_argv[], BOOL colorAllowed) {
+    if (path == NULL) return;
+    write_exec_line_to_tty(ttyPath, path, run_argv, colorAllowed);
+}
+
 /* Build-time master switch for POLICY DEFERENCE, chosen by -DSW_POLICY_DEFERENCE
  * (services.sudowhat.policyDeference in the nix module; SUDOWHAT_POLICY_DEFERENCE
  * in the Makefile). Same fail-closed token machinery as the knobs above.
@@ -533,6 +760,218 @@ static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
     return YES;
 }
 
+/* Build-time master switch for EXEC CONFIRM, chosen by -DSW_EXEC_CONFIRM
+ * (services.sudowhat.execConfirm in the nix module; SUDOWHAT_EXEC_CONFIRM in the
+ * Makefile). Same fail-closed token machinery as the knobs above: a bare token
+ * names a fixed mode baked into the signed bundle, never a runtime file.
+ *
+ *   off - (default) the terminal-password path prints the exec: line and
+ *         allows. A last-look, not a decision.
+ *   on  - the terminal-password path prints the exec: line and then asks one
+ *         `run? [y/N]` on the tty via sudo's conversation API, so the decision
+ *         completes AFTER the resolved path is visible -- the same guarantee
+ *         biometric mode gives, split into authenticate-then-confirm.
+ *
+ * WHY ONLY THAT ONE PATH (docs/design-resolved-exec.md). The asymmetry this
+ * closes is specific to terminal-password mode: sudo resolves the command inside
+ * the policy step that also collects the password, and no plugin hook exists
+ * between resolution and auth, so a resolved pre-PASSWORD display is impossible
+ * there. The biometric path has no such problem -- the sheet IS the decision,
+ * this plugin raises it, and the exec: line already lands before it. The root
+ * bypass and the policy-deference path are excluded by the spec for the same
+ * reason each exists: neither is a moment where sudowhat gets to decide.
+ *
+ * MODE LANDSCAPE. "Terminal-password mode" is today exactly the non-console
+ * step-aside: sudo's own PAM factor ran on the caller's own terminal, and this
+ * plugin steps aside afterwards. A future CONSOLE terminal mode (open decision 1
+ * in docs/design-terminal-mode.md) would be the second member of that family and
+ * should share this same gate rather than grow its own.
+ *
+ * No password ever touches plugin code here: sudo's PAM auth has already
+ * succeeded by the time this runs, and the only thing asked for is a y/N.
+ *
+ * An unknown token yields an undefined SW_EC_<name> and fails the compile. */
+#ifndef SW_EXEC_CONFIRM
+#define SW_EXEC_CONFIRM off
+#endif
+#define SW_EC_off      0
+#define SW_EC_on       1
+#define SW_EC_CAT(x)   SW_EC_##x
+#define SW_EC_SEL(x)   SW_EC_CAT(x)
+enum { sw_exec_confirm_mode = SW_EC_SEL(SW_EXEC_CONFIRM) };
+
+/* Pure decision: does the confirm prompt run for this invocation? Both inputs
+ * explicit so every branch is unit-testable, and both must hold:
+ *   knob off        -> NO   (the default; plain last-look, then allow)
+ *   no controlling
+ *   terminal        -> NO   (nowhere to ask, and nobody to answer -- so a piped
+ *                            or automated invocation behaves IDENTICALLY with
+ *                            the knob on or off, and can never newly block)
+ *   otherwise       -> YES  (print exec:, then ask)
+ *
+ * Note this gate is not "fail-safe" in the sw_defer_decision sense, because
+ * neither outcome is the dangerous one: NO lands on today's behaviour (sudo has
+ * already authenticated the caller and sudoers has already authorized them), and
+ * YES only adds a question. */
+static BOOL sw_confirm_gate_active(BOOL confirmOn, BOOL haveTty) {
+    if (!confirmOn) return NO;
+    if (!haveTty)   return NO;
+    return YES;
+}
+
+/* Classify the answer to `run? [y/N]`. Accepts only an affirmative: "y" or
+ * "yes", any case, with surrounding whitespace (including the newline a
+ * conversation implementation may leave on) trimmed. Everything else -- "n",
+ * empty, garbage, NULL -- is a decline, which is the whole point of a [y/N]
+ * default: a stray Enter must never approve. Pure, so the classification is
+ * unit-testable without a tty. */
+static BOOL sw_confirm_answer_is_yes(const char *reply) {
+    if (reply == NULL) return NO;
+
+    const char *p = reply;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    const char *end = p + strlen(p);
+    while (end > p && (end[-1] == ' ' || end[-1] == '\t'
+                       || end[-1] == '\r' || end[-1] == '\n')) end--;
+
+    size_t len = (size_t)(end - p);
+    if (len == 1) return (p[0] == 'y' || p[0] == 'Y');
+    if (len == 3) {
+        return (p[0] == 'y' || p[0] == 'Y')
+            && (p[1] == 'e' || p[1] == 'E')
+            && (p[2] == 's' || p[2] == 'S');
+    }
+    return NO;
+}
+
+/* Is there a controlling terminal to print on and ask through? Opened and
+ * closed immediately -- the answer, not the fd, is what the gate needs, and the
+ * two writers below each open their own. Same flags as every other /dev/tty open
+ * in this file: O_NOCTTY never acquires a controlling terminal as a side effect,
+ * O_CLOEXEC never leaks into the execed target. isatty() is checked because a
+ * `/dev/tty` that is somehow a regular file is not somebody who can answer. */
+static BOOL sw_have_controlling_tty(const char *ttyPath) {
+    int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) return NO;
+    BOOL yes = isatty(fd) ? YES : NO;
+    close(fd);
+    return yes;
+}
+
+/* Ask the one question, through sudo's conversation API (the same channel sudo
+ * uses for its own prompts, so it reaches the caller's terminal however sudo has
+ * wired it). SUDO_CONV_PROMPT_ECHO_ON: the answer is a y/N, not a secret, and
+ * the human needs to see what they typed. The "sudowhat: " prefix is the same
+ * provenance marker every other line of ours carries -- this question lands in
+ * the middle of somebody else's output and has to say who is asking.
+ *
+ * The conversation contract puts the reply buffer in the caller's hands, so it
+ * is freed here. Returns NO on a NULL conversation pointer or a conversation
+ * error as well as on a real decline: the caller treats all three the same way
+ * (a quiet abort), because a question that could not be asked has not been
+ * answered. */
+static BOOL sw_ask_run_confirm(void) {
+    if (g_conversation == NULL) return NO;
+
+    struct sudo_conv_message msg = {
+        .msg_type = SUDO_CONV_PROMPT_ECHO_ON,
+        .timeout  = 0,
+        .msg      = "sudowhat: run? [y/N] ",
+    };
+    struct sudo_conv_reply reply = { .reply = NULL };
+
+    int rc = g_conversation(1, &msg, &reply, NULL);
+    BOOL yes = (rc == 0) && sw_confirm_answer_is_yes(reply.reply);
+    if (reply.reply != NULL) {
+        free(reply.reply);
+        reply.reply = NULL;
+    }
+    return yes;
+}
+
+/* The non-console step-aside, with its display and its optional confirm. Split
+ * out of sudowhat_check so the TOCTOU pin, the prompt and the re-stat read as
+ * one unit. Returns the plugin verdict: 1 = allow, 0 = deny, -1 = plugin error.
+ *
+ * Knob off (the default) is the whole of this function's first branch: print
+ * exec: and allow. Reaching this path at all means sudo's PAM auth already
+ * succeeded on the caller's own terminal, so the line is a last-look, not a
+ * decision -- the honest maximum in a mode where the password is collected
+ * inside the policy step that resolves the command.
+ *
+ * Knob on adds the decision back. Then a TOCTOU pin is required and it is NOT
+ * optional: the confirm introduces an authorization DELAY on a path that
+ * previously had none, which opens the same binary-swap window the console
+ * biometric path already guards against with its pre-prompt open()+fstat and
+ * post-auth re-stat. The pin is taken BEFORE the human is asked anything, so
+ * what they approve is the file that was there when the question was posed. */
+static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
+                               const char **errstr) {
+    BOOL confirmOn = (sw_exec_confirm_mode == SW_EC_on);
+    BOOL haveTty = confirmOn ? sw_have_controlling_tty("/dev/tty") : NO;
+
+    if (!sw_confirm_gate_active(confirmOn, haveTty)) {
+        emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
+        return 1;
+    }
+
+    /* Fail closed on a missing command key here, unlike the display helper's
+     * silent skip: asking a human to confirm a command we cannot show them
+     * would be a ceremony with nothing in it. */
+    if (commandC == NULL) {
+        set_errstr(errstr, "sudowhat: missing 'command' in command_info; "
+                           "cannot confirm what would run");
+        return 0;
+    }
+
+    /* Pre-prompt pin -- same pattern, same reasons, as the console path's (3a).
+     * O_CLOEXEC so the fd does not leak into the execed program. */
+    int preFd = open(commandC, O_RDONLY | O_CLOEXEC);
+    if (preFd < 0) {
+        set_errstr(errstr, "sudowhat: cannot open target binary %s: %s",
+                   commandC, strerror(errno));
+        return 0;
+    }
+    struct stat preSt;
+    if (fstat(preFd, &preSt) != 0) {
+        int saved = errno;
+        close(preFd);
+        set_errstr(errstr, "sudowhat: fstat(%s) failed: %s",
+                   commandC, strerror(saved));
+        return -1;
+    }
+
+    emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
+
+    /* Decline, an empty answer, or a conversation that could not run at all:
+     * quiet abort. Terse on purpose -- nothing is wedged, nothing is cached,
+     * and the caller can simply run the command again. */
+    if (!sw_ask_run_confirm()) {
+        close(preFd);
+        set_errstr(errstr, "sudowhat: run not confirmed");
+        return 0;
+    }
+
+    /* Post-answer re-stat: if the file at the path no longer matches the fd we
+     * pinned, the binary was swapped while the human was reading and answering. */
+    struct stat postSt;
+    if (stat(commandC, &postSt) != 0) {
+        int saved = errno;
+        close(preFd);
+        set_errstr(errstr, "sudowhat: post-confirm stat(%s) failed: %s",
+                   commandC, strerror(saved));
+        return 0;
+    }
+    close(preFd);
+
+    if (postSt.st_dev != preSt.st_dev || postSt.st_ino != preSt.st_ino) {
+        set_errstr(errstr, "sudowhat: target binary changed during authorization");
+        return 0;
+    }
+
+    return 1;
+}
+
 static int sudowhat_open(unsigned int version,
                          sudo_conv_t conversation,
                          sudo_printf_t plugin_printf,
@@ -543,11 +982,16 @@ static int sudowhat_open(unsigned int version,
                          char * const submit_envp[],
                          char * const plugin_options[],
                          const char **errstr) {
-    (void)conversation; (void)settings;
+    (void)settings;
     (void)submit_optind; (void)submit_argv;
     (void)plugin_options;
 
     g_plugin_printf = plugin_printf;
+    /* check() has no conversation parameter, so stash it here for the
+     * exec_confirm prompt (sw_step_aside_allow). Captured unconditionally: the
+     * knob is a compile-time constant, and a captured pointer nobody calls costs
+     * nothing. */
+    g_conversation = conversation;
 
     if (SUDO_API_VERSION_GET_MAJOR(version) != SUDO_API_VERSION_MAJOR) {
         set_errstr(errstr, "sudowhat: unsupported sudo plugin API major version %u",
@@ -642,6 +1086,7 @@ static void sudowhat_close(void) {
      * adding a field to sw_invoking_ctx can't leave a stale value behind. */
     g_inv = (sw_invoking_ctx){ .uid = (uid_t)-1 };
     g_plugin_printf = NULL;
+    g_conversation = NULL;
 }
 
 /* Verify the audit plugin's on-disk signature IF it is installed. The audit
@@ -686,6 +1131,17 @@ static int sudowhat_check(char * const command_info[],
             return 0;
         }
 
+        /* (1c) Capture the RESOLVED command, best-effort, before any allow path
+         * can return. sudo has finished resolving by the time check() runs, so
+         * command_info["command"] is the absolute path it will execve() -- the
+         * one thing the pre-auth terminal block (audit plugin, typed:) could not
+         * know. Hoisted this high so every allow below can display it; a NULL
+         * here is not handled here, because the two consumers want opposite
+         * things from it: emit_exec_line skips silently (a display), while (3)'s
+         * long-standing fatal check stays exactly where it always was, so the
+         * root bypass does not newly turn a missing key into an error. */
+        const char *commandC = find_kv(command_info, "command");
+
         /* (2) Caller classification.
          *
          * sudowhat gates *escalation* — an unprivileged principal reaching
@@ -714,6 +1170,13 @@ static int sudowhat_check(char * const command_info[],
              * console-user guard was deliberately bypassed. */
             syslog(LOG_AUTHPRIV | LOG_NOTICE,
                    "sudowhat: console-user guard bypassed (root-initiated sudo)");
+            /* Still show what will run. Root contexts usually have no
+             * controlling terminal, in which case this is a no-op -- but when
+             * one IS present (a root shell in a terminal), the ceremony should
+             * look the same as everywhere else. The audit plugin exempts root
+             * from its block, so this is the one line root gets; that is fine,
+             * because root is not being gated here, only informed. */
+            emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
             return 1;
         }
 
@@ -749,6 +1212,13 @@ static int sudowhat_check(char * const command_info[],
              * stepping aside would grant passwordless root — deny instead,
              * exactly as before this feature existed. */
             if (sudowhat_noncon_password_path_installed()) {
+                /* Terminal-password mode. sudo already collected the factor,
+                 * inside the policy step that also resolved the command, so the
+                 * exec: line lands after auth and before exec: a last-look, not
+                 * a preview. With execConfirm on, the decision moves back after
+                 * the display -- see sw_step_aside_allow. */
+                int verdict = sw_step_aside_allow(commandC, run_argv, errstr);
+                if (verdict != 1) return verdict;
                 syslog(LOG_AUTHPRIV | LOG_NOTICE,
                        "sudowhat: non-console caller allowed (invoking uid %u, "
                        "tty %s); sudo required a factor on the caller's own "
@@ -762,8 +1232,10 @@ static int sudowhat_check(char * const command_info[],
             return 0;
         }
 
-        /* (3) Resolve command. */
-        const char *commandC = find_kv(command_info, "command");
+        /* (3) Resolve command. commandC was captured back at (1c) so the allow
+         * paths above could display it; the fatal check stays HERE, on the
+         * console path, where a missing key really does mean there is nothing to
+         * put on the sheet. */
         if (commandC == NULL) {
             set_errstr(errstr, "sudowhat: missing 'command' in command_info");
             return -1;
@@ -841,10 +1313,16 @@ static int sudowhat_check(char * const command_info[],
             (deferenceOn && !markerPresent)
                 ? sudowhat_pam_integrity_line_installed() : NO;
         if (sw_defer_decision(deferenceOn, markerPresent, integrityInstalled)) {
-            /* The command was already shown on the controlling terminal by the
-             * audit plugin (its open() runs before this check), so a deferred
-             * NOPASSWD run still discloses what ran — there is nothing to echo
-             * here. Record the skip and allow. */
+            /* The command as typed was already shown on the controlling
+             * terminal by the audit plugin (its open() runs before this check).
+             * The RESOLVED line is this plugin's to echo, and a deferred run
+             * gets it like every other allow path: sudoers waiving
+             * authentication is a reason not to gate, not a reason to stop
+             * disclosing. No prompt is added here -- the spec is explicit that
+             * deference behaviour is otherwise unchanged, and execConfirm
+             * deliberately does not reach this path. Record the skip and
+             * allow. */
+            emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
             syslog(LOG_AUTHPRIV | LOG_NOTICE,
                    "sudowhat: prompt skipped, sudoers waived authentication "
                    "(invoking uid %u)", g_inv.uid);
@@ -908,12 +1386,25 @@ static int sudowhat_check(char * const command_info[],
                                                       argv:argv
                                                      style:SWPromptStyleSelfContained];
 
-        /* The command itself is shown on the terminal by the audit plugin
-         * (before this plugin runs) and on the sheet below (resolved), so the
-         * approval plugin emits only the verify code here — the one out-of-band
-         * signal binding the sheet to the terminal. No fd redirect can hide it
-         * (emit_verify_code targets /dev/tty). */
+        /* Two lines, in this order, then the sheet.
+         *
+         * The verify code first: the one out-of-band signal binding the sheet to
+         * the terminal. No fd redirect can hide it (emit_verify_code targets
+         * /dev/tty).
+         *
+         * Then the resolved command. This is the moment the whole exec: design
+         * exists for: the sheet IS the decision, this plugin raises it, and this
+         * plugin controls the ordering -- so here, uniquely, the resolved path
+         * reaches the human BEFORE they decide, not merely before exec. It also
+         * makes the sheet's "(see terminal)" overflow referral truthful: when the
+         * command is too long for the sheet, the terminal now holds the full
+         * RESOLVED line, not just the as-typed one.
+         *
+         * Emitted before the seteuid drop, while EUID is still root -- the same
+         * condition every other /dev/tty write in this file relies on -- and
+         * before the LAContext call, which blocks until the human answers. */
         emit_verify_code("/dev/tty", nonceBuf, sw_color_allowed());
+        emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
 
         /* (5) LAContext call.
          *
