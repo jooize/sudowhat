@@ -116,14 +116,19 @@ If you manage your Mac with nix-darwin, install everything declaratively — the
           # "bold"; "plain" disables it; colors are bold+color; "random"
           # rotates colors per invocation). Cosmetic only.
           # services.sudowhat.verifyStyle = "cyan";
-          # Show user/path/command on the terminal before auth, via the audit
-          # plugin ("on", the default) or not ("off"). See "How it works".
+          # Show user/directory/typed command on the terminal before auth,
+          # via the audit plugin ("on", the default) or not ("off"). See
+          # "How it works".
           # services.sudowhat.auditDisplay = "off";
           # Defer to sudoers' own auth decision: skip the console Touch ID
           # prompt when sudoers waived auth (a NOPASSWD rule, !authenticate, or
           # a cached credential), so a NOPASSWD command just runs. Default "on";
           # "off" always prompts. See "How it works".
           # services.sudowhat.policyDeference = "off";
+          # Ask one y/N confirmation on the terminal-password path after auth,
+          # with the resolved exec: line visible. Default "off". Tty-gated,
+          # so automation is unaffected. See "How it works".
+          # services.sudowhat.execConfirm = "on";
         }
       ];
     };
@@ -156,7 +161,7 @@ sudo /usr/bin/foo bar
 /etc/sudo.conf
   └── Plugin sudowhat_audit_plugin /usr/local/libexec/sudo/sudowhat_audit.so
       • SecStaticCodeCheckValidity on pam_sudowhat.so + the approval plugin
-      • writes user / path / command (as typed) to /dev/tty — every path,
+      • writes user / directory / typed command to /dev/tty — every path,
         before the password prompt or Touch ID sheet; escaping done in the
         memory-safe Rust escape_core. tty-only, skipped when headless.
   │
@@ -182,6 +187,8 @@ sudo /usr/bin/foo bar
         sent to a native password (nonConsole="password", default) or denied
         (nonConsole="deny") — see below.
       • formats the command with shell-quoting and control-char escapes
+      • writes the resolved exec: line to /dev/tty — before the sheet in
+        biometric mode, after the password on the terminal path
       • seteuid drops to the user
       • LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometricsOrCompanion)
       • on fallback: AuthorizationCreate with system.privilege.admin and
@@ -215,17 +222,19 @@ So a non-console caller authenticates, if at all, through sudo's own machinery o
 
 **Root callers are exempt — by design.** sudowhat gates *escalation*: an unprivileged principal reaching for root. A caller that is already root (uid 0) is not escalating, and a sudo plugin loaded inside a root process cannot meaningfully constrain root anyway — root can run the command directly, rewrite `/etc/sudo.conf`, or unload the plugin. Gating root would add no security while breaking legitimate root-context automation that shells out through sudo: nix-darwin / home-manager per-user activation runs as root and invokes `launchctl asuser <uid> sudo -u <user>` (invoking uid 0); the same pattern appears in launchd jobs and installer postinstall scripts, and these are non-interactive (no human to answer a prompt). So a uid-0 caller is allowed without a prompt, and the bypass is logged to the auth log (`syslog`/`LOG_AUTHPRIV`) so it is auditable rather than silent. The console gate still applies to every non-root caller — which is the entire population the gate can actually defend against.
 
-**Policy deference (console NOPASSWD skip).** The approval plugin runs on *every* `sudo` that sudoers authorizes — `NOPASSWD` does not bypass it — so without this, the console user would get a Touch ID sheet even for a command sudoers authorized `NOPASSWD`. sudowhat instead **defers to sudoers' own authentication decision**: sudo runs the PAM auth stack (where `pam_sudowhat` sets a process-local marker) only when it requires authentication, so an *absent* marker means sudoers waived it — a `NOPASSWD` rule, `Defaults !authenticate`, a root invoker, or a valid credential in the timestamp cache. On an absent marker (with `pam_sudowhat` still wired into `sudo_local`, which the plugin re-checks), the console user's prompt is **skipped and the command just runs**. This is an authorization-trust decision that inherits sudoers' choice rather than re-implementing it — no command allowlist, no drift. It is fail-safe in every uncertain direction: a present marker, an unverifiable chain, or `policyDeference = "off"` all result in a prompt, and a caller can only ever *force* a prompt by manipulating its environment, never suppress one. Even on a skipped run the audit plugin has already shown user/path/command on the terminal (it runs before this decision), so a `NOPASSWD` command is still disclosed. Turn the whole behavior off with `services.sudowhat.policyDeference = "off"`.
+**Policy deference (console NOPASSWD skip).** The approval plugin runs on *every* `sudo` that sudoers authorizes — `NOPASSWD` does not bypass it — so without this, the console user would get a Touch ID sheet even for a command sudoers authorized `NOPASSWD`. sudowhat instead **defers to sudoers' own authentication decision**: sudo runs the PAM auth stack (where `pam_sudowhat` sets a process-local marker) only when it requires authentication, so an *absent* marker means sudoers waived it — a `NOPASSWD` rule, `Defaults !authenticate`, a root invoker, or a valid credential in the timestamp cache. On an absent marker (with `pam_sudowhat` still wired into `sudo_local`, which the plugin re-checks), the console user's prompt is **skipped and the command just runs**. This is an authorization-trust decision that inherits sudoers' choice rather than re-implementing it — no command allowlist, no drift. It is fail-safe in every uncertain direction: a present marker, an unverifiable chain, or `policyDeference = "off"` all result in a prompt, and a caller can only ever *force* a prompt by manipulating its environment, never suppress one. Even on a skipped run the audit plugin has already shown user/directory/typed command on the terminal (it runs before this decision), so a `NOPASSWD` command is still disclosed. Turn the whole behavior off with `services.sudowhat.policyDeference = "off"`.
 
 **Per-command auth:** `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's auth cache, so every privileged command re-prompts. The value is configurable via `services.sudowhat.timestampTimeout`; the module never sets `timestamp_type=global`. Note this composes with policy deference: with a non-zero timeout, a second command within the window on the same terminal has a cached credential (auth stack skipped, marker absent) and so runs with no sheet — sudo's normal grace after the first real factor. Keep the default `0` for a Touch ID sheet on every command.
 
 **Verify-code emphasis:** the code echoed to the controlling terminal is bold by default; `services.sudowhat.verifyStyle` selects a different emphasis (`plain`, `bold`, a bold-plus-color — `red`, `green`, `yellow`, `blue`, `magenta`, `cyan` — or `random`, which rotates among a curated color subset per invocation) baked into the signed bundle at build time. It is purely cosmetic — never a trust signal, since the anchor is the code matching the system-rendered Touch ID sheet — and the value selects from a fixed, reviewed set of escape sequences rather than a free-form string, so it adds no injection surface. `NO_COLOR` or `TERM=dumb` in the invoking environment still force plain at runtime regardless of the build-time setting.
 
-**Terminal command display (audit plugin):** the [audit plugin](#how-it-works) shows the command on the controlling terminal **before authentication, on every path** — the local console (before the Touch ID sheet and its verify code) and non-console / SSH sessions (before sudo's native password prompt). This closes the gap where a non-console sudo used to step aside silently, showing a bare `Password:` with no command. It prints `user`, `path` (the working directory), and the `command` as typed, each shell-quoted and control-character escaped by the memory-safe Rust `escape_core` (so no raw control byte reaches the terminal). It is written to `/dev/tty` only — never sudo's stderr — so a `2>file` redirect cannot capture it, and it is skipped when there is no controlling terminal (headless). Because the full command is already on the terminal, when the Touch ID sheet has to replace an over-long item (past its ~480-char budget) with a `(see terminal)` marker, the marker always points at something. The display is disclosure only, never a trust signal: any process that can write your terminal can forge the same bytes, so the anchor stays the verify code matching the system-rendered sheet (biometric) or sudo's own PAM (terminal). Turn it off with `services.sudowhat.auditDisplay = "off"`.
+**Terminal command display (audit plugin):** the [audit plugin](#how-it-works) shows the command on the controlling terminal **before authentication, on every path** — the local console (before the Touch ID sheet and its verify code) and non-console / SSH sessions (before sudo's native password prompt). This closes the gap where a non-console sudo used to step aside silently, showing a bare `Password:` with no command. It prints `user:`, `directory:` (the working directory), and `typed:` — the command exactly as you typed it — each shell-quoted and control-character escaped by the memory-safe Rust `escape_core` (so no raw control byte reaches the terminal). It is written to `/dev/tty` only — never sudo's stderr — so a `2>file` redirect cannot capture it, and it is skipped when there is no controlling terminal (headless). Once sudo has resolved the command, the [approval plugin](#how-it-works) adds one more row, `exec:` — the absolute path sudo will actually execute, read out of sudo's own `command_info` and never resolved plugin-side, printed *before* the Touch ID sheet is raised in biometric mode and, on the terminal-password path (where the password happens inside sudo's policy step), after auth as a last look. `typed:` states what was asked for and `exec:` what sudo found, so a bare name shadowed by an unexpected `PATH` entry shows up as the two simply disagreeing, with no heuristic to tune. Because the full command is already on the terminal, when the Touch ID sheet has to replace an over-long item (past its ~480-char budget) with a `(see terminal)` marker, the marker always points at something — including, now, the resolved path the sheet could not fit. The display is disclosure only, never a trust signal: any process that can write your terminal can forge the same bytes, so the anchor stays the verify code matching the system-rendered sheet (biometric) or sudo's own PAM (terminal). Turn it off with `services.sudowhat.auditDisplay = "off"`.
 
-Every row shares one label gutter, so `user`, `directory`, `command` and the verify code all start in the same column. The `command:` value is **highlighted by role** so the token worth reading is not buried in the wrap: the program's directory part in plain cyan and its **basename in bold cyan**, every other token plain, the quotes sudowhat itself added dim, with anomalous spans in the palette above them — deceptive Unicode escapes red, control-byte escapes magenta, shell metacharacters cyan, notable whitespace runs on a grey background. A hostile argument spelled like one of sudowhat's own lines (`'sudowhat: user: evil'`) therefore lands quoted and colored as data, visibly not a real display line. Option flags carry no color of their own: "starts with a dash" is a guess about someone else's command grammar (wrong after `--`, blind to `dd if=...`), and on a display about what happens as root, `--no-preserve-root` must not be the faintest thing on the line. Dim therefore means exactly one thing everywhere: *these bytes are sudowhat's, not the command's*. The `directory:` value takes the same dirname/basename split as the program path, and the `user:` value turns yellow when the target is not `root`.
+Every row shares one label gutter, so `user`, `directory`, `typed`, `exec` and the verify code all start in the same column. The `typed:` and `exec:` values are **highlighted by role** so the token worth reading is not buried in the wrap: the program's directory part in plain cyan and its **basename in bold cyan**, every other token plain, the quotes sudowhat itself added dim, with anomalous spans in the palette above them — deceptive Unicode escapes red, control-byte escapes magenta, shell metacharacters cyan, notable whitespace runs on a grey background. A hostile argument spelled like one of sudowhat's own lines (`'sudowhat: user: evil'`) therefore lands quoted and colored as data, visibly not a real display line. Option flags carry no color of their own: "starts with a dash" is a guess about someone else's command grammar (wrong after `--`, blind to `dd if=...`), and on a display about what happens as root, `--no-preserve-root` must not be the faintest thing on the line. Dim therefore means exactly one thing everywhere: *these bytes are sudowhat's, not the command's*. The `directory:` value takes the same dirname/basename split as the program path, and the `user:` value turns yellow when the target is not `root`.
 
 The highlight is **layout, never content**. It stays one logical line, which your terminal soft-wraps: nothing is split into per-option lines, nothing is elided, nothing is reordered — a disclosure tool that abbreviates is worthless. The color sequences go only *around* tokens that `escape_core` has already escaped and quoted, so stripping them returns the plain line byte for byte, and the highlight can neither add nor hide a byte of the command you are about to authorize. Emphasis is not a trust signal (any process that can write your terminal can forge the same bytes), so it is safe to color attacker-influenced content. Select `services.sudowhat.echoColor = "off"` to bake a plain display into the bundle; `NO_COLOR`, `TERM=dumb`, or a non-terminal destination force plain at runtime regardless. There is deliberately **no caller-settable knob** here — see [Standalone by design](#standalone-by-design) — and any failure inside the colorizer falls back to the same line in plain, never to showing nothing.
+
+**Confirm after the resolved line (`execConfirm`, off by default).** In biometric mode the decision already completes with the resolved path in view: `exec:` prints before the sheet is raised. The terminal-password path cannot do that — sudo resolves the command inside the same policy step that collects the password — so there `exec:` is a last look rather than a preview. Setting `services.sudowhat.execConfirm = "on"` closes the asymmetry by splitting the decision in two: after sudo has authenticated you, the approval plugin prints `exec:` and asks one `sudowhat: run? [y/N] ` on your terminal, so the last word is given with the resolved path on screen. No password ever touches plugin code — this is a confirmation, not an authentication. The prompt is tty-gated: no controlling terminal means no prompt, so piped and unattended invocations behave identically with the setting on or off. Declining is a quiet abort (nothing wedges; re-run at will). It applies to the terminal-password path only, it is baked into the signed bundle at build time like every other sudowhat setting, and the default `"off"` keeps the plain last look.
 
 The audit plugin joins the mutual-signature web — a present-but-tampered audit bundle makes the approval plugin and `pam_sudowhat` fail closed — but it is optional: an absent bundle disables terminal display without affecting authentication (tamper-evident in place, not removal-proof).
 
@@ -280,7 +289,7 @@ Bundles are signed with your Developer ID Application certificate. The team-iden
 
 Linux has no Touch ID, so it gets the **display**, not the biometric. A sudo
 **audit plugin** — a single pure-Rust `.so` reusing the same anti-spoofing core
-as macOS — prints `user / directory / command` to your terminal *before* sudo's
+as macOS — prints `user / directory / typed` to your terminal *before* sudo's
 native `pam_unix` password prompt, so you read the exact command before you type
 your password:
 
@@ -288,13 +297,14 @@ your password:
 $ sudo systemctl restart nginx
 sudowhat: user: root
 sudowhat: directory: /etc/nginx
-sudowhat: command: systemctl restart nginx
+sudowhat: typed: systemctl restart nginx
 [sudo] password for alice:
 ```
 
 **Display-only, by design.** There is no verify code (no GUI sheet to bind one
-to), no approval plugin, and no PAM module — sudo's own authentication is
-untouched. The trust model is **sudo's own** enforcement: it refuses to load a
+to), no approval plugin — and so no resolved `exec:` line, which the approval
+plugin owns — and no PAM module; sudo's own authentication is untouched. The
+trust model is **sudo's own** enforcement: it refuses to load a
 plugin, or read `/etc/sudo.conf`, that is not owned by root and writable only by
 root (`sudo.conf(5)`), fail-closed. There is **no code-signing anchor and no
 tamper-evidence** on Linux (an attacker with root can swap the plugin) — Linux

@@ -1,6 +1,6 @@
 # Design note: resolved exec display (`typed:` / `exec:`)
 
-**Status: DRAFT (2026-08-26), not implemented.** Closes two future items from
+**Status: IMPLEMENTED (v0.13.0, 2026-08-26).** Closes two future items from
 `docs/design-terminal-mode.md` ("the as-typed vs resolved split, the
 resolved-path last-look") with a concrete shape. Companion decision recorded
 here: the writable-target warning considered alongside it is CUT (see "Cut:
@@ -123,6 +123,13 @@ into authenticate-then-confirm. No password ever touches plugin code; decline
 is a quiet abort (nothing wedges; re-run at will). Tty-gated: no controlling
 terminal means no prompt, so piped/automated invocations behave identically
 with the key on or off. Off (default) keeps the plain last-look.
+
+Realized form: "config key" here means what it means for every other sudowhat
+knob — a build-time token baked into the signed bundle, not a runtime config
+file. `SUDOWHAT_EXEC_CONFIRM` in the Makefile (`-DSW_EXEC_CONFIRM`), exposed as
+`services.sudowhat.execConfirm` in the nix module, alongside `verifyStyle`,
+`echoColor`, `policyDeference` and `auditDisplay`. Nothing a caller can set at
+runtime, and no file for an attacker to edit.
 
 A divergence-triggered variant (prompt only when typed differs from resolved)
 was considered and cut: every bare name "diverges", so it would fire on
