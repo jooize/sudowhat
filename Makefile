@@ -38,10 +38,14 @@ ifeq ($(filter $(SUDOWHAT_AUDIT_DISPLAY),$(SUDOWHAT_VALID_AUDIT_DISPLAY)),)
   override SUDOWHAT_AUDIT_DISPLAY := on
 endif
 
-# Build-time policy for colouring the audit plugin's terminal command display:
-# "anomalies" (default) or "off". The nix module exposes the same names via
-# services.sudowhat.echoColor. Passed as a bare token to -DSW_AUDIT_ECHO_COLOR
-# (audit bundle only). Under "anomalies" the command line is highlighted by role
+# Build-time policy for colouring the terminal command display: "anomalies"
+# (default) or "off". The nix module exposes the same names via
+# services.sudowhat.echoColor. Passed as a bare token to -DSW_ECHO_COLOR in the
+# GLOBAL CFLAGS below, because it governs BOTH command values - the audit
+# bundle's `typed:` and the approval bundle's `exec:`. They are one display to a
+# reader, so one token settles both; each bundle carries its own copy of the
+# token machinery (separate Mach-O images, no shared translation unit). Under
+# "anomalies" the command line is highlighted by role
 # (program dirname plain cyan, basename bold cyan, option flags dim, values
 # plain) with deceptive Unicode / control-byte escapes, shell metacharacters and
 # notable whitespace in a fixed reviewed palette on top - sudowhat's threat
@@ -86,11 +90,31 @@ ifeq ($(filter $(SUDOWHAT_EXEC_CONFIRM),$(SUDOWHAT_VALID_EXEC_CONFIRM)),)
   override SUDOWHAT_EXEC_CONFIRM := off
 endif
 
+# Build-time master switch for the informational `exec:` echo (the resolved
+# command line the approval plugin prints): "on" (default - print it on the root
+# bypass, the non-console step-aside last-look, the policy-deference skip and
+# the console biometric pre-sheet) or "off" (print none of them; the bundle
+# loads and gates exactly as before). It is a DISPLAY knob and pairs with
+# SUDOWHAT_AUDIT_DISPLAY -- one per line family -- so it fails toward disclosure
+# the same way: an unknown value normalizes to "on" with a warning, rather than
+# failing. The nix module exposes the same names via services.sudowhat.
+# execDisplay. Passed as a bare token to -DSW_EXEC_DISPLAY (approval bundle
+# only, the sole consumer). Note "off" does NOT silence the confirm ceremony's
+# own copy of the line under SUDOWHAT_EXEC_CONFIRM=on -- see the SW_EXEC_DISPLAY
+# comment in plugin/sudowhat_approval.m.
+SUDOWHAT_EXEC_DISPLAY ?= on
+SUDOWHAT_VALID_EXEC_DISPLAY := on off
+ifeq ($(filter $(SUDOWHAT_EXEC_DISPLAY),$(SUDOWHAT_VALID_EXEC_DISPLAY)),)
+  $(warning sudowhat: unknown SUDOWHAT_EXEC_DISPLAY '$(SUDOWHAT_EXEC_DISPLAY)', falling back to on)
+  override SUDOWHAT_EXEC_DISPLAY := on
+endif
+
 CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
           -Iplugin -Ipam -Ishared -Ishared/escape_core \
           -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"' \
           -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE) \
+          -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) \
           -DSW_POLICY_DEFERENCE=$(SUDOWHAT_POLICY_DEFERENCE) \
           -DSW_EXEC_CONFIRM=$(SUDOWHAT_EXEC_CONFIRM)
 LDFLAGS = -bundle \
@@ -163,16 +187,23 @@ $(ESCAPE_CORE_LIB): $(ESCAPE_CORE_DIR)/src/lib.rs $(ESCAPE_CORE_DIR)/Cargo.toml 
 # CFLAGS propagate to every prerequisite object, so the bundle's caller
 # (sudowhat_approval.o / pam_sudowhat.o) sees the same -D when it includes
 # SignatureVerifier.h - without it the header's #error guard fails the build.
+#
+# The approval bundle also gets the one display knob that is genuinely its own
+# (execDisplay - only this bundle prints the resolved exec: line), the mirror of
+# what auditDisplay is to the audit bundle below.
 build/sudowhat_approval.so: CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier \
-                                      -DSW_SESSIONGUARD_CLASS=SudoWhatSessionGuard
+                                      -DSW_SESSIONGUARD_CLASS=SudoWhatSessionGuard \
+                                      -DSW_EXEC_DISPLAY=$(SUDOWHAT_EXEC_DISPLAY)
 build/pam_sudowhat.so:      CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerifier \
                                       -DSW_SESSIONGUARD_CLASS=SudoWhatPamSessionGuard
-# The audit bundle gets the third SignatureVerifier class name plus its own
-# build-time display knobs. Target-specific CFLAGS propagate to prerequisites, so
-# plugin/sudowhat_audit.o and build/audit_SignatureVerifier.o both see these.
+# The audit bundle gets the third SignatureVerifier class name plus the one
+# display knob that is genuinely its own (auditDisplay - only this bundle draws
+# the pre-auth block). echoColor is NOT here: it governs both bundles' command
+# values, so it lives in the global CFLAGS above. Target-specific CFLAGS
+# propagate to prerequisites, so plugin/sudowhat_audit.o and
+# build/audit_SignatureVerifier.o both see these.
 build/sudowhat_audit.so:    CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatAuditSigVerifier \
-                                      -DSW_AUDIT_DISPLAY=$(SUDOWHAT_AUDIT_DISPLAY) \
-                                      -DSW_AUDIT_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR)
+                                      -DSW_AUDIT_DISPLAY=$(SUDOWHAT_AUDIT_DISPLAY)
 
 # The approval bundle links the Rust staticlib too: its `exec:` line renders the
 # resolved command through the same escape core the audit bundle uses, so the

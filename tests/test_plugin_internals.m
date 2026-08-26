@@ -331,26 +331,100 @@ static void test_exec_line_format(void) {
 
     /* Plain: the provenance prefix, the label padded to the shared gutter, the
      * value. "exec:" is 5 characters, so 7 spaces of gap. */
-    EQ(sw_format_exec_line(path, argv, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO),
        @"sudowhat: exec:       /run/current-system/sw/bin/pinned deploy\n",
        "plain exec: line, label padded to the gutter");
 
     /* The value starts in the same column as every audit-block row (10 bytes of
      * "sudowhat: " plus the 12-wide gutter). This is the whole reason the two
      * bundles duplicate the width instead of sharing it. */
-    NSRange v = [sw_format_exec_line(path, argv, NO)
+    NSRange v = [sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO)
                     rangeOfString:@"/run/current-system"];
     OK(v.location == 22, "exec: value starts at the shared value column 22");
 
     /* Styled: our frame contributes the bold label and nothing else; the padding
      * stays outside the emphasis, as in the audit plugin's rows. */
-    OK([sw_format_exec_line(path, argv, YES)
+    OK([sw_format_exec_line(path, argv, SW_EXEC_GROUPED, YES, YES)
            hasPrefix:@"sudowhat: \033[1mexec:\033[0m       "],
        "styled exec: line bolds the label only, never the padding");
 
     /* No path -> nothing to render, so the write site shows nothing rather than
      * a frame with an empty value. */
-    OK(sw_format_exec_line(NULL, argv, NO) == nil, "NULL path -> nil line");
+    OK(sw_format_exec_line(NULL, argv, SW_EXEC_GROUPED, NO, NO) == nil,
+       "NULL path -> nil line");
+}
+
+/* The SOLO frame -- the root-bypass site's line, which has no siblings on the
+ * terminal to align with (the audit plugin exempts uid 0, and verify: is
+ * console-biometric only), so the gutter would be a column of one. */
+static void test_exec_line_solo_format(void) {
+    const char *path = "/run/current-system/sw/bin/pinned";
+    char *argv[] = { (char *)"pinned", (char *)"deploy", NULL };
+
+    /* Exactly one space after the label, and the value therefore starts at
+     * column 16 rather than the block's 22. */
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, NO, NO),
+       @"sudowhat: exec: /run/current-system/sw/bin/pinned deploy\n",
+       "solo exec: line, label unpadded (one space)");
+
+    NSRange v = [sw_format_exec_line(path, argv, SW_EXEC_SOLO, NO, NO)
+                    rangeOfString:@"/run/current-system"];
+    OK(v.location == 16, "solo exec: value follows the label directly");
+
+    /* Styled solo: the same bold-the-label-only emphasis as the grouped twin,
+     * with the single space outside it. */
+    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, YES, YES)
+           hasPrefix:@"sudowhat: \033[1mexec:\033[0m "],
+       "styled solo exec: line bolds the label only");
+
+    /* Layout changes the frame and NOTHING else: strip the frame from either
+     * form and the same value remains. */
+    NSString *grouped = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO);
+    NSString *solo = sw_format_exec_line(path, argv, SW_EXEC_SOLO, NO, NO);
+    EQ([solo substringFromIndex:16], [grouped substringFromIndex:22],
+       "solo and grouped carry the identical value");
+}
+
+/* Frame colour and value colour are separate inputs: the frame answers to the
+ * runtime gates alone, the value additionally to the echoColor build token. The
+ * frame-on/value-off row IS the echoColor=off rendering on a colour-capable
+ * terminal. */
+static void test_exec_line_color_split(void) {
+    const char *path = "/bin/echo";
+    char *argv[] = { (char *)"echo", (char *)"hello", NULL };
+
+    /* frame on, value off: bold label, plain command -- no escape byte after
+     * the frame's closing reset. */
+    NSString *frameOnly = sw_format_exec_line(path, argv, SW_EXEC_GROUPED,
+                                              YES, NO);
+    EQ(frameOnly,
+       @"sudowhat: \033[1mexec:\033[0m       /bin/echo hello\n",
+       "echoColor=off rendering: label styled, value plain");
+
+    /* frame on, value on: the same frame, and the value now carries the escape
+     * core's role colouring. Compared against the frame-only line so this pins
+     * the difference, not the palette (tests/test_escape_core.m owns that). */
+    NSString *both = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, YES, YES);
+    OK([both hasPrefix:@"sudowhat: \033[1mexec:\033[0m       "],
+       "value colouring leaves the frame byte-identical");
+    OK(![both isEqualToString:frameOnly],
+       "value colouring actually reaches the command value");
+
+    /* frame off, value off is the fully plain line (the non-tty rendering). */
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO),
+       @"sudowhat: exec:       /bin/echo hello\n",
+       "both off -> not one escape byte");
+}
+
+static void test_echo_color_default(void) {
+    /* The global CFLAGS pass -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) to BOTH
+     * bundles and to this test binary; SUDOWHAT_ECHO_COLOR defaults to
+     * anomalies, so a default build colours the exec: value. Same shape as the
+     * execConfirm / policyDeference default tests below: it pins the shipped
+     * default, so a deliberate `make SUDOWHAT_ECHO_COLOR=off` build is expected
+     * to fail this line rather than to pass quietly. */
+    OK(sw_echo_color_mode == SW_ACOL_anomalies,
+       "default build resolves echoColor to anomalies");
 }
 
 static void test_exec_line_matches_escape_core(void) {
@@ -359,7 +433,7 @@ static void test_exec_line_matches_escape_core(void) {
      * the same token list. */
     const char *path = "/run/current-system/sw/bin/pinned";
     char *argv[] = { (char *)"pinned", (char *)"deploy", NULL };
-    EQ(sw_format_exec_line(path, argv, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO),
        ([NSString stringWithFormat:@"sudowhat: exec:       %@\n",
                                    sw_core_line(path, argv)]),
        "exec: value is the escape core's line verbatim (argv[0] dedupped)");
@@ -368,7 +442,7 @@ static void test_exec_line_matches_escape_core(void) {
      * it -- sudo -u somebody's `sh -c ...` must not lose a token. */
     const char *shPath = "/bin/sh";
     char *shArgv[] = { (char *)"-bash", (char *)"-c", (char *)"id", NULL };
-    EQ(sw_format_exec_line(shPath, shArgv, NO),
+    EQ(sw_format_exec_line(shPath, shArgv, SW_EXEC_GROUPED, NO, NO),
        ([NSString stringWithFormat:@"sudowhat: exec:       %@\n",
                                    sw_core_line(shPath, shArgv)]),
        "a non-duplicate argv[0] is kept, exactly as the core renders it");
@@ -378,12 +452,12 @@ static void test_exec_line_matches_escape_core(void) {
      * second sudowhat line or emit a raw escape sequence. */
     const char *echoPath = "/bin/echo";
     char *evil[] = { (char *)"echo", (char *)"sudowhat: exec: /bin/true", NULL };
-    EQ(sw_format_exec_line(echoPath, evil, NO),
+    EQ(sw_format_exec_line(echoPath, evil, SW_EXEC_GROUPED, NO, NO),
        @"sudowhat: exec:       /bin/echo 'sudowhat: exec: /bin/true'\n",
        "a token spelled like one of our own lines lands quoted, as data");
 
     /* (d) Path only, no argv at all. */
-    EQ(sw_format_exec_line(echoPath, NULL, NO),
+    EQ(sw_format_exec_line(echoPath, NULL, SW_EXEC_GROUPED, NO, NO),
        @"sudowhat: exec:       /bin/echo\n", "NULL run_argv -> path-only line");
 }
 
@@ -398,7 +472,8 @@ static void test_emit_exec_line_tty_only(void) {
     if (fd >= 0) close(fd);
 
     char *argv[] = { (char *)"pinned", (char *)"deploy", NULL };
-    emit_exec_line(path, "/run/current-system/sw/bin/pinned", argv, YES);
+    emit_exec_line(path, "/run/current-system/sw/bin/pinned", argv,
+                   SW_EXEC_GROUPED, YES);
     EQ(sw_read_utf8(path),
        @"sudowhat: exec:       /run/current-system/sw/bin/pinned deploy\n",
        "emit_exec_line wrote the resolved line to the tty path");
@@ -407,7 +482,7 @@ static void test_emit_exec_line_tty_only(void) {
 
     /* (b) A NULL command path is a silent skip, not a frame with nothing in it:
      * the file must be left exactly as (a) left it. */
-    emit_exec_line(path, NULL, argv, YES);
+    emit_exec_line(path, NULL, argv, SW_EXEC_GROUPED, YES);
     EQ(sw_read_utf8(path),
        @"sudowhat: exec:       /run/current-system/sw/bin/pinned deploy\n",
        "NULL command path writes nothing at all");
@@ -416,8 +491,26 @@ static void test_emit_exec_line_tty_only(void) {
     /* (c) No controlling terminal -> silent no-op. There is no stderr fallback
      * and no printf parameter that could carry one, so the line appears on the
      * terminal that launched sudo or nowhere. */
-    emit_exec_line("/no/such/dir/sw_tty", "/bin/echo", argv, YES);
+    emit_exec_line("/no/such/dir/sw_tty", "/bin/echo", argv,
+                   SW_EXEC_GROUPED, YES);
     OK(1, "no controlling terminal -> silent (no fallback), no crash");
+}
+
+static void test_exec_display_default(void) {
+    /* execDisplay is target-specific to the approval bundle (only that bundle
+     * prints an exec: line), exactly as auditDisplay is to the audit bundle, so
+     * this test binary is compiled with no -DSW_EXEC_DISPLAY and resolves the
+     * plugin's own #ifndef default. That default is what pins the knob's
+     * fail-toward-disclosure direction: it is a DISPLAY switch, so an absent or
+     * unparsed value must show the line, never silently swallow it. The
+     * Makefile's validation normalizes an unknown SUDOWHAT_EXEC_DISPLAY to the
+     * same "on" for the same reason. A deliberate `make SUDOWHAT_EXEC_DISPLAY=
+     * off` bundle departs from this default by an explicit build flag; it does
+     * not change the default asserted here, and the emit tests above -- which
+     * exercise emit_exec_line through this same header default -- likewise
+     * describe the shipped configuration. */
+    OK(sw_exec_display_mode == SW_ED_on,
+       "default build resolves execDisplay to on");
 }
 
 /* exec_confirm: the off-by-default post-resolution question on the
@@ -580,8 +673,12 @@ int main(void) {
         test_emit_verify_code_tty_only();
         test_verify_line_format_and_color();
         test_exec_line_format();
+        test_exec_line_solo_format();
+        test_exec_line_color_split();
+        test_echo_color_default();
         test_exec_line_matches_escape_core();
         test_emit_exec_line_tty_only();
+        test_exec_display_default();
         test_exec_confirm_default();
         test_confirm_gate();
         test_confirm_answer_classifier();

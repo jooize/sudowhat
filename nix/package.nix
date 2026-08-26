@@ -28,6 +28,12 @@
   # (default) or "off". One of the Makefile's SUDOWHAT_VALID_AUDIT_DISPLAY;
   # validated by the nix module's enum. See services.sudowhat.auditDisplay.
   auditDisplay ? "on",
+  # Master switch for the informational resolved-command echo via the approval
+  # plugin: "on" (default) or "off". One of the Makefile's
+  # SUDOWHAT_VALID_EXEC_DISPLAY; validated by the nix module's enum. macOS only
+  # (the approval plugin does not exist in the Linux port).
+  # See services.sudowhat.execDisplay.
+  execDisplay ? "on",
   # Master switch for the post-resolution run confirmation on the
   # terminal-password path: "off" (default) or "on". One of the Makefile's
   # SUDOWHAT_VALID_EXEC_CONFIRM; validated by the nix module's enum. macOS only
@@ -83,6 +89,7 @@ stdenv.mkDerivation (finalAttrs: {
     "SUDOWHAT_ECHO_COLOR=${echoColor}"
     "SUDOWHAT_POLICY_DEFERENCE=${policyDeference}"
     "SUDOWHAT_AUDIT_DISPLAY=${auditDisplay}"
+    "SUDOWHAT_EXEC_DISPLAY=${execDisplay}"
     "SUDOWHAT_EXEC_CONFIRM=${execConfirm}"
   ];
 

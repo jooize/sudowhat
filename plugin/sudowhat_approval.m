@@ -522,12 +522,84 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  * divergence, with no heuristic needed).
  * ------------------------------------------------------------------------- */
 
+/* Build-time colour policy for the exec: VALUE, chosen by -DSW_ECHO_COLOR
+ * (services.sudowhat.echoColor in the nix module; SUDOWHAT_ECHO_COLOR in the
+ * Makefile).
+ *
+ *   anomalies - (default) the resolved command line is highlighted by role:
+ *               the program's directory part plain cyan and its basename bold
+ *               cyan, every other token plain, the quotes the escape core
+ *               itself added dim, and escaped/anomalous spans in the fixed
+ *               anomaly palette on top.
+ *   off       - the resolved command line renders plain.
+ *
+ * ONE token governs BOTH command lines, typed: and exec:, because a reader sees
+ * one display: an admin who silenced the colour on the line the audit bundle
+ * prints did not ask for a coloured twin of it two lines later. The knob is
+ * therefore in the GLOBAL Makefile CFLAGS, not target-specific to either bundle.
+ *
+ * It governs the command VALUE only. The frame around it -- the provenance
+ * prefix, the bold label, the gutter -- follows the runtime NO_COLOR / TERM /
+ * isatty gates alone, exactly as the audit block's frame rows and the verify:
+ * line do with their own knob: the frame is our own fixed chrome, not a
+ * rendering of untrusted argv.
+ *
+ * Deliberately duplicated from plugin/sudowhat_audit.m (SW_ECHO_COLOR,
+ * SW_ACOL_*, its sw_audit_color_mode), which carries the colouriser's full
+ * rationale: the two bundles are separate Mach-O images that never share a
+ * translation unit, so this small token machinery is copied rather than linked.
+ * If one moves, move both.
+ *
+ * An unknown token yields an undefined SW_ACOL_<name> and fails the compile --
+ * the intended fail-closed result for a raw -D that bypasses the Makefile's
+ * validation. */
+#ifndef SW_ECHO_COLOR
+#define SW_ECHO_COLOR anomalies
+#endif
+#define SW_ACOL_off        0
+#define SW_ACOL_anomalies  1
+#define SW_ACOL_CAT(x)     SW_ACOL_##x
+#define SW_ACOL_SEL(x)     SW_ACOL_CAT(x)
+enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
+
 #define SW_EXEC_LABEL  "exec:"
 #define SW_EXEC_GAP    "       "   /* pads "exec:" (5) out to the 12-col gutter */
 
 #define SW_EXEC_PREFIX "sudowhat: " SW_EXEC_LABEL SW_EXEC_GAP
 #define SW_EXEC_PREFIX_STYLED \
     "sudowhat: \033[1m" SW_EXEC_LABEL "\033[0m" SW_EXEC_GAP
+
+/* The solo frame: label, one space, value -- no gutter. Same bold-the-label-only
+ * emphasis as the grouped twin. */
+#define SW_EXEC_PREFIX_SOLO "sudowhat: " SW_EXEC_LABEL " "
+#define SW_EXEC_PREFIX_SOLO_STYLED \
+    "sudowhat: \033[1m" SW_EXEC_LABEL "\033[0m "
+
+/* Which of those two frames an emit site asks for.
+ *
+ * GROUPED (every site but one): the label is padded out to the shared 12-col
+ * gutter so the value lands in the same column as the audit block's user: /
+ * directory: / typed: rows and the verify: line. That column is the entire
+ * reason the two bundles duplicate the width rather than share it.
+ *
+ * SOLO (the root-bypass site only): the gutter is dropped. That site is
+ * PROVABLY alone on the terminal -- the audit plugin exempts uid 0, so no
+ * typed: block precedes it, and verify: is raised only on the console biometric
+ * path, which the root bypass returns before reaching. A column aligns
+ * siblings; with no siblings, a label floating seven spaces from its value
+ * reads as a rendering bug rather than as alignment. Same unpadded shape the
+ * Linux port prints for a lone line.
+ *
+ * One accepted edge: a NON-root run on a build with auditDisplay=off is alone
+ * too, and still gets the grouped form. This bundle cannot see the audit
+ * bundle's build token (separate images, separate -D), and that admin
+ * explicitly chose to strip the block, so the alignment is vestigial there
+ * rather than wrong. Deciding per emit site keeps the choice compile-time and
+ * provable instead of guessing at another bundle's configuration. */
+typedef enum {
+    SW_EXEC_GROUPED = 0,
+    SW_EXEC_SOLO    = 1,
+} sw_exec_layout;
 
 /* The two escape_core command-line renderers share one signature, so the caller
  * below can pick between them without duplicating the two-call sizing dance.
@@ -616,25 +688,41 @@ static NSString *sw_exec_command_line(const char *path,
                                      path, run_argv, color);
 }
 
-/* Render the whole exec: line -- gutter frame plus value -- as one string.
+/* Render the whole exec: line -- frame plus value -- as one string.
  *
  * Pure and deterministic, so the exact bytes are unit-testable without a
- * terminal, exactly like format_verify_line above. The frame is ours (the
- * provenance prefix and the bold label); the value's styling belongs entirely
- * to the escape-core renderer, which colours the program path and the anomaly
- * spans by role. Both branches lay out the SAME field widths, so the plain line
- * is the styled one with every escape sequence removed.
+ * terminal, exactly like format_verify_line above. layout picks the grouped or
+ * solo frame (see sw_exec_layout).
+ *
+ * FRAME COLOUR AND VALUE COLOUR ARE SEPARATE INPUTS, because they answer to
+ * different authorities. The frame is ours -- the provenance prefix and the
+ * bold label -- and follows the runtime gates alone. The value's styling
+ * belongs to the escape-core renderer, which colours the program path and the
+ * anomaly spans by role, and is additionally governed by the echoColor build
+ * token (see SW_ECHO_COLOR above). Keeping both as parameters keeps this
+ * function pure and every combination table-testable; the production write site
+ * derives them.
+ *
+ * Within one layout both frame branches lay out the SAME field widths, so the
+ * plain line is the styled one with every escape sequence removed.
  *
  * Returns nil when there is no path or the renderers produced nothing, which
  * makes "show nothing" a plain nil check at the write site rather than a
  * half-built line reaching a terminal. */
 static NSString *sw_format_exec_line(const char *path,
-                                     char * const run_argv[], BOOL colorize) {
+                                     char * const run_argv[],
+                                     sw_exec_layout layout,
+                                     BOOL frameColor, BOOL valueColor) {
     if (path == NULL) return nil;
-    NSString *value = sw_exec_command_line(path, run_argv, colorize);
+    NSString *value = sw_exec_command_line(path, run_argv, valueColor);
     if (value.length == 0) return nil;
-    return [NSString stringWithFormat:@"%s%@\n",
-            colorize ? SW_EXEC_PREFIX_STYLED : SW_EXEC_PREFIX, value];
+    const char *prefix;
+    if (layout == SW_EXEC_SOLO) {
+        prefix = frameColor ? SW_EXEC_PREFIX_SOLO_STYLED : SW_EXEC_PREFIX_SOLO;
+    } else {
+        prefix = frameColor ? SW_EXEC_PREFIX_STYLED : SW_EXEC_PREFIX;
+    }
+    return [NSString stringWithFormat:@"%s%@\n", prefix, value];
 }
 
 /* Write the exec: line straight to the controlling terminal -- and ONLY there,
@@ -655,20 +743,28 @@ static NSString *sw_format_exec_line(const char *path,
  * "/dev/tty" in production) so the offline unit test can point it at a temp file
  * and read the bytes back. Returns YES iff the whole line was written. */
 static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
-                                   char * const run_argv[], BOOL colorAllowed) {
+                                   char * const run_argv[],
+                                   sw_exec_layout layout, BOOL colorAllowed) {
     if (path == NULL) return NO;
 
     int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
     if (fd < 0) return NO;
 
-    BOOL colorize = colorAllowed && isatty(fd);
+    /* The two colour decisions, derived here and nowhere else. The frame obeys
+     * the runtime gates alone (env opt-outs, folded into colorAllowed, then
+     * isatty); the value additionally needs the echoColor build token, so
+     * echoColor=off strips the role colouring from exec: exactly as it does
+     * from the audit bundle's typed:, while both lines keep their bold label. */
+    BOOL frameColor = colorAllowed && isatty(fd);
+    BOOL valueColor = frameColor && (sw_echo_color_mode == SW_ACOL_anomalies);
 
     /* The value is unbounded (a command line can be arbitrarily long), so the
      * line is assembled as an NSString and written as bytes rather than through
      * a fixed stack buffer the way the 4-char verify code is. Nothing is
      * truncated: an elided exec: line would be worse than none, because the
      * reader would trust an incomplete command. */
-    NSString *line = sw_format_exec_line(path, run_argv, colorize);
+    NSString *line = sw_format_exec_line(path, run_argv, layout,
+                                         frameColor, valueColor);
     if (line == nil) { close(fd); return NO; }
 
     NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
@@ -690,24 +786,85 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
     return YES;
 }
 
+/* Build-time master switch for the INFORMATIONAL exec: echo, chosen by
+ * -DSW_EXEC_DISPLAY (services.sudowhat.execDisplay in the nix module;
+ * SUDOWHAT_EXEC_DISPLAY in the Makefile). Same fail-closed token machinery as
+ * the other knobs in this file, in its own SW_ED_ namespace -- SW_EC_ belongs
+ * to execConfirm and SW_ACOL_ to echoColor.
+ *
+ *   on  - (default) every informational emit site prints: the root bypass (the
+ *         solo line), the non-console step-aside last-look, the
+ *         policy-deference skip, and the console biometric pre-sheet line.
+ *   off - none of them print. The bundle still loads, still verifies, still
+ *         gates exactly as before -- it just shows nothing. Same spirit as the
+ *         audit bundle's auditDisplay = off.
+ *
+ * NAMING. execDisplay pairs with auditDisplay: the two DISPLAY switches, one
+ * per line family -- the audit bundle's pre-auth block, this bundle's exec:
+ * line. The echo* family (echoColor) names colour instead, i.e. how the two
+ * command VALUES are rendered once they are shown. Presence and styling are
+ * deliberately separate names because they are separate decisions.
+ *
+ * PRECEDENCE over execConfirm, the one subtlety. This knob silences the
+ * informational echo only. With execConfirm = on, the confirm ceremony on the
+ * step-aside path STILL prints the resolved line before its `run? [y/N]`: a
+ * y/N about a command the plugin refuses to show would be empty ceremony. That
+ * is the same principle sw_step_aside_allow already applies to a missing
+ * command key, where it fails closed instead of asking about nothing --
+ * extended here from "cannot show" to "configured not to show". Mechanically,
+ * the confirm branch calls write_exec_line_to_tty directly, below this gate,
+ * while every informational site goes through emit_exec_line, which carries
+ * it. An admin who wants neither the line nor the question turns execConfirm
+ * off as well; execDisplay = off alone means "do not narrate", not "ask me
+ * blind".
+ *
+ * The runtime gates are untouched in both modes: /dev/tty only, no stderr
+ * fallback, and nothing at all without a controlling terminal.
+ *
+ * An unknown token yields an undefined SW_ED_<name> and fails the compile --
+ * the intended fail-closed result for a raw -D that bypasses the Makefile's
+ * validation. */
+#ifndef SW_EXEC_DISPLAY
+#define SW_EXEC_DISPLAY on
+#endif
+#define SW_ED_off      0
+#define SW_ED_on       1
+#define SW_ED_CAT(x)   SW_ED_##x
+#define SW_ED_SEL(x)   SW_ED_CAT(x)
+enum { sw_exec_display_mode = SW_ED_SEL(SW_EXEC_DISPLAY) };
+
 /* Emit the resolved command line to the controlling terminal, or nowhere.
+ *
+ * This is the INFORMATIONAL entry point, and the one place the execDisplay
+ * build token is consulted (see above): with the knob off it returns before
+ * opening anything, so all four informational sites fall silent from a single
+ * seam rather than each carrying a copy of the condition. The confirm ceremony
+ * deliberately does not come through here.
  *
  * Called on every ALLOW path (root bypass, non-console step-aside, policy
  * deference, and -- pre-decision -- the console biometric path), which is the
  * point: a predictable ceremony beats a clever conditional, and a line that is
- * "only sometimes present" would itself need explaining. With no controlling
- * terminal there is nowhere to print, so nothing happens and behaviour is
- * otherwise unchanged; no invocation can newly block on this.
+ * "only sometimes present" would itself need explaining. The knob does not
+ * reintroduce that unpredictability -- it is one build-wide answer, the same on
+ * every path. With no controlling terminal there is nowhere to print, so
+ * nothing happens and behaviour is otherwise unchanged; no invocation can newly
+ * block on this.
  *
  * A NULL path (sudo did not give us command_info["command"]) is a silent skip
  * rather than an error: this is a display, and the console path's own fatal
  * check on that key is still where it always was. Note that the confirm gate in
  * sw_step_aside_allow does NOT share that tolerance -- it fails closed, because
- * asking a human to approve a command it cannot show them would be theatre. */
+ * asking a human to approve a command it cannot show them would be theatre.
+ *
+ * layout is the caller's, not a guess: only the emit site knows whether its
+ * line has siblings on the terminal (see sw_exec_layout). Every site here
+ * passes SW_EXEC_GROUPED except the root bypass, which is provably alone. */
 static void emit_exec_line(const char *ttyPath, const char *path,
-                           char * const run_argv[], BOOL colorAllowed) {
+                           char * const run_argv[], sw_exec_layout layout,
+                           BOOL colorAllowed) {
+    if (sw_exec_display_mode != SW_ED_on) return;
     if (path == NULL) return;
-    write_exec_line_to_tty(ttyPath, path, run_argv, colorAllowed);
+    write_exec_line_to_tty(ttyPath, path, run_argv, layout, colorAllowed);
 }
 
 /* Build-time master switch for POLICY DEFERENCE, chosen by -DSW_POLICY_DEFERENCE
@@ -911,7 +1068,8 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
     BOOL haveTty = confirmOn ? sw_have_controlling_tty("/dev/tty") : NO;
 
     if (!sw_confirm_gate_active(confirmOn, haveTty)) {
-        emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
+        emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
+                       sw_color_allowed());
         return 1;
     }
 
@@ -941,7 +1099,12 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
         return -1;
     }
 
-    emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
+    /* Straight to the writer, deliberately below emit_exec_line's execDisplay
+     * gate (see there): this line is not narration, it is the subject of the
+     * question asked two statements down. execDisplay = off silences the four
+     * informational echoes; it must not turn this one into a blind y/N. */
+    write_exec_line_to_tty("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
+                           sw_color_allowed());
 
     /* Decline, an empty answer, or a conversation that could not run at all:
      * quiet abort. Terse on purpose -- nothing is wedged, nothing is cached,
@@ -1175,8 +1338,15 @@ static int sudowhat_check(char * const command_info[],
              * one IS present (a root shell in a terminal), the ceremony should
              * look the same as everywhere else. The audit plugin exempts root
              * from its block, so this is the one line root gets; that is fine,
-             * because root is not being gated here, only informed. */
-            emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
+             * because root is not being gated here, only informed.
+             *
+             * SW_EXEC_SOLO for exactly that reason: no typed: block above it
+             * (audit exempts uid 0) and no verify: line (biometric is
+             * console-only, and this branch returns before it), so there is
+             * nothing to align with and the label keeps a single space. This is
+             * the ONE site where that holds -- see sw_exec_layout. */
+            emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_SOLO,
+                           sw_color_allowed());
             return 1;
         }
 
@@ -1322,7 +1492,8 @@ static int sudowhat_check(char * const command_info[],
              * deference behaviour is otherwise unchanged, and execConfirm
              * deliberately does not reach this path. Record the skip and
              * allow. */
-            emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
+            emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
+                           sw_color_allowed());
             syslog(LOG_AUTHPRIV | LOG_NOTICE,
                    "sudowhat: prompt skipped, sudoers waived authentication "
                    "(invoking uid %u)", g_inv.uid);
@@ -1404,7 +1575,8 @@ static int sudowhat_check(char * const command_info[],
          * condition every other /dev/tty write in this file relies on -- and
          * before the LAContext call, which blocks until the human answers. */
         emit_verify_code("/dev/tty", nonceBuf, sw_color_allowed());
-        emit_exec_line("/dev/tty", commandC, run_argv, sw_color_allowed());
+        emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
+                       sw_color_allowed());
 
         /* (5) LAContext call.
          *

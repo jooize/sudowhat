@@ -67,7 +67,7 @@
 #define SW_AD_SEL(x)   SW_AD_CAT(x)
 enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
 
-/* Build-time colour policy, chosen by -DSW_AUDIT_ECHO_COLOR (echoColor in the
+/* Build-time colour policy, chosen by -DSW_ECHO_COLOR (echoColor in the
  * nix module / Makefile).
  *
  *   anomalies - (default) highlight the command line: the program's directory
@@ -83,6 +83,14 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
  * by the NO_COLOR / TERM / isatty gates alone, because it is our own fixed
  * chrome rather than a rendering of untrusted argv.
  *
+ * The SAME token governs the approval bundle's exec: value, which is why
+ * -DSW_ECHO_COLOR sits in the Makefile's global CFLAGS rather than in this
+ * bundle's target-specific ones: typed: and exec: are one display to a reader,
+ * and silencing one of them alone would be arbitrary. That bundle carries its
+ * own copy of this token machinery (plugin/sudowhat_approval.m, SW_ECHO_COLOR /
+ * SW_ACOL_* / sw_echo_color_mode) because the two are separate Mach-O images
+ * that never share a translation unit. If one moves, move both.
+ *
  * The colouriser lives in escape_core (sw_full_command_line_colored), not in
  * PromptFormatter: that class has a fixed ObjC name that cannot be linked into
  * this second bundle without a duplicate-class collision. Colour is layout only,
@@ -90,14 +98,14 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
  * the bytes are the plain line's exactly - so it can neither add nor hide
  * content. Runtime gates (NO_COLOR / TERM, then isatty) still apply on top, and
  * any failure falls back to the plain line. */
-#ifndef SW_AUDIT_ECHO_COLOR
-#define SW_AUDIT_ECHO_COLOR anomalies
+#ifndef SW_ECHO_COLOR
+#define SW_ECHO_COLOR anomalies
 #endif
 #define SW_ACOL_off        0
 #define SW_ACOL_anomalies  1
 #define SW_ACOL_CAT(x)     SW_ACOL_##x
 #define SW_ACOL_SEL(x)     SW_ACOL_CAT(x)
-enum { sw_audit_color_mode = SW_ACOL_SEL(SW_AUDIT_ECHO_COLOR) };
+enum { sw_audit_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
 
 /* sudo delivers context as NULL-terminated "key=value" C-string arrays. Local
  * copy of the approval plugin's helper (kept file-static; the two bundles do not

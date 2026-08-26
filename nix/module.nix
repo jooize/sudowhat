@@ -132,27 +132,70 @@ in {
       '';
     };
 
+    execDisplay = lib.mkOption {
+      type = lib.types.enum [ "on" "off" ];
+      default = "on";
+      description = ''
+        Whether sudowhat shows the resolved command — the `exec:` line — on the
+        controlling terminal, via the approval plugin. The companion to
+        `auditDisplay`: that one governs the pre-authentication block, this one
+        governs the single line printed once sudo has resolved what it will
+        actually execute (the absolute path out of sudo's own `command_info`,
+        never resolved plugin-side).
+
+        - `on` (the default): the line is printed on every path that reaches it
+          — before the Touch ID sheet in biometric mode (pre-decision), after
+          sudo's own password on the non-console terminal path (a last look),
+          on a `policyDeference` skip, and on the root-initiated bypass, whose
+          line is the unpadded solo form.
+        - `off`: none of those print. The approval plugin still loads, still
+          verifies its siblings' signatures, and still gates exactly as it did
+          — it simply narrates nothing, the same shape `auditDisplay = "off"`
+          gives the other bundle.
+
+        One exception, and it is deliberate: with `execConfirm = "on"` the
+        confirmation ceremony still prints the resolved line before its
+        `run? [y/N]`. A yes/no about a command sudowhat refuses to show would be
+        an empty ceremony, so the question keeps its subject. Set `execConfirm`
+        to `"off"` as well if the terminal should stay silent altogether.
+
+        The runtime gates are unchanged in both settings: the line goes to
+        /dev/tty only — never sudo's stderr, so no `2>file` redirect can capture
+        it — and it is skipped when there is no controlling terminal. Turning
+        this off removes disclosure, not a gate: what sudowhat authorizes, and
+        how, is identical either way. Baked into the signed bundle at build
+        time. macOS only — the Linux port ships the display plugin without an
+        approval plugin.
+      '';
+    };
+
     echoColor = lib.mkOption {
       type = lib.types.enum [ "off" "anomalies" ];
       default = "anomalies";
       description = ''
-        Whether the audit plugin's terminal command display (see `auditDisplay`)
-        is coloured to draw the eye to the bytes that matter.
+        Whether the terminal command display is coloured to draw the eye to the
+        bytes that matter. It governs the two command VALUES — the audit
+        plugin's `typed:` line (see `auditDisplay`) and the approval plugin's
+        resolved `exec:` line — together, because a reader sees them as one
+        display.
 
-        - `off` emits the display with no colour at all.
-        - `anomalies` (the default) highlights the `typed:` line by role — the
-          program's directory part in plain cyan and its basename in bold cyan,
-          option flags dim, values plain — and wraps anomaly spans in a fixed,
-          reviewed palette on top:
+        - `off` renders both command lines plain.
+        - `anomalies` (the default) highlights them by role — the program's
+          directory part in plain cyan and its basename in bold cyan, option
+          flags bold blue, every other token plain — and wraps anomaly spans in
+          a fixed, reviewed palette on top:
           deceptive Unicode escapes (`\uNNNN` — bidi, zero-width, homoglyphs)
           in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
           metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
           and notable whitespace runs (leading, trailing, or doubled spaces)
-          shown on a grey background. The `user:` and `directory:` lines stay
-          uncoloured. The approval plugin's `exec:` line renders through the same
-          core, so the two command lines can never disagree on a token; this
-          option is the audit bundle's alone, though, and `exec:` follows the
-          runtime NO_COLOR / TERM / non-tty gates only.
+          shown on a grey background. Both lines render through the same core,
+          so they can never disagree on a token.
+
+        What it does NOT govern: the frame around those values — the label
+        gutter, the bold labels, the `user:` and `directory:` lines, the
+        `verify:` code emphasis (that one is `verifyStyle`). Those are sudowhat's
+        own fixed chrome rather than a rendering of untrusted argv, so they
+        follow the runtime gates alone and stay put at `off`.
 
         The command stays one logical line: the colour goes around tokens that
         are already escaped and quoted, so it never splits, elides or reorders
@@ -161,7 +204,7 @@ in {
         matching the system-rendered sheet), the runtime opt-outs still force
         plain — NO_COLOR or TERM=dumb in the invoking environment, or a non-tty
         target — and any colouriser failure falls back to the plain line rather
-        than showing nothing. Baked into the signed bundle at build time.
+        than showing nothing. Baked into both signed bundles at build time.
       '';
     };
 
@@ -232,8 +275,12 @@ in {
 
         Tty-gated: with no controlling terminal there is no prompt and behaviour
         is identical to `off`, so piped and automated invocations can never newly
-        block. The prompt applies to the terminal-password path only; the root
-        exemption and `policyDeference` skips are untouched, and the biometric
+        block. Read that gate honestly, though — it exempts only genuinely
+        terminal-less invocations: a script run *from* a live terminal (a deploy
+        script in an SSH session calling `NOPASSWD` sudo, say) does have a
+        controlling terminal and **will** be asked `run? [y/N]`. The prompt
+        applies to the terminal-password path only; the root exemption and
+        `policyDeference` skips are untouched, and the biometric
         path already decides after resolution. Baked into the signed bundle at
         build time. macOS only — the Linux port ships the display plugin without
         an approval plugin.
@@ -245,13 +292,14 @@ in {
   config = lib.mkIf cfg.enable (let
     # Bake the chosen build-time presets into the bundle. The defaults
     # (verifyStyle "bold", echoColor "anomalies", policyDeference "on",
-    # auditDisplay "on", execConfirm "off") reproduce the package's own defaults, so
-    # default users get the same store path with no rebuild; any other value
-    # produces a distinct derivation whose embedded paths and the /etc references
-    # below stay consistent (both come from `pkg`), preserving mutual signature
-    # verification.
+    # auditDisplay "on", execDisplay "on", execConfirm "off") reproduce the
+    # package's own defaults, so default users get the same store path with no
+    # rebuild; any other value produces a distinct derivation whose embedded
+    # paths and the /etc references below stay consistent (both come from
+    # `pkg`), preserving mutual signature verification.
     pkg = cfg.package.override {
-      inherit (cfg) verifyStyle echoColor policyDeference auditDisplay execConfirm;
+      inherit (cfg)
+        verifyStyle echoColor policyDeference auditDisplay execDisplay execConfirm;
     };
   in {
     # The store-path approach: binaries live in /nix/store, /etc files

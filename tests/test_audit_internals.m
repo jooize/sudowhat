@@ -70,8 +70,11 @@ static void test_color_allowed(void) {
 }
 
 static void test_color_mode_default(void) {
-    /* The test binary is compiled with no -DSW_AUDIT_ECHO_COLOR, so it sees the
-     * header default: anomaly colouring on. */
+    /* The global CFLAGS pass -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) to both
+     * bundles and to this test binary; SUDOWHAT_ECHO_COLOR defaults to
+     * anomalies, i.e. anomaly colouring on. This pins the shipped default, so a
+     * deliberate `make SUDOWHAT_ECHO_COLOR=off` build is expected to fail this
+     * line rather than to pass quietly. */
     OK(sw_audit_color_mode == SW_ACOL_anomalies,
        "default build resolves echoColor to anomalies");
 }

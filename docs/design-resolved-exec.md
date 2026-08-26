@@ -54,6 +54,65 @@ duplicates the path/basename, exactly as `commandPartsForPath` does for the
 sheet). Printed ALWAYS -- a predictable ceremony beats a clever conditional,
 and "only sometimes present" would itself need explaining.
 
+**Delta (2026-08-27): the root-bypass line is solo.** The gutter above exists
+to align siblings — `user:`, `directory:`, `typed:`, `verify:`. On the
+root-bypass path there are none: the audit plugin exempts uid 0, so no block
+precedes the line, and `verify:` is raised only on the console biometric path,
+which that branch returns before reaching. That one emit site therefore prints
+the unpadded form, matching the Linux port's block:
+
+    sudowhat: exec: /run/current-system/sw/bin/pinned deploy
+
+Every other emit site keeps the padded form. A label floating seven spaces from
+its value, with nothing above or below to line up against, reads as a rendering
+bug rather than as a column. One accepted edge: a non-root run on a build with
+`auditDisplay = "off"` is alone too and still gets the padded form — the
+approval bundle cannot see the audit bundle's build token, and that
+administrator explicitly chose to strip the block, so the alignment is
+vestigial there rather than wrong. Choosing per emit site keeps the decision
+compile-time and provable instead of guessing at another bundle's
+configuration.
+
+**Delta (2026-08-27): `echoColor` governs the `exec:` value too.** The
+build-time colour token was originally passed to the audit bundle alone, so
+`echoColor = "off"` silenced `typed:`'s role colouring while `exec:` kept
+following the runtime gates only — one display, two answers. The token
+(`-DSW_ECHO_COLOR`) now sits in the global `CFLAGS` and both bundles carry their
+own copy of the token machinery. As in the audit bundle, it governs the command
+VALUE only: the frame — provenance prefix, bold label, gutter — and the
+`verify:` emphasis still answer to the runtime `NO_COLOR` / `TERM` / `isatty`
+gates alone, since that chrome is sudowhat's own rather than a rendering of
+untrusted argv.
+
+**Delta (2026-08-27): `execDisplay`, a switch for the line itself.** Added at
+the owner's request after this round shipped. "Printed ALWAYS" above describes
+the default and stays the default; `execDisplay = "off"` is an administrator
+opting out of the whole informational echo -- the root-bypass solo line, the
+step-aside last-look, the policy-deference skip and the biometric pre-sheet
+line together. The plugin loads, verifies and gates identically; it simply
+narrates nothing, which is exactly what `auditDisplay = "off"` already means
+for the other bundle. The name pairs with `auditDisplay` (the two display
+switches, one per line family) rather than joining the `echo*` family, which
+names colour.
+
+Precedence against `exec_confirm` is the only interaction: with the confirm
+ceremony on, the resolved line is still printed before its `run? [y/N]`, even
+under `execDisplay = "off"`. Asking a human to approve a command sudowhat
+refuses to show them is the same empty ceremony the missing-`command`-key check
+already fails closed on. Mechanically the gate sits inside `emit_exec_line`,
+the informational entry point, and the confirm branch calls the tty writer
+directly.
+
+An `interactive` level -- print for a human, stay silent for automation -- was
+considered and **rejected as undetectable**. Every signal available at that
+point is positive in exactly the case it would need to exclude: the
+root-initiated batch run that motivated the knob (nix-darwin activation
+shelling out through sudo) typically *has* a controlling terminal and a
+stdin-isatty, because it was launched from one. A knob that claims to
+distinguish human from script while keying off "was there a terminal
+somewhere up the tree" would be wrong in the one case it is sold for. Two
+honest states beat three, one of which lies.
+
 Timing by mode:
 
 - **Biometric:** printed by approval `check()` BEFORE raising the LAContext
