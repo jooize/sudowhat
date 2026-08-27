@@ -149,6 +149,7 @@ terminal carries the full resolved line in both modes.
     sudowhat: user:       root
     sudowhat: directory:  /Users/jooize/Projects/claude-code-hardening
     sudowhat: input:      pinned deploy
+    sudowhat: path:       /run/current-system/sw/bin:/usr/bin:/bin
     sudowhat: verify:     JL6E  (compare with the prompt)
     <auth>
     sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
@@ -220,12 +221,60 @@ command display. This round adds a stated carve-out rather than an exception
 by accident:
 
 - **audit plugin** owns the PRE-AUTH block (`user:`/`directory:`/`input:`/
-  `verify:`) -- everything that exists before resolution.
+  `path:`/`verify:`) -- everything that exists before resolution.
 - **approval plugin** owns DECISION-ADJACENT display -- the sheet and the
   `execute:` line -- everything that exists only after resolution.
 
 Both render command lines through the shared escape core, so the split cannot
 produce two spellings of one command. The seam is commented on both sides.
+
+**Delta (2026-08-27): `path:`, a pre-gate row for bare names (D8).** The audit
+block gains a fourth row, printed directly after `input:` because it qualifies
+it. macOS only for now — the Linux port's roadmap is separate.
+
+*What it discloses.* The PATH ENVIRONMENT sudo was handed by the caller: the
+attacker-influenceable surface that decides how a bare command name resolves.
+The wording rule is load-bearing and applies everywhere the row is described
+(code comments, module option, README): it is **not** the final resolution
+PATH. A sudoers `secure_path` may override the caller's PATH entirely, and
+`execute:` still shows the resolved outcome. What the row buys is disclosure
+*before the gate* on the password path, where `execute:` cannot appear until
+the password has already been spent — the same asymmetry the `exec_confirm`
+section below is about, answered for the one input that most often decides
+which binary a bare name reaches.
+
+*Condition (a): bare names only.* The row prints only when the typed command
+word (`submit_argv[submit_optind]`) contains no `/` at all. An absolute path
+and any relative path carrying a slash are used as given and never consult
+PATH, so for those the caller's PATH decides nothing and the row would be
+noise. PATH absent or empty is likewise no row: nothing to disclose.
+
+*Invariant, settled: no plugin-side resolution, ever.* The row shows the PATH
+string. It never walks the list, never stats an entry, never claims which entry
+would win. This is the same invariant "Not in scope" below already states for
+the `execute:` line, and it is what keeps the row from becoming a second,
+disagreeing answer to a question sudo already answers.
+
+*Condition (b), mode scoping: the sanctioned fallback.* Ideally the row would
+print only where `execute:` cannot precede the gate — the password path. It
+cannot: the audit bundle deliberately carries **no session classification**.
+There is no `SessionGuard` on this target (a third per-target ObjC class would
+be needed), even a console session can land on the password path, and the
+bundle cannot see the `sudo_local` variant either. So at `open()` the plugin
+cannot know which mode this invocation will take. Decision: **print whenever
+(a) holds**, accepting mild redundancy on biometric consoles, where `execute:`
+also appears pre-sheet. A row that is occasionally redundant beats a row that
+is occasionally missing from the one path that needs it, and the alternative
+would be a guess dressed as a mode. Recorded in a comment at the row's build
+site in `plugin/sudowhat_audit.m`.
+
+*Rendering.* Label `path:` (5 chars) in the existing 12-column gutter, bold
+under colour like every other label; the value escaped through the one shared
+core (`sw_escape_control`, the same call `user:` and `directory:` take) and
+rendered **plain** — no role colour, no dim. It is one opaque string, not a
+token walk, and yellow and cyan already mean specific things in this block.
+One logical line; the terminal soft-wraps; nothing truncated. Fail-soft like
+the rest of the bundle: any doubt means no row, never a broken block.
 
 ## Terminal-mode asymmetry, and the `exec_confirm` option
 

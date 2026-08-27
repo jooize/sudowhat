@@ -75,18 +75,33 @@ in {
         authentication, via a sudo audit plugin.
 
         - `on` (the default): the audit plugin prints `user:`, `directory:` (the
-          working directory), and `input:` (the command as typed) to the
-          controlling terminal on EVERY path — the local console (before the
-          Touch ID sheet and its verify code) and non-console / SSH sessions
-          (before sudo's native password prompt). This closes the gap where a
-          non-console sudo used to step aside silently, showing a bare
-          `Password:` with no command.
+          working directory), `input:` (the command as typed) and — when the
+          typed command is a bare name — `path:` to the controlling terminal on
+          EVERY path — the local console (before the Touch ID sheet and its
+          verify code) and non-console / SSH sessions (before sudo's native
+          password prompt). This closes the gap where a non-console sudo used to
+          step aside silently, showing a bare `Password:` with no command.
         - `off`: the audit plugin loads but displays nothing.
 
         The `input:` label states its own epistemic status: at audit-plugin time
         sudo has not resolved the command yet, so this line can only show what
         the user asked for. The resolved absolute path is shown separately, by
         the approval plugin, on the `execute:` line.
+
+        The `path:` row is shown only for a bare command name — an absolute or
+        relative path never consults `PATH`, so there would be nothing to
+        qualify. It shows the caller's `PATH` exactly as handed to sudo: the
+        attacker-influenceable surface that steers how a bare name resolves. It
+        is deliberately *not* a claim about the final resolution `PATH` — a
+        sudoers `secure_path` may override it entirely — and sudowhat never
+        walks the list or says which entry would win; `execute:` still shows
+        the outcome. What the row buys is disclosure *before* the gate, on the
+        password path, where `execute:` cannot appear until the password has
+        already been spent. It is printed on every path that shows the block:
+        the plugin cannot know pre-authentication which mode this invocation
+        will take, so the slight redundancy on a biometric console (where
+        `execute:` also appears before the sheet) is accepted rather than
+        guessed at. macOS only for now — the Linux plugin has its own roadmap.
 
         The display is disclosure, never a trust signal: any process that can
         write your terminal can forge the same bytes, so the anchor stays the

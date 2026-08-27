@@ -4,7 +4,7 @@
  * The owner of the PRE-AUTH terminal block. sudo calls an audit plugin's open()
  * before any other plugin API function -- in particular before the policy
  * plugin's check_policy, where PAM collects the password — so this plugin prints
- *   user / directory / input
+ *   user / directory / input [/ path]
  * to the controlling terminal FIRST, on every path: the local console (before
  * the approval plugin's verify code + Touch ID sheet) and the non-console / SSH
  * case (before sudo's native PAM `Password:`). That closes the gap where a
@@ -12,9 +12,12 @@
  * no command. See docs/design-terminal-mode.md.
  *
  * DISPLAY OWNERSHIP CARVE-OUT (docs/design-resolved-exec.md, section 3). This
- * plugin owns everything that exists BEFORE resolution: user:, directory:, and
+ * plugin owns everything that exists BEFORE resolution: user:, directory:,
  * input: -- the command as the user typed it, which is all sudo has produced at
- * this point. The approval plugin (plugin/sudowhat_approval.m) owns
+ * this point -- and path:, the caller's PATH as handed to sudo, shown only when
+ * the typed command is a bare name (the surface that steers how that name will
+ * resolve; NOT a claim about the final resolution PATH, which sudoers
+ * secure_path may override). The approval plugin (plugin/sudowhat_approval.m) owns
  * DECISION-ADJACENT display: verify:, the LAContext sheet, and the execute: line
  * carrying sudo's resolved command_info["command"] -- everything that exists only
  * after resolution. Both bundles render command lines through the same Rust
@@ -53,7 +56,8 @@
  * the Makefile). Same fail-closed token machinery as the approval plugin's
  * knobs: a bare token names a fixed mode baked into the signed bundle.
  *
- *   on  - (default) show user / directory / input on the controlling terminal.
+ *   on  - (default) show user / directory / input [/ path] on the controlling
+ *         terminal.
  *   off - never display (the bundle loads but its open() shows nothing).
  *
  * An unknown token yields an undefined SW_AD_<name> and fails the compile — the
@@ -235,6 +239,55 @@ static NSString *sw_audit_command_line(char * const submit_argv[], int optind,
                                       submit_argv, optind, color);
 }
 
+/* Whether the typed command word is a BARE NAME: a token containing no '/' at
+ * all. Only a bare name is looked up through PATH. An absolute path
+ * (/bin/systemctl) and any relative path carrying a slash (./x, a/b) are used
+ * as given and never consult PATH, so for those the caller's PATH decides
+ * nothing and the path: row would be noise on the block. NULL or empty -> NO:
+ * there is nothing to classify, and every doubt means no row. */
+static BOOL sw_audit_is_bare_name(const char *cmd) {
+    if (cmd == NULL || cmd[0] == '\0') return NO;
+    return strchr(cmd, '/') == NULL;
+}
+
+/* The path: row's value, or nil when the row must not print.
+ *
+ * What the row discloses is the PATH ENVIRONMENT sudo was handed by the caller
+ * -- the attacker-influenceable surface that decides how a bare command name
+ * resolves. It is deliberately NOT a claim about the final resolution PATH:
+ * sudoers secure_path may override it entirely, and the approval bundle's
+ * execute: line still shows the resolved outcome. What this row buys is
+ * PRE-GATE disclosure on the password path, where execute: cannot appear before
+ * the password has already been spent.
+ *
+ * NO plugin-side resolution, ever: this shows the PATH string as handed over.
+ * It never walks the list, never stats an entry, never claims which entry would
+ * win. That invariant is settled (docs/design-resolved-exec.md, "Not in
+ * scope"); a resolver here would be a second, disagreeing answer to a question
+ * sudo already answers on the execute: line.
+ *
+ * nil (no row) when: there is no command word, the command word is not a bare
+ * name, PATH is absent or empty (nothing to disclose), or the escape allocation
+ * failed. Fail-soft like everything else here -- any doubt shows no row, never
+ * a broken block.
+ *
+ * The value is escaped through the same one core as user: and directory:
+ * (escape_core's sw_escape_control), so a PATH entry carrying control bytes or
+ * deceptive Unicode reaches the terminal as text, never as bytes. */
+static NSString *sw_audit_path_row_value(char * const submit_argv[],
+                                         int submit_optind,
+                                         char * const submit_envp[]) {
+    if (submit_argv == NULL || submit_optind < 0) return nil;
+    if (!sw_audit_is_bare_name(submit_argv[submit_optind])) return nil;
+
+    const char *path = find_kv(submit_envp, "PATH");
+    if (path == NULL || path[0] == '\0') return nil;
+
+    NSString *value = sw_audit_escape(path);
+    if (value.length == 0) return nil;   /* alloc failure -> no row */
+    return value;
+}
+
 /* Write the assembled display block to the controlling terminal — and ONLY
  * there, exactly like the approval plugin's verify-code echo. /dev/tty is the
  * one channel a shell's fd redirects (`>f`, `2>f`, `&>f`) cannot touch, and a
@@ -295,8 +348,8 @@ static BOOL sw_audit_color_allowed(char * const envp[]) {
  * lands in the middle of somebody else's output, so each line has to carry its
  * own provenance. The approval plugin's verify: and execute: lines
  * (SW_VERIFY_PREFIX, SW_EXEC_PREFIX) are further fields in the same gutter, so
- * five labels across two bundles -- user:, directory:, input: here, verify: and
- * execute: there -- share this one width; keep them in step. */
+ * six labels across two bundles -- user:, directory:, input:, path: here,
+ * verify: and execute: there -- share this one width; keep them in step. */
 #define SW_AUDIT_GUTTER 12
 
 /* One frame row: prefix, the bolded label padded out to the gutter, the value.
@@ -451,11 +504,12 @@ static int sudowhat_audit_open(unsigned int version,
 
         if (userLine == nil || commandLine == nil) return 1;   /* alloc failure */
 
-        /* Assemble the block. Labels are bolded purely for readability (our own
-         * fixed bytes, never user input -- the values are escape_core-escaped),
-         * and the values carry the emphasis their meaning earns: the target
-         * user yellow when it is not root, the cwd split dirname/basename like
-         * a program path. Same env gate as the approval plugin's verify code
+        /* Assemble the block: user / directory / input [/ path]. Labels are
+         * bolded purely for readability (our own fixed bytes, never user input
+         * -- the values are escape_core-escaped), and the values carry the
+         * emphasis their meaning earns: the target user yellow when it is not
+         * root, the cwd split dirname/basename like a program path, and the
+         * caller's PATH plain. Same env gate as the approval plugin's verify code
          * (resolved above), so a redirect or a non-tty renders the identical
          * block with no SGR at all.
          *
@@ -471,6 +525,32 @@ static int sudowhat_audit_open(unsigned int version,
             [block appendString:sw_audit_row(@"directory:", dirValue, color)];
         }
         [block appendString:sw_audit_row(@"input:", commandLine, color)];
+
+        /* path: sits directly after input: because it QUALIFIES that row: it is
+         * the environment that decides how the bare name just shown will
+         * resolve. Value plain -- the same treatment user: and directory: get by
+         * default -- because it earns no role colour: it is one opaque string,
+         * not a token walk, and the yellow/cyan the frame spends elsewhere
+         * already mean specific things.
+         *
+         * MODE SCOPING, and why there is none. Ideally this row would print
+         * only where execute: cannot appear before the gate -- the password
+         * path. It cannot: the audit bundle deliberately carries no session
+         * classification (no SessionGuard here; a third per-target ObjC class
+         * would be needed, even console sessions can land on the password path,
+         * and the bundle cannot see the sudo_local variant either), so at open()
+         * the plugin cannot know whether this invocation will show execute:
+         * before the gate. The sanctioned fallback is to print whenever the
+         * condition above holds, accepting mild redundancy on biometric
+         * consoles, where execute: also appears pre-sheet. A row that is
+         * occasionally redundant beats a row that is occasionally missing from
+         * the one path that needs it. */
+        NSString *pathValue = sw_audit_path_row_value(submit_argv,
+                                                      submit_optind,
+                                                      submit_envp);
+        if (pathValue != nil) {
+            [block appendString:sw_audit_row(@"path:", pathValue, color)];
+        }
 
         sw_audit_write_tty("/dev/tty", block);
         return 1;

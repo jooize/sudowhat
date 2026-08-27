@@ -51,10 +51,23 @@ $ sudo systemctl restart nginx
 sudowhat: user:       root              <- audit plugin open(), BEFORE auth
 sudowhat: directory:  /etc/nginx        <- the invoking cwd (user_info["cwd"])
 sudowhat: input:      systemctl restart nginx  <- as typed (see "resolved path" below)
+sudowhat: path:       /usr/local/bin:/usr/bin:/bin  <- caller's PATH; bare names only
 Password: ****                          <- sudo's native PAM, on the terminal
 sudowhat: execute:    /run/.../systemctl restart nginx   <- resolved last-look (shipped v0.13.0)
 <runs>
 ```
+
+*[2026-08-27 — the `path:` row (D8). Added directly after `input:` because it
+qualifies it: for a bare command name it discloses the caller's PATH, the
+surface that steers how that name resolves, on the one path where `execute:`
+cannot precede the gate. Not a claim about the final resolution PATH — sudoers
+`secure_path` may override it, and `execute:` still shows the outcome — and
+sudowhat never walks the list. Absent for absolute or relative commands, which
+never consult PATH. Printed on every path that shows the block, because the
+audit bundle carries no session classification and so cannot know pre-auth
+which mode it is in; the redundancy on biometric consoles is accepted. Full
+rationale in the D8 delta in `docs/design-resolved-exec.md`, section 3. macOS
+only for now.]*
 
 ## The resolved-path timing constraint (and the two-moment answer)
 

@@ -8,6 +8,9 @@
  *                                    parameters.
  *   - sw_audit_row()               : the label gutter every row shares.
  *   - sw_audit_color_dir/user()    : the two frame values that carry emphasis.
+ *   - sw_audit_is_bare_name()      : the condition gating the path: row.
+ *   - sw_audit_path_row_value()    : the caller's PATH as the path: row shows
+ *                                    it, or nil when the row must not print.
  *
  * A SEPARATE binary from test_plugin_internals: that one #includes
  * plugin/sudowhat_approval.m, and the two plugins cannot share a translation
@@ -153,7 +156,7 @@ static void test_command_line_nothing_to_show(void) {
     OK(sw_audit_command_line(argv, -1, YES) == nil, "negative optind -> nil");
 }
 
-/* The frame: one gutter, three rows, and colour that asserts only what the
+/* The frame: one gutter, up to four rows, and colour that asserts only what the
  * plugin knows. The values all start in the same column, so the block reads as
  * a table; the "sudowhat: " prefix stays on every row because the block lands
  * mid-stream in output we do not own. */
@@ -165,10 +168,14 @@ static void test_frame_gutter(void) {
     EQ(sw_audit_row(@"input:", @"id", NO),
        @"sudowhat: input:      id\n", "input: padded to the gutter");
 
+    EQ(sw_audit_row(@"path:", @"/usr/bin", NO),
+       @"sudowhat: path:       /usr/bin\n",
+       "path: padded to the gutter (5-char label, 7 spaces of gap)");
+
     /* Every value lands in the same column -- the whole point of the gutter,
      * and the reason the approval plugin's verify: and execute: lines can join the
      * same table from a different bundle. */
-    NSArray<NSString *> *labels = @[ @"user:", @"directory:", @"input:" ];
+    NSArray<NSString *> *labels = @[ @"user:", @"directory:", @"input:", @"path:" ];
     for (NSString *l in labels) {
         NSRange v = [sw_audit_row(l, @"VALUE", NO) rangeOfString:@"VALUE"];
         OK(v.location == 22, "value column is identical across rows");
@@ -266,6 +273,75 @@ static void test_fail_soft_fallback(void) {
        "both renderers failing -> nil");
 }
 
+/* The path: row's gating condition. Only a BARE NAME is resolved through PATH;
+ * anything carrying a '/' -- absolute or relative -- is used as given, so the
+ * caller's PATH decides nothing there and the row would be noise. */
+static void test_is_bare_name(void) {
+    OK(sw_audit_is_bare_name("systemctl"), "a bare name is a bare name");
+    OK(!sw_audit_is_bare_name("/bin/echo"), "an absolute path is not");
+    OK(!sw_audit_is_bare_name("./x"), "a dot-slash relative path is not");
+    OK(!sw_audit_is_bare_name("a/b"), "any relative path with a slash is not");
+    OK(!sw_audit_is_bare_name(""), "the empty string is not");
+    OK(!sw_audit_is_bare_name(NULL), "NULL is not");
+}
+
+/* The path: row's value: the caller's PATH exactly as handed to sudo, escaped
+ * through the same core as user: and directory:, and nil in every case where
+ * the row must not print. The row NEVER resolves anything -- it shows the
+ * string, it does not walk it -- so there is nothing here that could claim
+ * which entry would win; that answer belongs to the execute: line. */
+static void test_path_row_value(void) {
+    char *env[] = { (char *)"TERM=xterm", (char *)"PATH=/usr/bin:/bin", NULL };
+
+    char *bare[] = { (char *)"sudo", (char *)"systemctl", (char *)"restart",
+                     NULL };
+    EQ(sw_audit_path_row_value(bare, 1, env), @"/usr/bin:/bin",
+       "a bare name with PATH present -> the caller's PATH");
+
+    /* The row is plain text, not a rendered token walk: no quoting is added and
+     * no role colour is spent, so what the reader sees is the env string. */
+    OK([sw_audit_path_row_value(bare, 1, env)
+          rangeOfString:@"\033"].location == NSNotFound,
+       "the path: value carries no escape byte");
+
+    /* Hostile bytes in PATH reach the terminal as TEXT, never as bytes: a
+     * newline cannot forge a second sudowhat row, and a bidi override cannot
+     * reverse the reading order of the entries. */
+    char *hostile[] = { (char *)"TERM=xterm",
+                        (char *)"PATH=/a\n/b:/c\u202Ed", NULL };
+    NSString *h = sw_audit_path_row_value(bare, 1, hostile);
+    EQ(h, @"/a\\n/b:/c\\u202ed",
+       "control byte and bidi override are escaped to text");
+    OK([h rangeOfString:@"\n"].location == NSNotFound,
+       "no raw newline survives into the row");
+    OK([h rangeOfString:@"\u202e"].location == NSNotFound,
+       "no raw bidi override survives into the row");
+
+    /* Nothing to disclose -> no row. */
+    char *noPath[] = { (char *)"TERM=xterm", (char *)"HOME=/x", NULL };
+    OK(sw_audit_path_row_value(bare, 1, noPath) == nil, "PATH absent -> nil");
+
+    char *emptyPath[] = { (char *)"TERM=xterm", (char *)"PATH=", NULL };
+    OK(sw_audit_path_row_value(bare, 1, emptyPath) == nil, "PATH empty -> nil");
+
+    OK(sw_audit_path_row_value(bare, 1, NULL) == nil, "NULL envp -> nil");
+
+    /* PATH is present but the command never consults it -> no row. */
+    char *abs_[] = { (char *)"sudo", (char *)"/bin/echo", NULL };
+    OK(sw_audit_path_row_value(abs_, 1, env) == nil,
+       "an absolute command -> nil even with PATH present");
+
+    char *rel[] = { (char *)"sudo", (char *)"./x", NULL };
+    OK(sw_audit_path_row_value(rel, 1, env) == nil,
+       "a relative command with a slash -> nil even with PATH present");
+
+    /* No command word at all (`sudo -v`) -> nothing to qualify. */
+    char *none[] = { (char *)"sudo", NULL };
+    OK(sw_audit_path_row_value(none, 1, env) == nil, "no command word -> nil");
+    OK(sw_audit_path_row_value(NULL, 0, env) == nil, "NULL argv -> nil");
+    OK(sw_audit_path_row_value(bare, -1, env) == nil, "negative optind -> nil");
+}
+
 int main(void) {
     @autoreleasepool {
         test_color_allowed();
@@ -276,7 +352,9 @@ int main(void) {
         test_frame_gutter();
         test_frame_value_colour();
         test_fail_soft_fallback();
+        test_is_bare_name();
+        test_path_row_value();
         SW_SUMMARY("audit plugin internals (colour gate, frame, command line, "
-                   "fail-soft)");
+                   "fail-soft, path: row)");
     }
 }

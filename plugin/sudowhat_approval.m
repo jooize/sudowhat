@@ -282,13 +282,14 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  *
  * The line is a FIELD in the audit plugin's label gutter, not a sentence: the
  * same "sudowhat: " provenance prefix, the label padded so the value starts in
- * the same column as user / directory / input (SW_AUDIT_GUTTER, 12 -- the
+ * the same column as user / directory / input / path (SW_AUDIT_GUTTER, 12 -- the
  * longest label "directory:" plus two spaces), then the code, then what to do
  * with it. The two plugins are separate bundles that never share a translation
  * unit, so the width is duplicated rather than shared; if one moves, move both.
  *
- * The gutter family is now five labels across the two bundles: user:, directory:
- * and input: from the audit plugin, then verify: and execute: from this one.
+ * The gutter family is now six labels across the two bundles: user:, directory:,
+ * input: and path: from the audit plugin, then verify: and execute: from this
+ * one.
  * Every value starts at column 22 (10 bytes of "sudowhat: " plus the 12-wide
  * gutter), so the whole ceremony reads as one table however it is split between
  * bundles.
@@ -445,7 +446,9 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  *
  * DISPLAY OWNERSHIP (docs/design-resolved-exec.md, section 3). The audit plugin
  * (plugin/sudowhat_audit.m) owns the PRE-AUTH block -- user:, directory:,
- * input: -- everything that exists before sudo has resolved the command. This
+ * input:, and path: (the caller's PATH, shown only for a bare command name;
+ * not a claim about the final resolution PATH, which sudoers secure_path may
+ * override) -- everything that exists before sudo has resolved the command. This
  * plugin owns DECISION-ADJACENT display -- verify:, the LAContext sheet, and
  * this execute: line -- everything that exists only after resolution. The audit
  * plugin's open() runs before the policy step, where the command is still only

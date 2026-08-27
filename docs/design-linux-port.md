@@ -118,6 +118,11 @@ sudowhat: directory: <invoking cwd>        (omitted when cwd is absent)
 sudowhat: input: <command as typed>
 ```
 
+*[2026-08-27 — the macOS block gained a fourth row, `path:` (the caller's PATH,
+shown only for a bare command name; D8, `docs/design-resolved-exec.md`). It is
+**macOS-only for now** and deliberately not part of this port's scope; the
+Linux roadmap decides that separately. The block above is current for Linux.]*
+
 Bold label emphasis is gated by `NO_COLOR` / `TERM` (env) plus the `isatty()`
 final gate — identical to `sw_audit_color_allowed`. The `echoColor` anomaly
 colouriser is the same documented fast-follow as on macOS (accepted, renders
