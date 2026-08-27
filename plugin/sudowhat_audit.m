@@ -4,7 +4,7 @@
  * The owner of the PRE-AUTH terminal block. sudo calls an audit plugin's open()
  * before any other plugin API function -- in particular before the policy
  * plugin's check_policy, where PAM collects the password — so this plugin prints
- *   user / directory / typed
+ *   user / directory / input
  * to the controlling terminal FIRST, on every path: the local console (before
  * the approval plugin's verify code + Touch ID sheet) and the non-console / SSH
  * case (before sudo's native PAM `Password:`). That closes the gap where a
@@ -13,9 +13,9 @@
  *
  * DISPLAY OWNERSHIP CARVE-OUT (docs/design-resolved-exec.md, section 3). This
  * plugin owns everything that exists BEFORE resolution: user:, directory:, and
- * typed: -- the command as the user typed it, which is all sudo has produced at
+ * input: -- the command as the user typed it, which is all sudo has produced at
  * this point. The approval plugin (plugin/sudowhat_approval.m) owns
- * DECISION-ADJACENT display: verify:, the LAContext sheet, and the exec: line
+ * DECISION-ADJACENT display: verify:, the LAContext sheet, and the execute: line
  * carrying sudo's resolved command_info["command"] -- everything that exists only
  * after resolution. Both bundles render command lines through the same Rust
  * escape core, so the split cannot produce two spellings of one command; the
@@ -53,7 +53,7 @@
  * the Makefile). Same fail-closed token machinery as the approval plugin's
  * knobs: a bare token names a fixed mode baked into the signed bundle.
  *
- *   on  - (default) show user / directory / typed on the controlling terminal.
+ *   on  - (default) show user / directory / input on the controlling terminal.
  *   off - never display (the bundle loads but its open() shows nothing).
  *
  * An unknown token yields an undefined SW_AD_<name> and fails the compile — the
@@ -83,9 +83,9 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
  * by the NO_COLOR / TERM / isatty gates alone, because it is our own fixed
  * chrome rather than a rendering of untrusted argv.
  *
- * The SAME token governs the approval bundle's exec: value, which is why
+ * The SAME token governs the approval bundle's execute: value, which is why
  * -DSW_ECHO_COLOR sits in the Makefile's global CFLAGS rather than in this
- * bundle's target-specific ones: typed: and exec: are one display to a reader,
+ * bundle's target-specific ones: input: and execute: are one display to a reader,
  * and silencing one of them alone would be arbitrary. That bundle carries its
  * own copy of this token machinery (plugin/sudowhat_approval.m, SW_ECHO_COLOR /
  * SW_ACOL_* / sw_echo_color_mode) because the two are separate Mach-O images
@@ -280,9 +280,10 @@ static BOOL sw_audit_color_allowed(char * const envp[]) {
  * gutter -- measured from the first byte AFTER the "sudowhat: " prefix. That
  * prefix stays on every row rather than being hoisted into a header: the block
  * lands in the middle of somebody else's output, so each line has to carry its
- * own provenance. The approval plugin's verify: and exec: lines
+ * own provenance. The approval plugin's verify: and execute: lines
  * (SW_VERIFY_PREFIX, SW_EXEC_PREFIX) are further fields in the same gutter, so
- * five labels across two bundles share this one width; keep them in step. */
+ * five labels across two bundles -- user:, directory:, input: here, verify: and
+ * execute: there -- share this one width; keep them in step. */
 #define SW_AUDIT_GUTTER 12
 
 /* One frame row: prefix, the bolded label padded out to the gutter, the value.
@@ -404,12 +405,14 @@ static int sudowhat_audit_open(unsigned int version,
         BOOL colorCommand = color && (sw_audit_color_mode == SW_ACOL_anomalies);
 
         /* The command as typed -- the star of the display, and the reason its
-         * label is `typed:` rather than `command:`: at audit open() sudo has not
-         * resolved anything, so this line can only ever state what the user
-         * asked for. The label carries that epistemic status honestly; the
-         * approval plugin's `exec:` states what sudo will actually run, and the
-         * juxtaposition of the two IS the anomaly display (a shadowed bare name
-         * shows up as typed/exec divergence, with no heuristic needed).
+         * label is `input:` rather than `command:`: at audit open() sudo has not
+         * resolved anything, so this line can only ever state what the invoking
+         * user asked for -- the plugin's input, before resolution. The label
+         * carries that epistemic status honestly; the approval plugin's
+         * `execute:` states what sudo will actually run, so the pair reads as
+         * in/out, and the juxtaposition of the two IS the anomaly display (a
+         * shadowed bare name shows up as input/execute divergence, with no
+         * heuristic needed).
          *
          * No command word -> the invocation is not something to preview (e.g.
          * `sudo -v`); show nothing. Highlighted by role on one logical line (the
@@ -454,7 +457,7 @@ static int sudowhat_audit_open(unsigned int version,
             NSString *dirValue = color ? sw_audit_color_dir(dirLine) : dirLine;
             [block appendString:sw_audit_row(@"directory:", dirValue, color)];
         }
-        [block appendString:sw_audit_row(@"typed:", commandLine, color)];
+        [block appendString:sw_audit_row(@"input:", commandLine, color)];
 
         sw_audit_write_tty("/dev/tty", block);
         return 1;
@@ -466,7 +469,7 @@ static int sudowhat_audit_open(unsigned int version,
  * satisfied.
  *
  * accept() was once earmarked for a resolved-path last-look. That last-look now
- * exists as the approval plugin's exec: line, and it lives THERE by design, not
+ * exists as the approval plugin's execute: line, and it lives THERE by design, not
  * by convenience: accept() fires after the decision on every path, whereas the
  * approval plugin's check() runs before it raises the sheet -- which is what lets
  * the biometric mode show the resolved path PRE-decision rather than merely

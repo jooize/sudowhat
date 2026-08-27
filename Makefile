@@ -26,8 +26,9 @@ ifeq ($(filter $(SUDOWHAT_VERIFY_STYLE),$(SUDOWHAT_VALID_STYLES)),)
 endif
 
 # Build-time master switch for terminal command display via the audit plugin:
-# "on" (default - show user/path/command on the controlling terminal before the
-# password prompt / Touch ID sheet, on every path) or "off" (never display). The
+# "on" (default - show user/directory/input on the controlling terminal before
+# the password prompt / Touch ID sheet, on every path) or "off" (never display).
+# The
 # nix module exposes the same names via services.sudowhat.auditDisplay. Passed as
 # a bare token to -DSW_AUDIT_DISPLAY (audit bundle only). An unknown value
 # normalizes to "on" with a warning, rather than failing.
@@ -42,8 +43,8 @@ endif
 # (default) or "off". The nix module exposes the same names via
 # services.sudowhat.echoColor. Passed as a bare token to -DSW_ECHO_COLOR in the
 # GLOBAL CFLAGS below, because it governs BOTH command values - the audit
-# bundle's `typed:` and the approval bundle's `exec:`. They are one display to a
-# reader, so one token settles both; each bundle carries its own copy of the
+# bundle's `input:` and the approval bundle's `execute:`. They are one display to
+# a reader, so one token settles both; each bundle carries its own copy of the
 # token machinery (separate Mach-O images, no shared translation unit). Under
 # "anomalies" the command line is highlighted by role
 # (program dirname plain cyan, basename bold cyan, option flags dim, values
@@ -75,8 +76,8 @@ ifeq ($(filter $(SUDOWHAT_POLICY_DEFERENCE),$(SUDOWHAT_VALID_DEFERENCE)),)
 endif
 
 # Master switch for the post-resolution run confirmation: "off" (default) prints
-# the resolved `exec:` line on the terminal-password path and allows, a last-look
-# before exec; "on" additionally asks one `run? [y/N]` there via sudo's
+# the resolved `execute:` line on the terminal-password path and allows, a
+# last-look before exec; "on" additionally asks one `run? [y/N]` there via sudo's
 # conversation API, so the decision completes after the resolved path is visible
 # -- the same guarantee biometric mode gives. Tty-gated either way, so a piped or
 # automated invocation behaves identically with it on or off, and asked only when
@@ -92,7 +93,7 @@ ifeq ($(filter $(SUDOWHAT_EXEC_CONFIRM),$(SUDOWHAT_VALID_EXEC_CONFIRM)),)
   override SUDOWHAT_EXEC_CONFIRM := off
 endif
 
-# Build-time master switch for the informational `exec:` echo (the resolved
+# Build-time master switch for the informational `execute:` echo (the resolved
 # command line the approval plugin prints): "on" (default - print it on the root
 # bypass, the non-console step-aside last-look, the policy-deference skip and
 # the console biometric pre-sheet) or "off" (print none of them; the bundle
@@ -191,8 +192,8 @@ $(ESCAPE_CORE_LIB): $(ESCAPE_CORE_DIR)/src/lib.rs $(ESCAPE_CORE_DIR)/Cargo.toml 
 # SignatureVerifier.h - without it the header's #error guard fails the build.
 #
 # The approval bundle also gets the one display knob that is genuinely its own
-# (execDisplay - only this bundle prints the resolved exec: line), the mirror of
-# what auditDisplay is to the audit bundle below.
+# (execDisplay - only this bundle prints the resolved execute: line), the mirror
+# of what auditDisplay is to the audit bundle below.
 build/sudowhat_approval.so: CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier \
                                       -DSW_SESSIONGUARD_CLASS=SudoWhatSessionGuard \
                                       -DSW_EXEC_DISPLAY=$(SUDOWHAT_EXEC_DISPLAY)
@@ -207,8 +208,8 @@ build/pam_sudowhat.so:      CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerif
 build/sudowhat_audit.so:    CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatAuditSigVerifier \
                                       -DSW_AUDIT_DISPLAY=$(SUDOWHAT_AUDIT_DISPLAY)
 
-# The approval bundle links the Rust staticlib too: its `exec:` line renders the
-# resolved command through the same escape core the audit bundle uses, so the
+# The approval bundle links the Rust staticlib too: its `execute:` line renders
+# the resolved command through the same escape core the audit bundle uses, so the
 # two plugins cannot disagree on how a token is spelled. Each bundle gets its own
 # copy of the archive (they are separate Mach-O images), which is the same
 # deliberate duplication as the per-bundle SignatureVerifier class.
@@ -318,7 +319,7 @@ build/test_escape_core: tests/test_escape_core.m tests/sw_test.h \
 
 # Includes plugin/sudowhat_approval.m directly to reach its static helpers, so
 # that file is compiled into the binary - do NOT also pass it as a source. Links
-# the Rust staticlib because the approval plugin now renders its `exec:` line
+# the Rust staticlib because the approval plugin now renders its `execute:` line
 # through escape_core, exactly as the bundle does.
 build/test_plugin_internals: tests/test_plugin_internals.m tests/sw_test.h \
 		plugin/sudowhat_approval.m plugin/PromptFormatter.m \

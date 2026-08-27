@@ -115,7 +115,7 @@ shape is a direct port:
 ```
 sudowhat: user: <target user>
 sudowhat: directory: <invoking cwd>        (omitted when cwd is absent)
-sudowhat: typed: <command as typed>
+sudowhat: input: <command as typed>
 ```
 
 Bold label emphasis is gated by `NO_COLOR` / `TERM` (env) plus the `isatty()`
@@ -142,7 +142,7 @@ plain until `colorizeEscaped:` is ported into escape_core).
 
 - Build the cdylib, install to `/usr/local/libexec/sudo/sudowhat_audit.so`, write
   the sample `sudo.conf`, then:
-  - `sudo /bin/echo hi` → `sudowhat: user: … / directory: … / typed: /bin/echo
+  - `sudo /bin/echo hi` → `sudowhat: user: … / directory: … / input: /bin/echo
     hi` prints **before** `[sudo] password:`; sudo still enforces policy (sudoers
     lines present).
   - `sudo /bin/echo $'a\nb'` → control char escapes literally (`\n`), no raw

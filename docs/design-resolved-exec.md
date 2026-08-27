@@ -1,4 +1,4 @@
-# Design note: resolved exec display (`typed:` / `exec:`)
+# Design note: resolved exec display (`input:` / `execute:`)
 
 **Status: IMPLEMENTED (v0.13.0, 2026-08-26).** Closes two future items from
 `docs/design-terminal-mode.md` ("the as-typed vs resolved split, the
@@ -40,14 +40,14 @@ Only sudo's own `command_info["command"]` is ever displayed.
 
 ## Design
 
-### 1. `exec:` -- the resolved line
+### 1. `execute:` -- the resolved line
 
 The approval plugin prints one line to the controlling terminal, aligned into
 the existing block gutter, rendered through the shared escape core
-(`sw_full_command_line_colored` -- same quoting/escaping as `typed:`, so the
+(`sw_full_command_line_colored` -- same quoting/escaping as `input:`, so the
 two renderings cannot disagree on a token):
 
-    sudowhat: exec:       /run/current-system/sw/bin/pinned deploy
+    sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
 
 Content: `command_info["command"]` + `run_argv[1..]` (argv[0] dropped when it
 duplicates the path/basename, exactly as `commandPartsForPath` does for the
@@ -55,15 +55,15 @@ sheet). Printed ALWAYS -- a predictable ceremony beats a clever conditional,
 and "only sometimes present" would itself need explaining.
 
 **Delta (2026-08-27): the root-bypass line is solo.** The gutter above exists
-to align siblings — `user:`, `directory:`, `typed:`, `verify:`. On the
+to align siblings — `user:`, `directory:`, `input:`, `verify:`. On the
 root-bypass path there are none: the audit plugin exempts uid 0, so no block
 precedes the line, and `verify:` is raised only on the console biometric path,
 which that branch returns before reaching. That one emit site therefore prints
 the unpadded form, matching the Linux port's block:
 
-    sudowhat: exec: /run/current-system/sw/bin/pinned deploy
+    sudowhat: execute: /run/current-system/sw/bin/pinned deploy
 
-Every other emit site keeps the padded form. A label floating seven spaces from
+Every other emit site keeps the padded form. A label floating four spaces from
 its value, with nothing above or below to line up against, reads as a rendering
 bug rather than as a column. One accepted edge: a non-root run on a build with
 `auditDisplay = "off"` is alone too and still gets the padded form — the
@@ -73,9 +73,9 @@ vestigial there rather than wrong. Choosing per emit site keeps the decision
 compile-time and provable instead of guessing at another bundle's
 configuration.
 
-**Delta (2026-08-27): `echoColor` governs the `exec:` value too.** The
+**Delta (2026-08-27): `echoColor` governs the `execute:` value too.** The
 build-time colour token was originally passed to the audit bundle alone, so
-`echoColor = "off"` silenced `typed:`'s role colouring while `exec:` kept
+`echoColor = "off"` silenced `input:`'s role colouring while `execute:` kept
 following the runtime gates only — one display, two answers. The token
 (`-DSW_ECHO_COLOR`) now sits in the global `CFLAGS` and both bundles carry their
 own copy of the token machinery. As in the audit bundle, it governs the command
@@ -128,19 +128,28 @@ Timing by mode:
 This makes the sheet's `(see terminal)` referral truthful: by exec time the
 terminal carries the full resolved line in both modes.
 
-### 2. Rename `typed:` -- honest labels
+### 2. Honest labels
 
     sudowhat: user:       root
     sudowhat: directory:  /Users/jooize/Projects/claude-code-hardening
-    sudowhat: typed:      pinned deploy
+    sudowhat: input:      pinned deploy
     sudowhat: verify:     JL6E  (compare with the prompt)
     <auth>
-    sudowhat: exec:       /run/current-system/sw/bin/pinned deploy
+    sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
 
-`typed:` states what the invoking user asked for; `exec:` states what sudo
-will run. Each label carries its own epistemic status; the juxtaposition IS
-the anomaly display -- a shadowed bare name shows up as typed/exec
-divergence, with no heuristic needed.
+`input:` states what the invoking user asked for -- the plugin's input, before
+resolution; `execute:` states what sudo will run. Each label carries its own
+epistemic status, the pair reads as in/out, and the juxtaposition IS the
+anomaly display -- a shadowed bare name shows up as input/execute divergence,
+with no heuristic needed.
+
+**Label history.** The pre-resolution row was labelled `command:` until
+v0.13.0, which over-claimed: it read as "this is the command" when it was only
+"this is what you typed". v0.13.0 renamed it `typed:`, and v0.14.0 renamed it
+again to `input:` -- script-invoked sudo types nothing, and `input:` /
+`execute:` is the honest in/out pair. The resolved row shipped as `exec:` in
+v0.13.0 and was spelled out to `execute:` in v0.14.0; the identifiers
+(`execDisplay`, `execConfirm`, `sw_exec_*`, `SW_EXEC_*`) keep `exec`.
 
 Dropping the as-typed line entirely was considered and rejected: in
 terminal-password mode it is the only command display that exists before the
@@ -155,17 +164,17 @@ resolved command that will run.
 command display. This round adds a stated carve-out rather than an exception
 by accident:
 
-- **audit plugin** owns the PRE-AUTH block (`user:`/`directory:`/`typed:`/
+- **audit plugin** owns the PRE-AUTH block (`user:`/`directory:`/`input:`/
   `verify:`) -- everything that exists before resolution.
 - **approval plugin** owns DECISION-ADJACENT display -- the sheet and the
-  `exec:` line -- everything that exists only after resolution.
+  `execute:` line -- everything that exists only after resolution.
 
 Both render command lines through the shared escape core, so the split cannot
 produce two spellings of one command. The seam is commented on both sides.
 
 ## Terminal-mode asymmetry, and the `exec_confirm` option
 
-In biometric mode the `exec:` line lands pre-decision; in terminal-password
+In biometric mode the `execute:` line lands pre-decision; in terminal-password
 mode it lands post-password. That asymmetry is forced: the password prompt
 runs inside the policy step that resolves the command, PAM modules never
 receive the command, and the only component holding the resolved path
@@ -175,8 +184,8 @@ hook.
 
 "Before the password" is not the only place a decision can complete, though.
 **`exec_confirm` (config key, DEFAULT OFF):** in terminal-password mode, after
-auth, the approval plugin prints `exec:` and then asks one `run? [y/N]` on the
-tty via sudo's conversation API. The decision then completes AFTER the
+auth, the approval plugin prints `execute:` and then asks one `run? [y/N]` on
+the tty via sudo's conversation API. The decision then completes AFTER the
 resolved path is visible -- the same guarantee biometric mode gives, split
 into authenticate-then-confirm. No password ever touches plugin code; decline
 is a quiet abort (nothing wedges; re-run at will). Tty-gated: no controlling
@@ -216,7 +225,7 @@ table-tested like `sw_defer_decision`:
 | off | — | — | — | no prompt (unchanged default) |
 | on | none | — | — | no prompt (automation identical either way) |
 | on | yes | present | — | **prompt** — the knob's whole meaning |
-| on | yes | absent | wired | no prompt — sudoers waived auth; print `exec:` and allow, exactly as the knob-off branch does |
+| on | yes | absent | wired | no prompt — sudoers waived auth; print `execute:` and allow, exactly as the knob-off branch does |
 | on | yes | absent | not verifiable | **prompt** — an absent marker cannot be trusted to mean "waived" if `pam_sudowhat` may be unwired |
 
 The integrity-line read stays lazy everywhere: it happens only when it can change
@@ -232,13 +241,14 @@ silently skipping.
 
 This restores the round's "where the decision is deferred today, nothing else
 changes" principle on the non-console path, which is where it had been quietly
-broken: with the refinement, a waived run gets the informational `exec:` line
+broken: with the refinement, a waived run gets the informational `execute:` line
 (`execDisplay`-gated, through `emit_exec_line`) and allows, byte-identical to the
 knob-off behaviour.
 
-A divergence-triggered variant (prompt only when typed differs from resolved)
-was considered and cut: every bare name "diverges", so it would fire on
-essentially every sudo while being less predictable than a mode-wide key.
+A divergence-triggered variant (prompt only when the input differs from the
+resolved path) was considered and cut: every bare name "diverges", so it would
+fire on essentially every sudo while being less predictable than a mode-wide
+key.
 
 **Rejected: approval-owned authentication.** Full symmetry is achievable by
 having sudoers defer (NOPASSWD) and the approval plugin run its own PAM
@@ -259,7 +269,7 @@ sudoers `secure_path` hygiene. CUT, for habituation, not implementability:
 - A warning that almost always fires trains the human to approve through
   warnings. That habituation spends the sheet's alarm authority, which is
   worth more than this check.
-- The `exec:` line already carries the actionable fact. A human reading
+- The `execute:` line already carries the actionable fact. A human reading
   `/Users/me/.local/bin/foo` where a system path was expected has the signal;
   writability adds little a human can act on at that moment.
 - Philosophy: PATH hygiene (`secure_path`) is the system administrator's
@@ -277,15 +287,16 @@ field evidence shows the display alone is not enough.
   decision (sheet, or PAM password) stays the only decision.
 - No plugin-side PATH resolution, ever.
 - Policy deference / NOPASSWD behavior unchanged: where the decision is
-  deferred today, only the `exec:` line is added, nothing else.
+  deferred today, only the `execute:` line is added, nothing else.
 
 ## Test plan (sketch)
 
-- Line order per mode: `typed:` before auth; `exec:` after resolution and,
+- Line order per mode: `input:` before auth; `execute:` after resolution and,
   in biometric mode, before the sheet is raised.
-- `exec:` content equals `command_info["command"]` + argv rendering,
+- `execute:` content equals `command_info["command"]` + argv rendering,
   byte-compared against the escape-core rendering used by the sheet.
 - Overflow case: sheet shows `(see terminal)`; terminal contains the full
   resolved line by exec time.
-- No-tty invocation: no `exec:` line, no error, exit behavior unchanged.
-- Marker migration: harness/tests asserting on `command:` move to `typed:`.
+- No-tty invocation: no `execute:` line, no error, exit behavior unchanged.
+- Marker migration: harness/tests asserting on `command:` move to `typed:`
+  (and, from v0.14.0, to `input:`).

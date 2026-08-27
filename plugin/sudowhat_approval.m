@@ -282,15 +282,16 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  *
  * The line is a FIELD in the audit plugin's label gutter, not a sentence: the
  * same "sudowhat: " provenance prefix, the label padded so the value starts in
- * the same column as user / directory / typed (SW_AUDIT_GUTTER, 12 -- the
+ * the same column as user / directory / input (SW_AUDIT_GUTTER, 12 -- the
  * longest label "directory:" plus two spaces), then the code, then what to do
  * with it. The two plugins are separate bundles that never share a translation
  * unit, so the width is duplicated rather than shared; if one moves, move both.
  *
  * The gutter family is now five labels across the two bundles: user:, directory:
- * and typed: from the audit plugin, then verify: and exec: from this one. Every
- * value starts at column 22 (10 bytes of "sudowhat: " plus the 12-wide gutter),
- * so the whole ceremony reads as one table however it is split between bundles.
+ * and input: from the audit plugin, then verify: and execute: from this one.
+ * Every value starts at column 22 (10 bytes of "sudowhat: " plus the 12-wide
+ * gutter), so the whole ceremony reads as one table however it is split between
+ * bundles.
  *
  *   sudowhat: verify:     Z96E  (compare with the prompt)
  *
@@ -498,13 +499,13 @@ static void emit_verify_code(const char *ttyPath, const char *code,
 }
 
 /* ---------------------------------------------------------------------------
- * The `exec:` line -- the RESOLVED command.
+ * The `execute:` line -- the RESOLVED command.
  *
  * DISPLAY OWNERSHIP (docs/design-resolved-exec.md, section 3). The audit plugin
  * (plugin/sudowhat_audit.m) owns the PRE-AUTH block -- user:, directory:,
- * typed: -- everything that exists before sudo has resolved the command. This
+ * input: -- everything that exists before sudo has resolved the command. This
  * plugin owns DECISION-ADJACENT display -- verify:, the LAContext sheet, and
- * this exec: line -- everything that exists only after resolution. The audit
+ * this execute: line -- everything that exists only after resolution. The audit
  * plugin's open() runs before the policy step, where the command is still only
  * what the user typed; check() here runs after it, holding sudo's own
  * command_info["command"]. The seam is stated on both sides; if one moves, move
@@ -516,13 +517,13 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  * could display a lie, which is worse than displaying nothing.
  *
  * Both bundles render command lines through the same Rust escape core, so
- * typed: and exec: cannot disagree about how a token is spelled: any difference
- * the reader sees between the two lines is a real difference in the command,
- * which IS the anomaly display (a shadowed bare name shows up as typed/exec
- * divergence, with no heuristic needed).
+ * input: and execute: cannot disagree about how a token is spelled: any
+ * difference the reader sees between the two lines is a real difference in the
+ * command, which IS the anomaly display (a shadowed bare name shows up as
+ * input/execute divergence, with no heuristic needed).
  * ------------------------------------------------------------------------- */
 
-/* Build-time colour policy for the exec: VALUE, chosen by -DSW_ECHO_COLOR
+/* Build-time colour policy for the execute: VALUE, chosen by -DSW_ECHO_COLOR
  * (services.sudowhat.echoColor in the nix module; SUDOWHAT_ECHO_COLOR in the
  * Makefile).
  *
@@ -533,10 +534,11 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  *               anomaly palette on top.
  *   off       - the resolved command line renders plain.
  *
- * ONE token governs BOTH command lines, typed: and exec:, because a reader sees
- * one display: an admin who silenced the colour on the line the audit bundle
- * prints did not ask for a coloured twin of it two lines later. The knob is
- * therefore in the GLOBAL Makefile CFLAGS, not target-specific to either bundle.
+ * ONE token governs BOTH command lines, input: and execute:, because a reader
+ * sees one display: an admin who silenced the colour on the line the audit
+ * bundle prints did not ask for a coloured twin of it two lines later. The knob
+ * is therefore in the GLOBAL Makefile CFLAGS, not target-specific to either
+ * bundle.
  *
  * It governs the command VALUE only. The frame around it -- the provenance
  * prefix, the bold label, the gutter -- follows the runtime NO_COLOR / TERM /
@@ -562,8 +564,8 @@ static void emit_verify_code(const char *ttyPath, const char *code,
 #define SW_ACOL_SEL(x)     SW_ACOL_CAT(x)
 enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
 
-#define SW_EXEC_LABEL  "exec:"
-#define SW_EXEC_GAP    "       "   /* pads "exec:" (5) out to the 12-col gutter */
+#define SW_EXEC_LABEL  "execute:"
+#define SW_EXEC_GAP    "    "   /* pads "execute:" (8) out to the 12-col gutter */
 
 #define SW_EXEC_PREFIX "sudowhat: " SW_EXEC_LABEL SW_EXEC_GAP
 #define SW_EXEC_PREFIX_STYLED \
@@ -579,14 +581,14 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
  *
  * GROUPED (every site but one): the label is padded out to the shared 12-col
  * gutter so the value lands in the same column as the audit block's user: /
- * directory: / typed: rows and the verify: line. That column is the entire
+ * directory: / input: rows and the verify: line. That column is the entire
  * reason the two bundles duplicate the width rather than share it.
  *
  * SOLO (the root-bypass site only): the gutter is dropped. That site is
  * PROVABLY alone on the terminal -- the audit plugin exempts uid 0, so no
- * typed: block precedes it, and verify: is raised only on the console biometric
+ * input: block precedes it, and verify: is raised only on the console biometric
  * path, which the root bypass returns before reaching. A column aligns
- * siblings; with no siblings, a label floating seven spaces from its value
+ * siblings; with no siblings, a label floating four spaces from its value
  * reads as a rendering bug rather than as alignment. Same unpadded shape the
  * Linux port prints for a lone line.
  *
@@ -688,7 +690,7 @@ static NSString *sw_exec_command_line(const char *path,
                                      path, run_argv, color);
 }
 
-/* Render the whole exec: line -- frame plus value -- as one string.
+/* Render the whole execute: line -- frame plus value -- as one string.
  *
  * Pure and deterministic, so the exact bytes are unit-testable without a
  * terminal, exactly like format_verify_line above. layout picks the grouped or
@@ -725,7 +727,7 @@ static NSString *sw_format_exec_line(const char *path,
     return [NSString stringWithFormat:@"%s%@\n", prefix, value];
 }
 
-/* Write the exec: line straight to the controlling terminal -- and ONLY there,
+/* Write the execute: line straight to the controlling terminal -- and ONLY there,
  * exactly like write_verify_code_to_tty above and the audit plugin's block:
  * /dev/tty is the one channel a shell's fd redirects (`>f`, `2>f`, `&>f`) cannot
  * touch, and a captured `2>file` must never receive a possibly-confidential
@@ -753,15 +755,15 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
     /* The two colour decisions, derived here and nowhere else. The frame obeys
      * the runtime gates alone (env opt-outs, folded into colorAllowed, then
      * isatty); the value additionally needs the echoColor build token, so
-     * echoColor=off strips the role colouring from exec: exactly as it does
-     * from the audit bundle's typed:, while both lines keep their bold label. */
+     * echoColor=off strips the role colouring from execute: exactly as it does
+     * from the audit bundle's input:, while both lines keep their bold label. */
     BOOL frameColor = colorAllowed && isatty(fd);
     BOOL valueColor = frameColor && (sw_echo_color_mode == SW_ACOL_anomalies);
 
     /* The value is unbounded (a command line can be arbitrarily long), so the
      * line is assembled as an NSString and written as bytes rather than through
      * a fixed stack buffer the way the 4-char verify code is. Nothing is
-     * truncated: an elided exec: line would be worse than none, because the
+     * truncated: an elided execute: line would be worse than none, because the
      * reader would trust an incomplete command. */
     NSString *line = sw_format_exec_line(path, run_argv, layout,
                                          frameColor, valueColor);
@@ -786,7 +788,7 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
     return YES;
 }
 
-/* Build-time master switch for the INFORMATIONAL exec: echo, chosen by
+/* Build-time master switch for the INFORMATIONAL execute: echo, chosen by
  * -DSW_EXEC_DISPLAY (services.sudowhat.execDisplay in the nix module;
  * SUDOWHAT_EXEC_DISPLAY in the Makefile). Same fail-closed token machinery as
  * the other knobs in this file, in its own SW_ED_ namespace -- SW_EC_ belongs
@@ -800,7 +802,7 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
  *         audit bundle's auditDisplay = off.
  *
  * NAMING. execDisplay pairs with auditDisplay: the two DISPLAY switches, one
- * per line family -- the audit bundle's pre-auth block, this bundle's exec:
+ * per line family -- the audit bundle's pre-auth block, this bundle's execute:
  * line. The echo* family (echoColor) names colour instead, i.e. how the two
  * command VALUES are rendered once they are shown. Presence and styling are
  * deliberately separate names because they are separate decisions.
@@ -922,9 +924,9 @@ static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
  * Makefile). Same fail-closed token machinery as the knobs above: a bare token
  * names a fixed mode baked into the signed bundle, never a runtime file.
  *
- *   off - (default) the terminal-password path prints the exec: line and
+ *   off - (default) the terminal-password path prints the execute: line and
  *         allows. A last-look, not a decision.
- *   on  - the terminal-password path prints the exec: line and then asks one
+ *   on  - the terminal-password path prints the execute: line and then asks one
  *         `run? [y/N]` on the tty via sudo's conversation API, so the decision
  *         completes AFTER the resolved path is visible -- the same guarantee
  *         biometric mode gives, split into authenticate-then-confirm.
@@ -942,7 +944,7 @@ static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
  * the policy step that also collects the password, and no plugin hook exists
  * between resolution and auth, so a resolved pre-PASSWORD display is impossible
  * there. The biometric path has no such problem -- the sheet IS the decision,
- * this plugin raises it, and the exec: line already lands before it. The root
+ * this plugin raises it, and the execute: line already lands before it. The root
  * bypass and the policy-deference path are excluded by the spec for the same
  * reason each exists: neither is a moment where sudowhat gets to decide.
  *
@@ -982,10 +984,10 @@ enum { sw_exec_confirm_mode = SW_EC_SEL(SW_EXEC_CONFIRM) };
  *   otherwise                 -> NO   (marker absent, chain intact => sudoers
  *                                      waived authentication for this
  *                                      invocation -- NOPASSWD, !authenticate, or
- *                                      a live timestamp cache. Print the exec:
- *                                      line and allow, exactly as the knob-off
- *                                      branch does; do not re-gate what sudoers
- *                                      chose not to gate)
+ *                                      a live timestamp cache. Print the
+ *                                      execute: line and allow, exactly as the
+ *                                      knob-off branch does; do not re-gate what
+ *                                      sudoers chose not to gate)
  *
  * The last two rows are the whole point of the marker being read here at all:
  * without them the knob asked every non-console caller on a live terminal,
@@ -1088,7 +1090,7 @@ static BOOL sw_ask_run_confirm(void) {
  * one unit. Returns the plugin verdict: 1 = allow, 0 = deny, -1 = plugin error.
  *
  * Knob off (the default) is the whole of this function's first branch: print
- * exec: and allow. Reaching this path at all means sudo's PAM auth already
+ * execute: and allow. Reaching this path at all means sudo's PAM auth already
  * succeeded on the caller's own terminal -- OR that sudoers waived it -- so the
  * line is a last-look, not a decision: the honest maximum in a mode where the
  * password is collected inside the policy step that resolves the command.
@@ -1347,7 +1349,7 @@ static int sudowhat_check(char * const command_info[],
         /* (1c) Capture the RESOLVED command, best-effort, before any allow path
          * can return. sudo has finished resolving by the time check() runs, so
          * command_info["command"] is the absolute path it will execve() -- the
-         * one thing the pre-auth terminal block (audit plugin, typed:) could not
+         * one thing the pre-auth terminal block (audit plugin, input:) could not
          * know. Hoisted this high so every allow below can display it; a NULL
          * here is not handled here, because the two consumers want opposite
          * things from it: emit_exec_line skips silently (a display), while (3)'s
@@ -1416,7 +1418,7 @@ static int sudowhat_check(char * const command_info[],
              * from its block, so this is the one line root gets; that is fine,
              * because root is not being gated here, only informed.
              *
-             * SW_EXEC_SOLO for exactly that reason: no typed: block above it
+             * SW_EXEC_SOLO for exactly that reason: no input: block above it
              * (audit exempts uid 0) and no verify: line (biometric is
              * console-only, and this branch returns before it), so there is
              * nothing to align with and the label keeps a single space. This is
@@ -1460,10 +1462,11 @@ static int sudowhat_check(char * const command_info[],
             if (sudowhat_noncon_password_path_installed()) {
                 /* Terminal-password mode. sudo already collected the factor,
                  * inside the policy step that also resolved the command, so the
-                 * exec: line lands after auth and before exec: a last-look, not
-                 * a preview. With execConfirm on, the decision moves back after
-                 * the display -- but only for a caller sudo actually
-                 * authenticated, which is what the marker from (1d) tells it.
+                 * execute: line lands after auth and before execve -- a
+                 * last-look, not a preview. With execConfirm on, the decision
+                 * moves back after the display -- but only for a caller sudo
+                 * actually authenticated, which is what the marker from (1d)
+                 * tells it.
                  * See sw_step_aside_allow. */
                 int verdict = sw_step_aside_allow(commandC, run_argv,
                                                   markerPresent, errstr);
@@ -1642,7 +1645,7 @@ static int sudowhat_check(char * const command_info[],
          * the terminal. No fd redirect can hide it (emit_verify_code targets
          * /dev/tty).
          *
-         * Then the resolved command. This is the moment the whole exec: design
+         * Then the resolved command. This is the moment the whole execute: design
          * exists for: the sheet IS the decision, this plugin raises it, and this
          * plugin controls the ordering -- so here, uniquely, the resolved path
          * reaches the human BEFORE they decide, not merely before exec. It also

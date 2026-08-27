@@ -8,11 +8,12 @@ path, with the escape/quote core ported to Rust (`shared/escape_core/`, a
 display + native PAM password, no code-signing anchor) is now in progress — a
 pure-Rust `cdylib` reusing escape_core, with its own design note at
 `docs/design-linux-port.md` (audit-only, trust = sudo's own file perms, the
-`sudo.conf`/`sudoers` re-declaration wrinkle). The **`typed:` colouriser**
+`sudo.conf`/`sudoers` re-declaration wrinkle). The **`input:` colouriser**
 (`echoColor`) has landed on macOS — see "Highlighting the command line" below —
 as has the restyle of the block *around* the command line (scope (b) below).
 The **as-typed vs resolved split** and the **resolved-path last-look** shipped
-in v0.13.0 as the `typed:` / `exec:` pair; see `docs/design-resolved-exec.md`.
+in v0.13.0 as the pair now labelled `input:` / `execute:`; see
+`docs/design-resolved-exec.md`.
 Still future: the **no-biometric terminal password for a console user** (open
 decision #1 — dropping the console-gate + approval step-aside). Original design
 captured 2026-07-20; sibling to `docs/design-noncon-sudo.md` (non-console + policy
@@ -49,9 +50,9 @@ plaintext password in-plugin is complex and dangerous, and unnecessary).
 $ sudo systemctl restart nginx
 sudowhat: user:       root              <- audit plugin open(), BEFORE auth
 sudowhat: directory:  /etc/nginx        <- the invoking cwd (user_info["cwd"])
-sudowhat: typed:      systemctl restart nginx  <- as typed (see "resolved path" below)
+sudowhat: input:      systemctl restart nginx  <- as typed (see "resolved path" below)
 Password: ****                          <- sudo's native PAM, on the terminal
-sudowhat: exec:       /run/.../systemctl restart nginx   <- resolved last-look (shipped v0.13.0)
+sudowhat: execute:    /run/.../systemctl restart nginx   <- resolved last-look (shipped v0.13.0)
 <runs>
 ```
 
@@ -79,17 +80,18 @@ exist yet* pre-password; it first appears at approval `check()` / audit
   split.
 
 **[2026-08-26 — resolved, see `docs/design-resolved-exec.md`.]** The last-look
-shipped in v0.13.0 as the `exec:` line, printed by the approval plugin from
+shipped in v0.13.0 as the resolved line — labelled `exec:` then, `execute:`
+from v0.14.0 — printed by the approval plugin from
 sudo's own `command_info["command"]` (never a plugin-side resolution, exactly as
 the third bullet insists). One correction to the second bullet above: the
 **deny-on-suspicious-divergence** idea was CUT. Divergence heuristics do not
 survive contact with reality — every bare name "diverges" from its resolved
 absolute path, so the rule would fire on essentially every `sudo` and train the
-human to approve through it. What shipped instead is the `typed:` / `exec:`
+human to approve through it. What shipped instead is the `input:` / `execute:`
 juxtaposition (the pair *is* the anomaly display, judged by the human, with no
 heuristic to tune) plus the opt-in `exec_confirm` y/N gate for the
 terminal-password path. Biometric mode also improved on the "last-look" framing:
-there the `exec:` line prints *before* the sheet is raised, so it is a
+there the `execute:` line prints *before* the sheet is raised, so it is a
 pre-decision preview after all — only the terminal-password path is limited to a
 last look, and that limit is the constraint this section describes, unchanged.
 
@@ -108,7 +110,7 @@ being fused into the biometric sheet.
                           + verify code binding sheet <-> tty
     terminal / no-GUI  -> native PAM password on the tty; approval plugin
     / Linux               approves + does the post-password resolved last-look
-                          (shipped v0.13.0 as the exec: line; macOS only)
+                          (shipped v0.13.0 as the execute: line; macOS only)
 
   TRUST  (integrity / tamper-evidence)
     PAM module: macOS = mutual code-signing; Linux = file perms only (weaker)
@@ -141,18 +143,19 @@ being fused into the biometric sheet.
    (`emit_full_context`, `echoCommand`).
    Let the audit plugin own the tty command display (pre-auth); shrink the
    approval plugin to sheet + verify code + resolved last-look (that last-look
-   shipped in v0.13.0 as the `exec:` line — the ownership carve-out is stated in
-   `docs/design-resolved-exec.md`). Fewer display sites, clearer ownership.
-   (Mind the ordering: the verify code still emits at
-   sheet time in the approval plugin, so on the biometric path the tty shows the
-   command first (audit), then the code + sheet (approval) — verify on hardware.)
+   shipped in v0.13.0 as the `execute:` line — the ownership carve-out is
+   stated in `docs/design-resolved-exec.md`). Fewer display sites, clearer
+   ownership.
+   (Mind the ordering: the verify code still emits at sheet time in the approval
+   plugin, so on the biometric path the tty shows the command first (audit),
+   then the code + sheet (approval) — verify on hardware.)
 
 ## Highlighting the command line — scope (a), SHIPPED
 
-The `typed:` value (labelled `command:` until v0.13.0) is the star of the
-display and the hardest thing to read: a
-real invocation runs to several hundred characters and wraps blind, burying the
-one token worth reading (the program path) at the front of the wrap. The fix is
+The `input:` value (labelled `command:` until v0.13.0, `typed:` until v0.14.0)
+is the star of the display and the hardest thing to read: a real invocation runs
+to several hundred characters and wraps blind, burying the one token worth
+reading (the program path) at the front of the wrap. The fix is
 **highlight, not split**, and it is deliberately confined to the command line.
 
 **One logical line.** No per-option splitting, no break points, no elision, no
@@ -237,7 +240,7 @@ return) falls back to the same line in plain: the plugin picks between the two
 A separate round, because any plugin change is a signed-bundle rebuild plus a
 reinstall ceremony, and these touch every caller.
 
-- **Label gutter.** `user:` / `directory:` / `typed:` are padded so every value
+- **Label gutter.** `user:` / `directory:` / `input:` are padded so every value
   starts in one column: the longest label (`directory:`, 10) plus two spaces,
   measured after the `sudowhat: ` prefix. That prefix stays on every row rather
   than being hoisted into a header — the block lands in the middle of somebody
@@ -261,14 +264,14 @@ reinstall ceremony, and these touch every caller.
   instruction dim. No attention colour: yellow already means "the target user is
   not root", and spending it here would say something the reader knows and give
   one colour two meanings. Emitted by the APPROVAL plugin at a later stage, not
-  by the audit block. (The `exec:` line, added in v0.13.0, joins the same gutter
-  from the same plugin — see `docs/design-resolved-exec.md`.)
+  by the audit block. (The `execute:` line, added in v0.13.0, joins the same
+  gutter from the same plugin — see `docs/design-resolved-exec.md`.)
 
 Not carried across: the Linux port's `display.rs` still renders the unpadded
 block, since it renders the command plain too. Adopting both is part of
 finishing Phase 2.
 
-**Boundary: (a) = highlight the `typed:` value, one line. (b) = the block
+**Boundary: (a) = highlight the `input:` value, one line. (b) = the block
 around it.** The Linux port's `display.rs` still renders the command plain —
 adopting `colored_command_line` there is part of finishing Phase 2, not of (a).
 
@@ -297,7 +300,7 @@ adopting `colored_command_line` there is part of finishing Phase 2, not of (a).
 5. **The resolved last-look + deny policy** — what counts as a "suspicious
    divergence" worth denying vs merely displaying.
    *RESOLVED 2026-08-26 (`docs/design-resolved-exec.md`, shipped v0.13.0):*
-   display and juxtaposition only — the `typed:` / `exec:` pair, no
+   display and juxtaposition only — the `input:` / `execute:` pair, no
    divergence-deny (every bare name diverges); the opt-in `exec_confirm` y/N is
    the one gate, off by default.
 

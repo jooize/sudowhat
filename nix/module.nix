@@ -102,7 +102,7 @@ in {
         authentication, via a sudo audit plugin.
 
         - `on` (the default): the audit plugin prints `user:`, `directory:` (the
-          working directory), and `typed:` (the command as typed) to the
+          working directory), and `input:` (the command as typed) to the
           controlling terminal on EVERY path — the local console (before the
           Touch ID sheet and its verify code) and non-console / SSH sessions
           (before sudo's native password prompt). This closes the gap where a
@@ -110,10 +110,10 @@ in {
           `Password:` with no command.
         - `off`: the audit plugin loads but displays nothing.
 
-        The `typed:` label states its own epistemic status: at audit-plugin time
+        The `input:` label states its own epistemic status: at audit-plugin time
         sudo has not resolved the command yet, so this line can only show what
         the user asked for. The resolved absolute path is shown separately, by
-        the approval plugin, on the `exec:` line.
+        the approval plugin, on the `execute:` line.
 
         The display is disclosure, never a trust signal: any process that can
         write your terminal can forge the same bytes, so the anchor stays the
@@ -136,8 +136,8 @@ in {
       type = lib.types.enum [ "on" "off" ];
       default = "on";
       description = ''
-        Whether sudowhat shows the resolved command — the `exec:` line — on the
-        controlling terminal, via the approval plugin. The companion to
+        Whether sudowhat shows the resolved command — the `execute:` line — on
+        the controlling terminal, via the approval plugin. The companion to
         `auditDisplay`: that one governs the pre-authentication block, this one
         governs the single line printed once sudo has resolved what it will
         actually execute (the absolute path out of sudo's own `command_info`,
@@ -175,8 +175,8 @@ in {
       description = ''
         Whether the terminal command display is coloured to draw the eye to the
         bytes that matter. It governs the two command VALUES — the audit
-        plugin's `typed:` line (see `auditDisplay`) and the approval plugin's
-        resolved `exec:` line — together, because a reader sees them as one
+        plugin's `input:` line (see `auditDisplay`) and the approval plugin's
+        resolved `execute:` line — together, because a reader sees them as one
         display.
 
         - `off` renders both command lines plain.
@@ -249,21 +249,21 @@ in {
       default = "off";
       description = ''
         Whether the terminal-password path asks one `run? [y/N]` after showing
-        the resolved `exec:` line.
+        the resolved `execute:` line.
 
         Background: sudo resolves the command inside the same policy step that
         collects the password, and no plugin hook exists between resolution and
         authentication. In biometric mode that does not matter — the sheet *is*
-        the decision, sudowhat raises it, and the resolved `exec:` line is
+        the decision, sudowhat raises it, and the resolved `execute:` line is
         printed before it. In terminal-password mode the password is already
-        spent by the time sudowhat sees the resolved path, so `exec:` can only
-        be a last-look.
+        spent by the time sudowhat sees the resolved path, so `execute:` can
+        only be a last-look.
 
         - `off` (the default): the resolved line prints and the command runs.
           The one existing decision — the sheet, or sudo's own password — stays
           the only decision.
         - `on`: after sudo's own authentication has succeeded, the approval
-          plugin prints `exec:` and asks one `run? [y/N]` on the terminal via
+          plugin prints `execute:` and asks one `run? [y/N]` on the terminal via
           sudo's conversation API. The decision then completes *after* the
           resolved path is visible, which is the guarantee biometric mode gives,
           split into authenticate-then-confirm.

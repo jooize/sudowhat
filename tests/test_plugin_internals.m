@@ -4,7 +4,7 @@
  *                                command, tty, cwd, TERM_PROGRAM from sudo's
  *                                NULL-terminated string arrays.
  *   - generate_verify_nonce()  : the channel-binding code shown in the prompt.
- *   - sw_format_exec_line()    : the resolved exec: line, frame and value.
+ *   - sw_format_exec_line()    : the resolved execute: line, frame and value.
  *   - sw_confirm_*()           : the off-by-default exec_confirm gate and its
  *                                answer classifier.
  *
@@ -288,18 +288,18 @@ static void test_verify_line_format_and_color(void) {
     g_inv = saved;
 }
 
-/* The exec: line -- the RESOLVED command, this plugin's half of the display
+/* The execute: line -- the RESOLVED command, this plugin's half of the display
  * carve-out (docs/design-resolved-exec.md). The audit plugin owns user:,
- * directory: and typed:, which are all sudo has produced before resolution;
- * this plugin owns verify:, the sheet, and exec:, which exist only after it.
+ * directory: and input:, which are all sudo has produced before resolution;
+ * this plugin owns verify:, the sheet, and execute:, which exist only after it.
  *
  * These pin three things: the frame (the shared 12-col gutter, so the line lands
  * in the same table as the audit plugin's rows), the VALUE (byte-identical to
- * the escape core's own rendering, so exec: and typed: cannot disagree about a
+ * the escape core's own rendering, so execute: and input: cannot disagree about a
  * token), and the tty-or-nothing channel. */
 
-/* The escape core's rendering, called directly, as the reference the exec: value
- * must match byte for byte -- including the argv[0] dedup. Deliberately NOT
+/* The escape core's rendering, called directly, as the reference the execute:
+ * value must match byte for byte -- including the argv[0] dedup. Deliberately NOT
  * routed through sw_exec_command_line: comparing that helper against itself
  * would prove nothing. */
 static NSString *sw_core_line(const char *path, char * const argv[]) {
@@ -330,23 +330,23 @@ static void test_exec_line_format(void) {
     char *argv[] = { (char *)"pinned", (char *)"deploy", NULL };
 
     /* Plain: the provenance prefix, the label padded to the shared gutter, the
-     * value. "exec:" is 5 characters, so 7 spaces of gap. */
+     * value. "execute:" is 8 characters, so 4 spaces of gap. */
     EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO),
-       @"sudowhat: exec:       /run/current-system/sw/bin/pinned deploy\n",
-       "plain exec: line, label padded to the gutter");
+       @"sudowhat: execute:    /run/current-system/sw/bin/pinned deploy\n",
+       "plain execute: line, label padded to the gutter");
 
     /* The value starts in the same column as every audit-block row (10 bytes of
      * "sudowhat: " plus the 12-wide gutter). This is the whole reason the two
      * bundles duplicate the width instead of sharing it. */
     NSRange v = [sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO)
                     rangeOfString:@"/run/current-system"];
-    OK(v.location == 22, "exec: value starts at the shared value column 22");
+    OK(v.location == 22, "execute: value starts at the shared value column 22");
 
     /* Styled: our frame contributes the bold label and nothing else; the padding
      * stays outside the emphasis, as in the audit plugin's rows. */
     OK([sw_format_exec_line(path, argv, SW_EXEC_GROUPED, YES, YES)
-           hasPrefix:@"sudowhat: \033[1mexec:\033[0m       "],
-       "styled exec: line bolds the label only, never the padding");
+           hasPrefix:@"sudowhat: \033[1mexecute:\033[0m    "],
+       "styled execute: line bolds the label only, never the padding");
 
     /* No path -> nothing to render, so the write site shows nothing rather than
      * a frame with an empty value. */
@@ -362,26 +362,26 @@ static void test_exec_line_solo_format(void) {
     char *argv[] = { (char *)"pinned", (char *)"deploy", NULL };
 
     /* Exactly one space after the label, and the value therefore starts at
-     * column 16 rather than the block's 22. */
+     * column 19 rather than the block's 22. */
     EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, NO, NO),
-       @"sudowhat: exec: /run/current-system/sw/bin/pinned deploy\n",
-       "solo exec: line, label unpadded (one space)");
+       @"sudowhat: execute: /run/current-system/sw/bin/pinned deploy\n",
+       "solo execute: line, label unpadded (one space)");
 
     NSRange v = [sw_format_exec_line(path, argv, SW_EXEC_SOLO, NO, NO)
                     rangeOfString:@"/run/current-system"];
-    OK(v.location == 16, "solo exec: value follows the label directly");
+    OK(v.location == 19, "solo execute: value follows the label directly");
 
     /* Styled solo: the same bold-the-label-only emphasis as the grouped twin,
      * with the single space outside it. */
     OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, YES, YES)
-           hasPrefix:@"sudowhat: \033[1mexec:\033[0m "],
-       "styled solo exec: line bolds the label only");
+           hasPrefix:@"sudowhat: \033[1mexecute:\033[0m "],
+       "styled solo execute: line bolds the label only");
 
     /* Layout changes the frame and NOTHING else: strip the frame from either
      * form and the same value remains. */
     NSString *grouped = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO);
     NSString *solo = sw_format_exec_line(path, argv, SW_EXEC_SOLO, NO, NO);
-    EQ([solo substringFromIndex:16], [grouped substringFromIndex:22],
+    EQ([solo substringFromIndex:19], [grouped substringFromIndex:22],
        "solo and grouped carry the identical value");
 }
 
@@ -398,29 +398,29 @@ static void test_exec_line_color_split(void) {
     NSString *frameOnly = sw_format_exec_line(path, argv, SW_EXEC_GROUPED,
                                               YES, NO);
     EQ(frameOnly,
-       @"sudowhat: \033[1mexec:\033[0m       /bin/echo hello\n",
+       @"sudowhat: \033[1mexecute:\033[0m    /bin/echo hello\n",
        "echoColor=off rendering: label styled, value plain");
 
     /* frame on, value on: the same frame, and the value now carries the escape
      * core's role colouring. Compared against the frame-only line so this pins
      * the difference, not the palette (tests/test_escape_core.m owns that). */
     NSString *both = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, YES, YES);
-    OK([both hasPrefix:@"sudowhat: \033[1mexec:\033[0m       "],
+    OK([both hasPrefix:@"sudowhat: \033[1mexecute:\033[0m    "],
        "value colouring leaves the frame byte-identical");
     OK(![both isEqualToString:frameOnly],
        "value colouring actually reaches the command value");
 
     /* frame off, value off is the fully plain line (the non-tty rendering). */
     EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO),
-       @"sudowhat: exec:       /bin/echo hello\n",
+       @"sudowhat: execute:    /bin/echo hello\n",
        "both off -> not one escape byte");
 }
 
 static void test_echo_color_default(void) {
     /* The global CFLAGS pass -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) to BOTH
      * bundles and to this test binary; SUDOWHAT_ECHO_COLOR defaults to
-     * anomalies, so a default build colours the exec: value. Same shape as the
-     * execConfirm / policyDeference default tests below: it pins the shipped
+     * anomalies, so a default build colours the execute: value. Same shape as
+     * the execConfirm / policyDeference default tests below: it pins the shipped
      * default, so a deliberate `make SUDOWHAT_ECHO_COLOR=off` build is expected
      * to fail this line rather than to pass quietly. */
     OK(sw_echo_color_mode == SW_ACOL_anomalies,
@@ -434,31 +434,31 @@ static void test_exec_line_matches_escape_core(void) {
     const char *path = "/run/current-system/sw/bin/pinned";
     char *argv[] = { (char *)"pinned", (char *)"deploy", NULL };
     EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NO, NO),
-       ([NSString stringWithFormat:@"sudowhat: exec:       %@\n",
+       ([NSString stringWithFormat:@"sudowhat: execute:    %@\n",
                                    sw_core_line(path, argv)]),
-       "exec: value is the escape core's line verbatim (argv[0] dedupped)");
+       "execute: value is the escape core's line verbatim (argv[0] dedupped)");
 
     /* (b) An argv[0] that is NOT the basename is kept, exactly as the core has
      * it -- sudo -u somebody's `sh -c ...` must not lose a token. */
     const char *shPath = "/bin/sh";
     char *shArgv[] = { (char *)"-bash", (char *)"-c", (char *)"id", NULL };
     EQ(sw_format_exec_line(shPath, shArgv, SW_EXEC_GROUPED, NO, NO),
-       ([NSString stringWithFormat:@"sudowhat: exec:       %@\n",
+       ([NSString stringWithFormat:@"sudowhat: execute:    %@\n",
                                    sw_core_line(shPath, shArgv)]),
        "a non-duplicate argv[0] is kept, exactly as the core renders it");
 
-    /* (c) Hostile bytes: the core quotes and escapes them, and the exec: line
+    /* (c) Hostile bytes: the core quotes and escapes them, and the execute: line
      * carries that rendering unchanged, so nothing a caller typed can forge a
      * second sudowhat line or emit a raw escape sequence. */
     const char *echoPath = "/bin/echo";
-    char *evil[] = { (char *)"echo", (char *)"sudowhat: exec: /bin/true", NULL };
+    char *evil[] = { (char *)"echo", (char *)"sudowhat: execute: /bin/true", NULL };
     EQ(sw_format_exec_line(echoPath, evil, SW_EXEC_GROUPED, NO, NO),
-       @"sudowhat: exec:       /bin/echo 'sudowhat: exec: /bin/true'\n",
+       @"sudowhat: execute:    /bin/echo 'sudowhat: execute: /bin/true'\n",
        "a token spelled like one of our own lines lands quoted, as data");
 
     /* (d) Path only, no argv at all. */
     EQ(sw_format_exec_line(echoPath, NULL, SW_EXEC_GROUPED, NO, NO),
-       @"sudowhat: exec:       /bin/echo\n", "NULL run_argv -> path-only line");
+       @"sudowhat: execute:    /bin/echo\n", "NULL run_argv -> path-only line");
 }
 
 static void test_emit_exec_line_tty_only(void) {
@@ -475,7 +475,7 @@ static void test_emit_exec_line_tty_only(void) {
     emit_exec_line(path, "/run/current-system/sw/bin/pinned", argv,
                    SW_EXEC_GROUPED, YES);
     EQ(sw_read_utf8(path),
-       @"sudowhat: exec:       /run/current-system/sw/bin/pinned deploy\n",
+       @"sudowhat: execute:    /run/current-system/sw/bin/pinned deploy\n",
        "emit_exec_line wrote the resolved line to the tty path");
     OK([sw_read_utf8(path) rangeOfString:@"\033"].location == NSNotFound,
        "a non-tty stays plain even when colour is allowed");
@@ -484,7 +484,7 @@ static void test_emit_exec_line_tty_only(void) {
      * the file must be left exactly as (a) left it. */
     emit_exec_line(path, NULL, argv, SW_EXEC_GROUPED, YES);
     EQ(sw_read_utf8(path),
-       @"sudowhat: exec:       /run/current-system/sw/bin/pinned deploy\n",
+       @"sudowhat: execute:    /run/current-system/sw/bin/pinned deploy\n",
        "NULL command path writes nothing at all");
     unlink(path);
 
@@ -498,8 +498,8 @@ static void test_emit_exec_line_tty_only(void) {
 
 static void test_exec_display_default(void) {
     /* execDisplay is target-specific to the approval bundle (only that bundle
-     * prints an exec: line), exactly as auditDisplay is to the audit bundle, so
-     * this test binary is compiled with no -DSW_EXEC_DISPLAY and resolves the
+     * prints an execute: line), exactly as auditDisplay is to the audit bundle,
+     * so this test binary is compiled with no -DSW_EXEC_DISPLAY and resolves the
      * plugin's own #ifndef default. That default is what pins the knob's
      * fail-toward-disclosure direction: it is a DISPLAY switch, so an absent or
      * unparsed value must show the line, never silently swallow it. The
@@ -596,10 +596,10 @@ static void test_confirm_answer_classifier(void) {
     OK(!sw_confirm_answer_is_yes("1"),     "1 declines");
 }
 
-/* The PRE-AUTH block (user/directory/typed) moved to the audit plugin
+/* The PRE-AUTH block (user/directory/input) moved to the audit plugin
  * (plugin/sudowhat_audit.m) in v0.10.0, so the former emit_full_context /
  * echoCommand / echoColor tests are gone; what this plugin echoes is the
- * decision-adjacent pair, verify: and exec:, both covered above. The escaping
+ * decision-adjacent pair, verify: and execute:, both covered above. The escaping
  * itself is exercised by tests/test_escape_core.m (the Rust core, byte-identical
  * to PromptFormatter). */
 
