@@ -191,6 +191,11 @@ house palette shared with `pinned`'s `prog_disp`:
 The role colour is the base for a token; an anomaly span drops it, takes its own
 colour, and the role resumes after.
 
+*[2026-08-27 — the two lines render at different weights. The table above is the
+`execute:` line. The `input:` line renders through the same walk with a flat dim
+base under every routine token (`sw_full_command_line_colored_dim`) — see the
+delta at the end of this section.]*
+
 Colour asserts only what sudowhat KNOWS, which is exactly three things: a
 **structural fact** (token[0] is the program, because sudo will execve it), a
 **fact about bytes** (control chars, deceptive Unicode, invisible padding —
@@ -232,8 +237,34 @@ bundle) plus the existing runtime `NO_COLOR` / `TERM` gate, with `isatty()` in
 `sw_audit_write_tty` as the final say. **No new runtime knob** — any knob the
 caller can set is a knob a hostile script sets first, and sudowhat's disclosure
 is unconditional by construction. Any colouriser failure (allocation, a non-OK
-return) falls back to the same line in plain: the plugin picks between the two
+return) falls back to the same line in plain: the plugin picks between the
 `escape_core` renderers, so degrading loses emphasis and nothing else.
+
+**Delta (2026-08-27): `input:` renders dim, `execute:` keeps the role palette.**
+Once the resolved line joined the block (`docs/design-resolved-exec.md`), two
+lines carried the same command at the same weight and the reader had to work out
+which one to trust. They are now split by weight rather than by palette:
+`input:` renders every routine token — program dirname, program basename, flags,
+values — on one flat dim base, while `execute:` keeps the table above. The
+anomaly spans are identical on both, at full strength: an anomaly must read the
+same wherever it appears, and against the flat dim base it is the only coloured
+thing on that row, so the dim base makes anomalies pop *harder*, not softer.
+
+Implemented as a base-palette parameter threaded through the one walk
+(`render_command_line(path, argv, RoleBase, out)`), with
+`colored_command_line` / `colored_command_line_dim` as thin wrappers and
+`sw_full_command_line_colored_dim` as the second FFI export. Deliberately not a
+fork: the property that the two lines are built from the same `command_tokens`
+list, quoted by the same `quote_token` and coloured by the same
+`colorize_escaped` is what makes "the two lines disagree" mean "the command
+really differs", and a second renderer would put that at the mercy of two
+implementations staying in step. The round-trip invariant holds for the dim
+variant too, pinned over the same case table.
+
+One accepted cost: on the `input:` line our chrome quotes (`2`, dim) stop being
+distinguishable from the base. Attribution stays legible one row down on
+`execute:`, which renders the same tokens through the same walk, so the
+information is not lost — only its second, redundant appearance is.
 
 ## Restyling the block around it — scope (b), DONE
 

@@ -271,6 +271,62 @@ const SGR_OURS: &str = "\x1b[2m";
 /// does not), and a token that needed quoting renders as '...' (leading quote,
 /// not dash) so hostile input still reads as data, never borrows the flag look.
 const SGR_FLAG: &str = "\x1b[1;34m";
+/// the quiet base of the DIM variant: every routine token (program, flags,
+/// values alike) instead of its role colour. Same bytes as `SGR_OURS` on
+/// purpose -- on that variant the chrome quotes stop standing out from the
+/// content they wrap, which costs nothing, because the line those quotes are
+/// attributed on is the loud one right underneath (see `RoleBase`).
+const SGR_QUIET: &str = "\x1b[2m";
+
+/// Which base colours the ONE token walk lays under the routine roles. Both
+/// variants run the same `command_tokens` / `quote_token` / `colorize_escaped`
+/// path, so the two lines can never disagree about which tokens the command has
+/// or how a token is spelled -- the variant changes the base palette and
+/// nothing else. The anomaly spans are identical in both: an anomaly must read
+/// the same wherever it appears, or a reader comparing the two lines would have
+/// to learn two alphabets.
+#[derive(Clone, Copy)]
+enum RoleBase {
+    /// Full role palette (the approval plugin's `execute:` line): the resolved
+    /// command, which is the line that says what actually happens as root.
+    Roles,
+    /// Flat dim base (the audit plugin's `input:` line): the pre-resolution
+    /// line reads quiet under the resolved one, and the anomaly spans -- kept
+    /// at full strength -- pop harder against it.
+    Dim,
+}
+
+impl RoleBase {
+    /// Base for the program path's directory part.
+    fn prog_dir(self) -> &'static str {
+        match self {
+            RoleBase::Roles => SGR_PROG_DIR,
+            RoleBase::Dim => SGR_QUIET,
+        }
+    }
+    /// Base for the program path's basename.
+    fn prog_base(self) -> &'static str {
+        match self {
+            RoleBase::Roles => SGR_PROG_BASE,
+            RoleBase::Dim => SGR_QUIET,
+        }
+    }
+    /// Base for an option flag (a rendered token starting with '-').
+    fn flag(self) -> &'static str {
+        match self {
+            RoleBase::Roles => SGR_FLAG,
+            RoleBase::Dim => SGR_QUIET,
+        }
+    }
+    /// Base for every other token. Plain in the role variant -- values carry no
+    /// role colour there at all.
+    fn value(self) -> &'static str {
+        match self {
+            RoleBase::Roles => "",
+            RoleBase::Dim => SGR_QUIET,
+        }
+    }
+}
 
 /// Emit one plain char, arming `base` first if it is not already in effect.
 fn push_plain(c: char, base: &str, armed: &mut bool, out: &mut String) {
@@ -412,9 +468,47 @@ fn colorize_escaped(s: &str, base: &str, out: &mut String) {
 /// and blind to `dd if=...` or `tar xvf`, and sudowhat has no standing to say
 /// which is which. It stays honest about hostile input because a token that
 /// needed quoting renders as '...' (leading quote, not dash) and so is never
-/// mistaken for a flag. Dim therefore still means exactly one thing (our own
-/// quotes); the flag colour is a separate role, not a second meaning for dim.
+/// mistaken for a flag. Dim therefore still means exactly one thing on THIS
+/// variant (our own quotes); the flag colour is a separate role, not a second
+/// meaning for dim.
+///
+/// This is the approval plugin's `execute:` line. See
+/// [`colored_command_line_dim`] for the quiet variant the audit plugin's
+/// `input:` line uses -- same walk, same tokens, a different base palette.
 pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
+    render_command_line(path, argv, RoleBase::Roles, out);
+}
+
+/// The same line as [`colored_command_line`], rendered through the SAME walk
+/// with a flat dim base: every routine token -- program dirname, program
+/// basename, flags, values -- takes dim instead of its role colour, while the
+/// anomaly spans keep the full-strength palette exactly as they have it on the
+/// other variant.
+///
+/// This is the audit plugin's `input:` line. The pre-resolution line reads
+/// quiet under the resolved `execute:` line, which keeps the full role palette:
+/// what sudo will actually run is the loud one, and what was typed sits under
+/// it. The anomalies are what the quiet base buys -- against a flat dim line, a
+/// red \uNNNN escape or a grey-backed double space is the only thing on the row
+/// wearing any colour at all.
+///
+/// The chrome quotes stay dim here too, and so stop being distinguishable from
+/// the content they wrap. That is deliberate and cheap: quote attribution is
+/// still legible on the `execute:` line one row down, which renders the same
+/// tokens through the same walk, and the round-trip invariant is untouched --
+/// strip the SGR and these are [`full_command_line`]'s bytes exactly.
+pub fn colored_command_line_dim(path: &str, argv: &[&str], out: &mut String) {
+    render_command_line(path, argv, RoleBase::Dim, out);
+}
+
+/// The one token walk both public renderers use. Sharing it is the property
+/// worth protecting: `input:` and `execute:` are built from the same
+/// `command_tokens` list, quoted by the same `quote_token` and coloured by the
+/// same `colorize_escaped`, so any difference a reader sees between the two
+/// lines is a real difference in the command, never a rendering artefact.
+/// `base` decides only which colour sits UNDER the routine roles; the anomaly
+/// palette is not a parameter and cannot vary between the two.
+fn render_command_line(path: &str, argv: &[&str], base: RoleBase, out: &mut String) {
     for (i, tok) in command_tokens(path, argv).iter().enumerate() {
         if i > 0 {
             out.push(' ');
@@ -426,23 +520,25 @@ pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
             // Split at the last '/' of the RENDERED token: escape_control emits
             // '/' for nothing but a literal '/', so this is the same separator
             // last_path_component would find, and slicing after it stays on a
-            // char boundary. No '/' -> the whole token is the basename.
+            // char boundary. No '/' -> the whole token is the basename. On the
+            // dim variant both halves take the same base, so the split costs one
+            // redundant span and changes no byte the terminal shows.
             match rendered.rfind('/') {
                 Some(idx) => {
-                    colorize_escaped(&rendered[..=idx], SGR_PROG_DIR, out);
-                    colorize_escaped(&rendered[idx + 1..], SGR_PROG_BASE, out);
+                    colorize_escaped(&rendered[..=idx], base.prog_dir(), out);
+                    colorize_escaped(&rendered[idx + 1..], base.prog_base(), out);
                 }
-                None => colorize_escaped(&rendered, SGR_PROG_BASE, out),
+                None => colorize_escaped(&rendered, base.prog_base(), out),
             }
         } else if rendered.starts_with('-') {
             // Option flag (lexical: the rendered token starts with '-'). A token
             // that needed quoting renders as '...' with a leading quote, so it
             // never reaches here -- hostile input stays data-coloured.
-            colorize_escaped(&rendered, SGR_FLAG, out);
+            colorize_escaped(&rendered, base.flag(), out);
         } else {
-            // Values carry no role colour; only the anomaly palette and our own
-            // quotes mark anything inside them.
-            colorize_escaped(&rendered, "", out);
+            // Values carry no role colour on the role variant; only the anomaly
+            // palette and our own quotes mark anything inside them.
+            colorize_escaped(&rendered, base.value(), out);
         }
     }
 }
@@ -613,6 +709,38 @@ pub extern "C" fn sw_full_command_line_colored(
     write_result(&result, out, out_cap, needed)
 }
 
+/// The same line as [`sw_full_command_line_colored`], rendered by the same walk
+/// with the quiet base: the routine tokens (program, flags, values) all dim,
+/// the anomaly spans at full strength. Identical signature and buffer contract.
+///
+/// The audit plugin's `input:` line uses this one, so the pre-resolution line
+/// reads quiet under the resolved `execute:` line and its anomalies pop harder.
+/// The caller decides whether colour is permitted at all (build-time knob plus
+/// the NO_COLOR / TERM / isatty gates) and must fall back to
+/// [`sw_full_command_line`] if this returns anything but [`SW_ESCAPE_OK`].
+///
+/// # Safety
+/// See [`sw_full_command_line`].
+#[unsafe(no_mangle)]
+pub extern "C" fn sw_full_command_line_colored_dim(
+    path: *const u8,
+    path_len: usize,
+    argv: *const *const u8,
+    argv_lens: *const usize,
+    argv_count: usize,
+    out: *mut u8,
+    out_cap: usize,
+    needed: *mut usize,
+) -> c_int {
+    let p = read_input(path, path_len);
+    let owned = read_argv(argv, argv_lens, argv_count);
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+
+    let mut result = String::new();
+    colored_command_line_dim(&p, &refs, &mut result);
+    write_result(&result, out, out_cap, needed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,6 +879,12 @@ mod tests {
     fn colored(path: &str, argv: &[&str]) -> String {
         let mut o = String::new();
         colored_command_line(path, argv, &mut o);
+        o
+    }
+
+    fn colored_dim(path: &str, argv: &[&str]) -> String {
+        let mut o = String::new();
+        colored_command_line_dim(path, argv, &mut o);
         o
     }
 
@@ -903,6 +1037,124 @@ mod tests {
         assert_eq!(colored("", &[]), "\x1b[2m'\x1b[0m\x1b[2m'\x1b[0m");
         assert_eq!(strip_sgr(&colored("", &[])), "''");
         assert_eq!(strip_sgr(&colored("/bin/ls", &[])), "/bin/ls");
+    }
+
+    // --- the dim variant (the audit plugin's input: line) -----------------
+
+    #[test]
+    fn dim_preserves_bytes() {
+        // The round-trip invariant holds for the quiet variant exactly as it
+        // does for the loud one, and the two agree on every byte they show:
+        // one walk, one token list, two base palettes.
+        for (path, argv) in color_cases() {
+            let d = colored_dim(path, &argv);
+            let plain = full(path, &argv);
+            assert_eq!(strip_sgr(&d), plain, "path={path:?} argv={argv:?}");
+            assert_eq!(
+                strip_sgr(&d),
+                strip_sgr(&colored(path, &argv)),
+                "the two variants show different bytes for {path:?} {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dim_never_emits_a_raw_control_byte() {
+        // Same guarantee as the role variant: every ESC starts one of our SGR
+        // sequences and no other C0 byte reaches the terminal.
+        for (path, argv) in color_cases() {
+            let d = colored_dim(path, &argv);
+            let chars: Vec<char> = d.chars().collect();
+            for (i, ch) in chars.iter().enumerate() {
+                let u = *ch as u32;
+                if u == 0x1b {
+                    assert_eq!(chars.get(i + 1), Some(&'['), "ESC not starting a CSI");
+                } else {
+                    assert!(u >= 0x20 || u == 0x1b, "raw control byte {u:#x} in output");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dim_routine_tokens_take_the_quiet_base() {
+        // Program dirname, basename and value alike: all dim, no role colour.
+        // Pinned to exact bytes, including the redundant span at the
+        // dirname/basename seam that sharing the walk costs.
+        let d = colored_dim("/bin/echo", &["echo", "hello"]);
+        assert_eq!(
+            d,
+            "\x1b[2m/bin/\x1b[0m\x1b[2mecho\x1b[0m \x1b[2mhello\x1b[0m"
+        );
+        // No cyan anywhere on a clean line. Checked on a case with no anomaly
+        // span, because SGR_META is 1;36 too and legitimately appears on a
+        // metachar -- there, the bold cyan is an anomaly, not a role.
+        assert!(!d.contains("\x1b[36m"), "role cyan on the dim variant: {d:?}");
+        assert!(!d.contains("\x1b[1;36m"), "bold role cyan on the dim variant: {d:?}");
+        // A bare command word is all basename, and still dim.
+        assert_eq!(colored_dim("id", &["id"]), "\x1b[2mid\x1b[0m");
+    }
+
+    #[test]
+    fn dim_flags_are_not_blue() {
+        let d = colored_dim("/bin/git", &["git", "--file", "x"]);
+        assert_eq!(
+            d,
+            "\x1b[2m/bin/\x1b[0m\x1b[2mgit\x1b[0m \x1b[2m--file\x1b[0m \x1b[2mx\x1b[0m"
+        );
+        assert!(!d.contains("\x1b[1;34m"), "flag blue on the dim variant: {d:?}");
+        // and the role variant still has it, so this is a variant difference
+        // rather than the flag role having been dropped.
+        assert!(colored("/bin/git", &["git", "--file", "x"]).contains("\x1b[1;34m"));
+    }
+
+    #[test]
+    fn dim_keeps_the_anomaly_palette_at_full_strength() {
+        // The whole point of the quiet base: against flat dim, the anomaly
+        // spans are the only coloured thing on the line.
+        let d = colored_dim("/bin/echo", &["echo", "a\nb"]);
+        assert!(d.contains("\x1b[1;35m\\n\x1b[0m"), "control escape: {d:?}");
+        let d = colored_dim("/bin/echo", &["echo", "\u{202e}x"]);
+        assert!(d.contains("\x1b[1;31m\\u202e\x1b[0m"), "unicode escape: {d:?}");
+        let d = colored_dim("/bin/echo", &["echo", "a\\b"]);
+        assert!(d.contains("\x1b[1;36m\\\\\x1b[0m"), "backslash metachar: {d:?}");
+        let d = colored_dim("p", &["p", "-x  y"]);
+        assert!(d.contains("\x1b[100m  \x1b[0m"), "space run: {d:?}");
+        // An anomaly inside the program token drops the base for its span and
+        // the base resumes after it, exactly as on the role variant.
+        let d = colored_dim("/bin/\u{202e}sh", &[]);
+        assert_eq!(strip_sgr(&d), "'/bin/\\u202esh'");
+        assert!(d.contains("\x1b[1;31m\\u202e\x1b[0m"), "{d:?}");
+    }
+
+    #[test]
+    fn ffi_colored_dim_two_call_sizing() {
+        let path = b"/bin/echo";
+        let a0 = b"echo";
+        let argv: [*const u8; 1] = [a0.as_ptr()];
+        let lens: [usize; 1] = [a0.len()];
+
+        let mut needed = 0usize;
+        let rc = sw_full_command_line_colored_dim(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            std::ptr::null_mut(), 0, &mut needed,
+        );
+        assert_eq!(rc, SW_ESCAPE_TRUNCATED);
+
+        let mut buf = vec![0u8; needed + 1];
+        let mut got = 0usize;
+        let rc = sw_full_command_line_colored_dim(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            buf.as_mut_ptr(), buf.len(), &mut got,
+        );
+        assert_eq!(rc, SW_ESCAPE_OK);
+        assert_eq!(buf[got], 0);
+        assert_eq!(
+            std::str::from_utf8(&buf[..got]).unwrap(),
+            "\x1b[2m/bin/\x1b[0m\x1b[2mecho\x1b[0m"
+        );
     }
 
     /// Colourise ONE token exactly as `colored_command_line` does for a non-
@@ -1131,8 +1383,14 @@ mod tests {
 
         let plain = render(sw_full_command_line);
         let color = render(sw_full_command_line_colored);
+        let dim = render(sw_full_command_line_colored_dim);
         assert_eq!(strip_sgr(&color), plain);
         assert_ne!(color, plain);
+        // The third entry point joins the same agreement: input: and execute:
+        // differ in emphasis and in nothing else.
+        assert_eq!(strip_sgr(&dim), plain);
+        assert_ne!(dim, plain);
+        assert_ne!(dim, color);
     }
 
     #[test]

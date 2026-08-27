@@ -11,11 +11,13 @@
  * covered in test_prompt_formatter.m). Invalid-UTF-8 handling deliberately
  * differs (Rust: U+FFFD; ObjC: drops the token) and is likewise not compared.
  *
- * The colouriser (sw_full_command_line_colored, Rust-only -- the audit bundle
- * cannot link PromptFormatter) is guarded here too, against the same reference:
- * strip its SGR and the bytes must equal the plain line from BOTH renderers. It
- * has no ObjC twin to diverge from, but it must never diverge from the plain
- * line it decorates.
+ * The colouriser (sw_full_command_line_colored and its dim variant
+ * sw_full_command_line_colored_dim, Rust-only -- the audit bundle cannot link
+ * PromptFormatter) is guarded here too, against the same reference: strip the
+ * SGR of either and the bytes must equal the plain line from BOTH renderers.
+ * Neither has an ObjC twin to diverge from (colorizeEscaped: has no production
+ * callers and is deliberately not kept in step on the role palette), but they
+ * must never diverge from the plain line they decorate, nor from each other.
  */
 #import "PromptFormatter.h"
 #import "sw_test.h"
@@ -109,6 +111,35 @@ static NSString *rustColoredCmd(NSString *path, NSArray<NSString *> *argv) {
     NSString *out = nil;
     if (buf && sw_full_command_line_colored(pd.bytes, pd.length, ap, al, n,
                                             buf, needed + 1, &got) == SW_ESCAPE_OK) {
+        out = bytesToStr(buf, got);
+    }
+    free(buf);
+    free(ap);
+    free(al);
+    return out;
+}
+
+/* The DIM variant of the same renderer -- the audit plugin's input: line. Same
+ * walk, same tokens, a flat dim base under the routine roles. */
+static NSString *rustColoredDimCmd(NSString *path, NSArray<NSString *> *argv) {
+    NSData *pd = [path dataUsingEncoding:NSUTF8StringEncoding];
+    NSUInteger n = argv.count;
+    const uint8_t **ap = calloc(n ? n : 1, sizeof(*ap));
+    size_t *al = calloc(n ? n : 1, sizeof(*al));
+    NSMutableArray<NSData *> *hold = [NSMutableArray array];  /* keep bytes alive */
+    for (NSUInteger i = 0; i < n; i++) {
+        NSData *d = [argv[i] dataUsingEncoding:NSUTF8StringEncoding];
+        [hold addObject:d];
+        ap[i] = d.bytes;
+        al[i] = d.length;
+    }
+    size_t needed = 0;
+    sw_full_command_line_colored_dim(pd.bytes, pd.length, ap, al, n, NULL, 0, &needed);
+    uint8_t *buf = malloc(needed + 1);
+    size_t got = 0;
+    NSString *out = nil;
+    if (buf && sw_full_command_line_colored_dim(pd.bytes, pd.length, ap, al, n,
+                                                buf, needed + 1, &got) == SW_ESCAPE_OK) {
         out = bytesToStr(buf, got);
     }
     free(buf);
@@ -259,6 +290,12 @@ static void test_colored_preserves_bytes(void) {
            "coloured command strips back to the ObjC plain line");
         EQ(stripSGR(rustColoredCmd(path, argv)), rustFullCmd(path, argv),
            "coloured command strips back to the Rust plain line");
+        /* The dim variant (input:) is the same walk under a different base, so
+         * it owes the same round trip against the same ObjC reference. */
+        EQ(stripSGR(rustColoredDimCmd(path, argv)), fullcmd(path, argv),
+           "dim command strips back to the ObjC plain line");
+        EQ(stripSGR(rustColoredDimCmd(path, argv)), stripSGR(rustColoredCmd(path, argv)),
+           "input: and execute: show the same bytes, differing only in emphasis");
     }
 
     /* control chars, bidi override and a literal backslash: the escapes must
@@ -269,11 +306,11 @@ static void test_colored_preserves_bytes(void) {
        "coloured command with escapes strips back to the plain line");
 }
 
-/* Role assignment, pinned to exact bytes: the program's directory part plain
- * cyan, its basename bold cyan, every other token unstyled. Flags carry no
- * colour of their own -- "starts with a dash" is a guess about someone else's
- * command grammar, and on a display about what happens as root the most
- * consequential option must not be the faintest thing on the line. */
+/* Role assignment on the execute: variant, pinned to exact bytes: the program's
+ * directory part plain cyan, its basename bold cyan, option flags bold blue,
+ * every other token unstyled. The flag mark is openly lexical -- it colours
+ * every flag alike rather than guessing which one matters, and a token that
+ * needed quoting renders '...' and so never borrows the look. */
 static void test_colored_roles(void) {
     EQ(rustColoredCmd(@"/bin/echo", @[@"echo"]),
        @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m",
@@ -343,6 +380,29 @@ static void test_colored_hostile_and_anomalies(void) {
        "deceptive Unicode escape is red");
 }
 
+/* The dim variant, which the audit bundle's input: line uses: the routine roles
+ * collapse to one dim base, the anomaly palette above it does not move. The
+ * exhaustive per-role table lives in the Rust test module; this is the
+ * cross-language sighting that the exported dim entry point is the same walk. */
+static void test_colored_dim_variant(void) {
+    EQ(rustColoredDimCmd(@"/bin/echo", @[@"echo", @"hello"]),
+       @"\033[2m/bin/\033[0m\033[2mecho\033[0m \033[2mhello\033[0m",
+       "input: renders program and value on one dim base");
+    EQ(rustColoredDimCmd(@"/bin/git", @[@"git", @"--file", @"x"]),
+       @"\033[2m/bin/\033[0m\033[2mgit\033[0m \033[2m--file\033[0m \033[2mx\033[0m",
+       "flags take the dim base too, not their bold blue");
+
+    NSString *nl = rustColoredDimCmd(@"/bin/echo", @[@"echo", cat(cat(@"a", uni(0x0a)), @"b")]);
+    OK([nl containsString:@"\033[1;35m\\n\033[0m"],
+       "control escape keeps full-strength magenta over the dim base");
+    NSString *bidi = rustColoredDimCmd(@"/bin/echo", @[@"echo", cat(uni(0x202e), @"x")]);
+    OK([bidi containsString:@"\033[1;31m\\u202e\033[0m"],
+       "deceptive Unicode escape keeps full-strength red over the dim base");
+    NSString *pad = rustColoredDimCmd(@"/bin/echo", @[@"echo", @"a  b"]);
+    OK([pad containsString:@"\033[100m  \033[0m"],
+       "a doubled space keeps its grey background over the dim base");
+}
+
 /* A couple of explicit sanity checks so a totally broken Rust build fails
  * loudly, not just silently matching a broken ObjC side. */
 static void test_explicit_values(void) {
@@ -363,6 +423,7 @@ int main(void) {
         test_colored_roles();
         test_colored_quote_attribution();
         test_colored_hostile_and_anomalies();
+        test_colored_dim_variant();
         SW_SUMMARY("escape_core equivalence (Rust C-ABI == ObjC PromptFormatter)");
     }
 }

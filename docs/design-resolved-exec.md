@@ -44,8 +44,9 @@ Only sudo's own `command_info["command"]` is ever displayed.
 
 The approval plugin prints one line to the controlling terminal, aligned into
 the existing block gutter, rendered through the shared escape core
-(`sw_full_command_line_colored` -- same quoting/escaping as `input:`, so the
-two renderings cannot disagree on a token):
+(`sw_full_command_line_colored` -- same walk, same quoting/escaping as
+`input:`, so the two renderings cannot disagree on a token; from 2026-08-27
+they differ in weight only, see the delta below):
 
     sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
 
@@ -83,6 +84,21 @@ VALUE only: the frame — provenance prefix, bold label, gutter — and the
 `verify:` emphasis still answer to the runtime `NO_COLOR` / `TERM` / `isatty`
 gates alone, since that chrome is sudowhat's own rather than a rendering of
 untrusted argv.
+
+**Delta (2026-08-27): the two lines render at different weights.** Under
+`echoColor = "on"` both lines carried the same command at the same weight, which
+left the reader deciding which of two identical-looking rows was authoritative.
+`execute:` keeps the full role palette; `input:` now renders every routine token
+— program dirname, program basename, flags, values — on a flat dim base
+(`sw_full_command_line_colored_dim`). The anomaly spans are identical on both
+lines and stay at full strength, so an anomaly reads the same wherever it
+appears and, against the dim base, is the only coloured thing on the `input:`
+row. Quiet in, loud out: the resolved line is the one that says what happens as
+root. It is a base-palette parameter on the ONE shared walk in `escape_core`,
+not a second renderer, so "input: and execute: cannot disagree on a token"
+survives unchanged — the same token list, the same quoting, the same anomaly
+classifier, one different base. See the delta at the end of the colour section
+in `docs/design-terminal-mode.md`.
 
 **Delta (2026-08-27): `execDisplay`, a switch for the line itself.** Added at
 the owner's request after this round shipped. "Printed ALWAYS" above describes

@@ -153,7 +153,7 @@ in {
         display.
 
         - `off` renders both command lines plain.
-        - `on` (the default) highlights them by role — the program's
+        - `on` (the default) highlights `execute:` by role — the program's
           directory part in plain cyan and its basename in bold cyan, option
           flags bold blue, every other token plain — and wraps anomaly spans in
           a fixed, reviewed palette on top:
@@ -161,8 +161,15 @@ in {
           in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
           metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
           and notable whitespace runs (leading, trailing, or doubled spaces)
-          shown on a grey background. Both lines render through the same core,
-          so they can never disagree on a token.
+          shown on a grey background.
+
+          The `input:` value takes the same anomaly palette over a QUIET base:
+          its routine tokens — program, flags and values alike — all render
+          dim, so the pre-resolution line reads under the resolved one and an
+          anomaly span is the only coloured thing on that row. `input:` quiet,
+          `execute:` loud, anomalies at full strength on both. Both lines come
+          out of one shared walk over one token list — the weights are two base
+          palettes, not two renderers — so they can never disagree on a token.
 
         What it does NOT govern: the frame around those values — the label
         gutter, the bold labels, the `user:` and `directory:` lines, the

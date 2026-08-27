@@ -470,9 +470,10 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  * Makefile).
  *
  *   on  - (default) the resolved command line is highlighted by role: the
- *         program's directory part plain cyan and its basename bold cyan, every
- *         other token plain, the quotes the escape core itself added dim, and
- *         escaped/anomalous spans in the fixed anomaly palette on top.
+ *         program's directory part plain cyan and its basename bold cyan,
+ *         option flags bold blue, every other token plain, the quotes the
+ *         escape core itself added dim, and escaped/anomalous spans in the
+ *         fixed anomaly palette on top.
  *   off - the resolved command line renders plain.
  *
  * ONE token governs BOTH command lines, input: and execute:, because a reader
@@ -480,6 +481,14 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  * bundle prints did not ask for a coloured twin of it two lines later. The knob
  * is therefore in the GLOBAL Makefile CFLAGS, not target-specific to either
  * bundle.
+ *
+ * The two lines render at different WEIGHTS under `on`. execute: keeps the full
+ * role palette above; the audit bundle's input: line renders its routine tokens
+ * dim (sw_full_command_line_colored_dim) with the anomaly spans still at full
+ * strength, so the resolved command reads as the authoritative one and the
+ * pre-resolution line sits quiet beneath it. Both come out of ONE walk in
+ * escape_core over one token list -- the base palette is the only difference --
+ * so the two can still never disagree on a token.
  *
  * It governs the command VALUE only. The frame around it -- the provenance
  * prefix, the bold label, the gutter -- follows the runtime NO_COLOR / TERM /

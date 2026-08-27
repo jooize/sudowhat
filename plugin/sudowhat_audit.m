@@ -70,11 +70,15 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
 /* Build-time colour policy, chosen by -DSW_ECHO_COLOR (echoColor in the
  * nix module / Makefile).
  *
- *   on  - (default) highlight the command line: the program's directory part
- *         plain cyan and its basename bold cyan, every other token plain, the
- *         quotes escape_core itself added dim, and escaped/anomalous spans
- *         (deceptive Unicode, control bytes, shell metacharacters, notable
- *         whitespace) in the fixed anomaly palette on top.
+ *   on  - (default) highlight the command line. The input: value renders its
+ *         ROUTINE tokens - program, flags, values alike - dim, with the
+ *         escaped/anomalous spans (deceptive Unicode, control bytes, shell
+ *         metacharacters, notable whitespace) at full strength on top: the
+ *         pre-resolution line reads quiet under the resolved execute: line,
+ *         and the anomalies are the only coloured thing on it. The approval
+ *         bundle's execute: line keeps the full role palette (program dirname
+ *         plain cyan, basename bold cyan, flags bold blue, values plain), so
+ *         what sudo will actually run is the loud line.
  *   off - the command line renders plain.
  *
  * This knob governs the COMMAND VALUE only. The frame around it (the label
@@ -90,9 +94,14 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
  * SW_ACOL_* / sw_echo_color_mode) because the two are separate Mach-O images
  * that never share a translation unit. If one moves, move both.
  *
- * The colouriser lives in escape_core (sw_full_command_line_colored), not in
+ * The colouriser lives in escape_core (sw_full_command_line_colored_dim here,
+ * sw_full_command_line_colored there), not in
  * PromptFormatter: that class has a fixed ObjC name that cannot be linked into
- * this second bundle without a duplicate-class collision. Colour is layout only,
+ * this second bundle without a duplicate-class collision. The two entry points
+ * are two BASE palettes over one shared token walk, not two renderers, so the
+ * two lines can never disagree about which tokens the command has or how a
+ * token is spelled - any difference the reader sees is a real difference in the
+ * command. Colour is layout only,
  * applied around the already-escaped, already-quoted tokens - strip the SGR and
  * the bytes are the plain line's exactly - so it can neither add nor hide
  * content. Runtime gates (NO_COLOR / TERM, then isatty) still apply on top, and
@@ -144,7 +153,7 @@ static NSString *sw_audit_escape(const char *input) {
     return s;
 }
 
-/* The two escape_core command-line renderers share one signature, so the caller
+/* Every escape_core command-line renderer shares one signature, so the caller
  * below can pick between them without duplicating the two-call sizing dance. */
 typedef int (*sw_cmdline_fn)(const uint8_t *path, size_t path_len,
                              const uint8_t *const *argv,
@@ -214,9 +223,14 @@ static NSString *sw_audit_command_line_with(sw_cmdline_fn colored,
     return s;
 }
 
+/* The input: line takes the DIM variant of the shared renderer: routine tokens
+ * quiet, anomaly spans at full strength. The approval bundle's execute: line
+ * takes the role-coloured variant of the same walk, so the resolved command is
+ * the loud one and this pre-resolution line sits under it. The plain renderer
+ * is the fallback for both. */
 static NSString *sw_audit_command_line(char * const submit_argv[], int optind,
                                        BOOL color) {
-    return sw_audit_command_line_with(sw_full_command_line_colored,
+    return sw_audit_command_line_with(sw_full_command_line_colored_dim,
                                       sw_full_command_line,
                                       submit_argv, optind, color);
 }

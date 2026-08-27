@@ -61,7 +61,9 @@ in {
         - `off` emits the display with no colour at all.
         - `on` (the default) is intended to wrap only anomaly spans
           (deceptive Unicode escapes, control-byte escapes, shell metacharacters,
-          notable whitespace) in a fixed reviewed palette.
+          notable whitespace) in a fixed reviewed palette, over a quiet base:
+          as on macOS, the `input:` value's routine tokens are meant to render
+          dim so the anomaly spans are the only coloured thing on the row.
 
         NOTE: the colouriser is a fast-follow — the escape_core port of the
         anomaly colourer is not done yet — so `on` is accepted but the

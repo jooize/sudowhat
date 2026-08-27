@@ -1,8 +1,8 @@
 /*
  * Adversarial unit tests for the static helpers inside sudowhat_audit.m:
  *   - sw_audit_color_allowed()     : the NO_COLOR / TERM gate on ANSI emphasis.
- *   - sw_audit_command_line()      : the as-typed command line, plain and
- *                                    highlighted by role.
+ *   - sw_audit_command_line()      : the as-typed command line, plain and in
+ *                                    the dim variant the input: line uses.
  *   - sw_audit_command_line_with() : the colour -> plain fail-soft fallback,
  *                                    reachable here through its renderer
  *                                    parameters.
@@ -89,6 +89,12 @@ static void test_command_line_plain(void) {
        "plain line carries no escape byte");
 }
 
+/* The input: value takes escape_core's DIM variant: every routine token --
+ * program dirname, basename, flags, values alike -- renders dim, and only the
+ * anomaly spans keep full strength. The resolved execute: line the approval
+ * bundle prints keeps the full role palette, so the pre-resolution line reads
+ * quiet under the authoritative one. Both come out of one shared walk, so the
+ * round-trip invariant is asserted here exactly as before. */
 static void test_command_line_colored(void) {
     char *argv[] = { (char *)"sudo", (char *)"/bin/echo", (char *)"--flag",
                      (char *)"value", NULL };
@@ -96,9 +102,32 @@ static void test_command_line_colored(void) {
     NSString *color = sw_audit_command_line(argv, 1, YES);
 
     EQ(plain, @"/bin/echo --flag value", "plain line");
-    EQ(color, @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m \033[1;34m--flag\033[0m value",
-       "coloured line: dirname plain cyan, basename bold cyan, flag bold blue");
+    EQ(color, @"\033[2m/bin/\033[0m\033[2mecho\033[0m \033[2m--flag\033[0m"
+              @" \033[2mvalue\033[0m",
+       "input: line renders its routine tokens dim, program and flag included");
     EQ(stripSGR(color), plain, "stripping the SGR returns the plain line exactly");
+
+    /* No ROLE colour survives on this line: not the program's cyan pair, not
+     * the flag's bold blue. (Checked on a clean line -- the metachar anomaly
+     * colour is 1;36 too, and legitimately appears on a metachar.) */
+    OK([color rangeOfString:@"\033[36m"].location == NSNotFound,
+       "no role cyan on the input: line");
+    OK([color rangeOfString:@"\033[1;36m"].location == NSNotFound,
+       "no bold role cyan on the input: line");
+    OK([color rangeOfString:@"\033[1;34m"].location == NSNotFound,
+       "no flag blue on the input: line");
+
+    /* The anomaly palette is untouched by the dim base -- that is the point of
+     * the dim base: against it, the anomalies are the only colour on the row. */
+    char *anom[] = { (char *)"sudo", (char *)"/bin/echo",
+                     (char *)"a\nb", (char *)"x  y", NULL };
+    NSString *a = sw_audit_command_line(anom, 1, YES);
+    OK([a rangeOfString:@"\033[1;35m\\n\033[0m"].location != NSNotFound,
+       "control escape keeps full-strength magenta over the dim base");
+    OK([a rangeOfString:@"\033[100m  \033[0m"].location != NSNotFound,
+       "a doubled space keeps its grey background over the dim base");
+    EQ(stripSGR(a), @"/bin/echo 'a\\nb' 'x  y'",
+       "the anomaly line still strips back to the plain line");
 
     /* One logical line: never split, never elided, whatever the length. */
     OK([color rangeOfString:@"\n"].location == NSNotFound,
@@ -114,7 +143,7 @@ static void test_command_line_colored(void) {
     EQ(stripSGR(e), @"/bin/echo 'sudowhat: user: evil'",
        "hostile token stays quoted under colour");
     OK([e hasSuffix:@"\033[2m'\033[0m"],
-       "its closing quote is dim -- our chrome around the data, not data");
+       "its closing quote is still its own span -- chrome, dim like the base");
 }
 
 static void test_command_line_nothing_to_show(void) {
