@@ -7,6 +7,8 @@
   # no registry fetch, no vendoring, no crane needed.
   cargo,
   rustc,
+  # readelf for install/linux/verify-plugin-so.bash (postInstall guard).
+  binutils,
   # Master switch for terminal command display: "on" (default) or "off". One of
   # the Makefile's SUDOWHAT_VALID_AUDIT_DISPLAY; validated by the nixos module's
   # enum. See services.sudowhat.auditDisplay.
@@ -19,15 +21,16 @@
 }:
 
 # Linux is DISPLAY-ONLY: one pure-Rust cdylib, no approval plugin, no PAM module,
-# no code-signing. sudo's own root-owned + non-writable enforcement on the .so
-# and /etc/sudo.conf is the whole trust model (see docs/design-linux-port.md).
+# no code-signing. sudo perm-checks /etc/sudo.conf only; the .so is protected by
+# ordinary permissions on its root-owned store/install path — sudo does NOT
+# perm-check the .so itself (see docs/design-linux-port.md).
 stdenv.mkDerivation (finalAttrs: {
   pname = "sudowhat";
   version = "0.14.0";
 
   src = lib.cleanSource ../.;
 
-  nativeBuildInputs = [ cargo rustc ];
+  nativeBuildInputs = [ cargo rustc binutils ];
 
   # Build only the Linux audit target. The default `make` (all) would try to
   # compile the macOS ObjC bundles (clang -bundle -framework Foundation) and
@@ -46,13 +49,24 @@ stdenv.mkDerivation (finalAttrs: {
 
   # cargo emits libsudowhat_audit.so; sudo.conf references sudowhat_audit.so, so
   # install under the un-prefixed name (matching the macOS bundle's filename and
-  # the config/linux/sudo.conf.sample path).
+  # the config/linux/sudo.conf.sample path). 0644 — dlopen only needs read, and
+  # the store strips write bits, so this lands as 0444 (matching the
+  # nixos-module's stated trust anchor).
   installPhase = ''
     runHook preInstall
     install -m 0755 -d $out/libexec/sudo
-    install -m 0755 linux/sudowhat_audit/target/release/libsudowhat_audit.so \
+    install -m 0644 linux/sudowhat_audit/target/release/libsudowhat_audit.so \
       $out/libexec/sudo/sudowhat_audit.so
     runHook postInstall
+  '';
+
+  # Regression guard for the v0.11.0-v0.14.0 load fault: the exported plugin
+  # struct must sit in writable .data (sudo writes event_alloc into it after
+  # dlopen), with GNU_RELRO + BIND_NOW intact. Fails the build otherwise, so a
+  # toolchain/flag divergence between this pipeline and the Makefile's cannot
+  # ship a sudo-breaking .so.
+  postInstall = ''
+    bash ./install/linux/verify-plugin-so.bash $out/libexec/sudo/sudowhat_audit.so
   '';
 
   meta = {

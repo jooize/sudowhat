@@ -155,7 +155,7 @@ AUDIT_OBJS  = plugin/sudowhat_audit.o \
               build/audit_SignatureVerifier.o
 
 .PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit clean \
-        build-linux test-linux install-linux uninstall-linux
+        build-linux verify-linux test-linux install-linux uninstall-linux
 
 TEST_CFLAGS = $(CFLAGS) -Itests
 TEST_FRAMEWORKS = -framework Foundation -framework CoreFoundation \
@@ -354,8 +354,22 @@ ifeq ($(UNAME_S),Linux)
 	    SW_AUDIT_DISPLAY=$(SUDOWHAT_AUDIT_DISPLAY) \
 	    SW_AUDIT_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) \
 	    $(CARGO) build --release --offline --locked
+	$(MAKE) verify-linux
 else
 	@echo "build-linux: skipped (host is $(UNAME_S), not Linux)"
+endif
+
+# verify-linux: assert the built .so is actually loadable by sudo AND fully
+# hardened: GNU_RELRO present, BIND_NOW present, and the exported plugin
+# struct in writable .data — sudo writes event_alloc into that struct after
+# dlopen, so a RELRO-sealed struct SIGSEGVs every sudo (the v0.11.0–v0.14.0
+# load fault). Runs in both build pipelines (make here, nix postInstall) so
+# a toolchain/flag divergence fails the build instead of shipping.
+verify-linux:
+ifeq ($(UNAME_S),Linux)
+	bash ./install/linux/verify-plugin-so.bash $(LINUX_AUDIT_DIR)/target/release/libsudowhat_audit.so
+else
+	@echo "verify-linux: skipped (host is $(UNAME_S), not Linux)"
 endif
 
 # test-linux: the pure display.rs / tty.rs unit tests. They are host-portable

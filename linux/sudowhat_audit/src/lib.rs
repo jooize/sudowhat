@@ -14,9 +14,11 @@
 //!
 //! ## Trust model (Linux) — documented, not engineered
 //!
-//! Integrity is sudo's OWN enforcement: sudo refuses to load a plugin, or read
-//! /etc/sudo.conf, that is not owned by uid 0 and writable only by its owner
-//! (sudo.conf(5)), fail-closed. We add nothing on top. There is NO code-signing
+//! Integrity: sudo perm-checks /etc/sudo.conf ONLY — a config not owned by
+//! uid 0, or writable by group/other, is ignored, fail-closed (sudo.conf(5)).
+//! sudo does NOT perm-check this .so; the .so is protected by ordinary
+//! permissions on its root-owned install path, which install.bash enforces
+//! and verifies. We add nothing on top. There is NO code-signing
 //! anchor and NO tamper-evidence claim here — Linux gets the UX, not the
 //! tamper-evidence (docs/design-terminal-mode.md). This plugin is display =
 //! disclosure, never authentication: if it is absent or misconfigured it simply
@@ -35,6 +37,7 @@
 mod display;
 mod tty;
 
+use std::cell::UnsafeCell;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 
@@ -89,10 +92,10 @@ const ECHO_COLOR_ON: bool = match option_env!("SW_AUDIT_ECHO_COLOR") {
 // --- struct audit_plugin (vendored layout, plugin/sudo_plugin.h) -------------
 //
 // Members are typed as Option<unsafe extern "C" fn …>, so the optional tail is
-// None and the whole static holds no raw pointers — it is Sync by construction
-// (fn pointers and c_uint are Sync), needing no `unsafe impl Sync`. sudo reads
-// these members by offset at API >= 1.15, so the FULL layout must be present;
-// the members we do not implement are None, never omitted.
+// None and the whole struct holds no raw pointers. sudo reads these members by
+// offset at API >= 1.15, so the FULL layout must be present; the members we do
+// not implement are None, never omitted. The exported instance below must be
+// WRITABLE — see PluginExport.
 
 type OpenFn = unsafe extern "C" fn(
     c_uint,               // version
@@ -293,10 +296,33 @@ unsafe extern "C" fn sudowhat_audit_error(
     1
 }
 
+/// Wrapper that forces the exported plugin struct into WRITABLE .data.
+///
+/// sudo writes into the exported struct after dlopen: load_plugins.c's
+/// sudo_init_event_alloc() assigns sudo's own event allocator to the
+/// `event_alloc` member of every audit plugin declaring API >= 1.17. A C
+/// plugin's `struct audit_plugin` is a non-const global in .data, so that
+/// write is part of the ABI contract — but a plain Rust `pub static` is
+/// immutable, so rustc places it in .data.rel.ro, which the dynamic loader
+/// seals read-only (GNU_RELRO) at the end of dlopen, BEFORE sudo's write.
+/// Result: SIGSEGV on every sudo invocation. UnsafeCell marks the object
+/// interior-mutable (!Freeze), which is what moves it to writable .data;
+/// repr(transparent) keeps the layout identical to AuditPlugin. Full RELRO
+/// stays intact for everything else; install/linux/verify-plugin-so.bash
+/// asserts this placement on every build.
+#[repr(transparent)]
+pub struct PluginExport(UnsafeCell<AuditPlugin>);
+
+// SAFETY: the only writer is sudo itself, once, during its single-threaded
+// plugin initialisation — the same contract every C audit plugin relies on.
+// Rust code never reads or writes through the cell.
+unsafe impl Sync for PluginExport {}
+
 /// The exported plugin symbol sudo dlsym()s. The optional tail (show_version,
-/// register_hooks, deregister_hooks, event_alloc) is None.
+/// register_hooks, deregister_hooks) is None; event_alloc starts None and is
+/// filled in by sudo (see PluginExport).
 #[unsafe(no_mangle)]
-pub static sudowhat_audit_plugin: AuditPlugin = AuditPlugin {
+pub static sudowhat_audit_plugin: PluginExport = PluginExport(UnsafeCell::new(AuditPlugin {
     type_: SUDO_AUDIT_PLUGIN,
     version: SUDO_API_VERSION,
     open: Some(sudowhat_audit_open),
@@ -308,4 +334,4 @@ pub static sudowhat_audit_plugin: AuditPlugin = AuditPlugin {
     register_hooks: None,
     deregister_hooks: None,
     event_alloc: None,
-};
+}));
