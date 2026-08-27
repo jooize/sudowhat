@@ -1,5 +1,20 @@
 #import "PromptFormatter.h"
 
+/* SW_SHEET_VERIFY_LAST — TEMPORARY. Picks where the verify code sits on the
+ * sheet: 1 (the shipped default) puts it after the command block, so the sheet
+ * reads "what am I approving" first and the code-matching step lands last,
+ * immediately before the decision; 0 restores the old order with the code
+ * directly under the header. It exists only for a one-time visual A/B during
+ * the v0.14.0 smoke — build the plugin once with -DSW_SHEET_VERIFY_LAST=0 to
+ * see the old order — after which the losing order is deleted and this switch
+ * goes with it. It is deliberately NOT a supported knob: not in the Makefile's
+ * validated set, not a nix module option, not documented as configurable. Both
+ * branches emit the same components with the same blank-line structure, so the
+ * length budget and the overhead arithmetic are identical either way. */
+#ifndef SW_SHEET_VERIFY_LAST
+#define SW_SHEET_VERIFY_LAST 1
+#endif
+
 @implementation SudoWhatPromptFormatter
 
 + (NSCharacterSet *)safeSet {
@@ -258,18 +273,24 @@
     BOOL pathOverflow = (pathVal != nil && pathVal.length > kMaxCwdDisplay);
     NSString *pathShown = pathVal ? (pathOverflow ? kSeeTerminal : pathVal) : nil;
 
-    /* Layout: header \n\n verify \n\n "USER\n"u \n\n ["DIRECTORY\n"p \n\n]
-     *         "COMMAND\n"c \n\n bottom. Stacked labels: each caps label sits
-     *         alone on its line, the value below it, a blank line between
-     *         fields — so a value wrapped by the narrow sheet cannot run into
-     *         the next label, and the value gets the full line width. Fixed
-     *         labels are 5/10/8 chars including their newline. */
+    /* Layout: header \n\n "user:\n"u \n\n ["directory:\n"p \n\n]
+     *         "execute:\n"c \n\n verify \n\n bottom. Stacked labels: each
+     *         label sits alone on its line, the value below it, a blank line
+     *         between fields — so a value wrapped by the narrow sheet cannot
+     *         run into the next label, and the value gets the full line width.
+     *         The trailing colon carries the label-vs-value distinction on a
+     *         surface that has no bold and no colour, and matches the
+     *         terminal's input:/execute: grammar; "execute:" is the resolved
+     *         path, the same referent as the terminal's execute: row. Fixed
+     *         labels are 6/11/9 chars including their newline. The verify
+     *         code's position is the only thing SW_SHEET_VERIFY_LAST moves;
+     *         the components and this arithmetic are identical either way. */
     NSUInteger overhead =
         header.length + 2
         + verifyLine.length + 2
-        + 5 + userShown.length + 2
-        + (pathShown ? (10 + pathShown.length + 2) : 0)
-        + 8
+        + 6 + userShown.length + 2
+        + (pathShown ? (11 + pathShown.length + 2) : 0)
+        + 9
         + 2 + bottomReserve;
     NSUInteger cmdBudget = (kMaxTotal > overhead) ? kMaxTotal - overhead : 0;
 
@@ -285,14 +306,25 @@
     NSString *bottom = (userOverflow || pathOverflow || cmdOverflow)
         ? bottomTrunc : bottomClean;
 
-    /* escapeControlChars scrubs newlines and Unicode line/paragraph separators
-     * from every value, so the line structure here is unambiguously ours: no
-     * displayed value can forge a USER/DIRECTORY/COMMAND label line, nor
-     * fabricate the blank line that precedes every real label. */
+    /* What makes a label unforgeable is the SHAPE, not the spelling: a real
+     * label sits alone on its own line, directly after a blank line, with its
+     * value on the line below. escapeControlChars scrubs newlines and Unicode
+     * line/paragraph separators out of every displayed value, so no value can
+     * contain a line break at all — it may well contain the text "user:" or
+     * "execute:", but it can never put that text alone on a line of its own,
+     * and it can never fabricate the blank line that precedes every real
+     * label. The line structure here is therefore unambiguously ours. (The
+     * labels were once caps; the caps were never the guarantee.) */
     NSMutableString *out = [NSMutableString stringWithCapacity:kMaxTotal];
-    [out appendFormat:@"%@\n\n%@\n\nUSER\n%@\n\n", header, verifyLine, userShown];
-    if (pathShown) [out appendFormat:@"DIRECTORY\n%@\n\n", pathShown];
-    [out appendFormat:@"COMMAND\n%@\n\n%@", cmdShown, bottom];
+#if SW_SHEET_VERIFY_LAST
+    [out appendFormat:@"%@\n\nuser:\n%@\n\n", header, userShown];
+    if (pathShown) [out appendFormat:@"directory:\n%@\n\n", pathShown];
+    [out appendFormat:@"execute:\n%@\n\n%@\n\n%@", cmdShown, verifyLine, bottom];
+#else
+    [out appendFormat:@"%@\n\n%@\n\nuser:\n%@\n\n", header, verifyLine, userShown];
+    if (pathShown) [out appendFormat:@"directory:\n%@\n\n", pathShown];
+    [out appendFormat:@"execute:\n%@\n\n%@", cmdShown, bottom];
+#endif
     return out;
 }
 

@@ -171,8 +171,47 @@ Dropping the as-typed line entirely was considered and rejected: in
 terminal-password mode it is the only command display that exists before the
 password is typed, and without the pair the divergence signal disappears.
 
-The SHEET keeps its `COMMAND` label -- there the value genuinely is the
-resolved command that will run.
+**The sheet follows the same grammar (v0.14.0).** Its stacked labels were
+`USER` / `DIRECTORY` / `COMMAND` and are now `user:` / `directory:` /
+`execute:` -- the same words as the terminal, and `execute:` for the same
+reason: the sheet is fed `command_info["command"]`, so its value genuinely is
+the resolved path that will run. The caps used to carry the label-vs-value
+distinction on a surface with no bold and no colour; the trailing colon carries
+it now, and it reads as one vocabulary across both surfaces instead of two.
+
+Losing the caps costs nothing structurally, because the caps were never the
+anti-forgery mechanism. What makes a label unforgeable is its *shape*: a real
+label sits alone on its own line, directly after a blank line, with its value
+on the line below -- and `escapeControlChars` strips newlines and the Unicode
+line/paragraph separators out of every displayed value, so no value can contain
+a line break at all. A displayed value may well contain the text `execute:`; it
+can never put that text alone on a line of its own after a blank line. The unit
+tests pin exactly that (an argv token spelling a fake stacked label leaves the
+structural newline count unchanged at 10).
+
+Sheet field order (v0.14.0):
+
+    run a command.
+
+    user:
+    root
+
+    directory:
+    /Users/jooize/Projects/claude-code-hardening
+
+    execute:
+    /run/current-system/sw/bin/pinned deploy
+
+    Verify Code: JL6E
+
+    Code must match your terminal
+
+The verify code moved from directly under the header to just above the closing
+line: read what you are approving, then bind it to the terminal, then act.
+(Order confirmed at the v0.14.0 smoke; `-DSW_SHEET_VERIFY_LAST=0` rebuilds the
+old code-first order for that one A/B. It is a temporary compile-time switch,
+not a supported knob -- no Makefile variable, no nix option -- and the losing
+order is deleted afterwards.)
 
 ### 3. Display ownership carve-out
 
