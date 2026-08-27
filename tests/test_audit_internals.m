@@ -127,10 +127,21 @@ static void test_command_line_colored(void) {
     NSString *a = sw_audit_command_line(anom, 1, YES);
     OK([a rangeOfString:@"\033[1;35m\\n\033[0m"].location != NSNotFound,
        "control escape keeps full-strength magenta over the dim base");
-    OK([a rangeOfString:@"\033[100m  \033[0m"].location != NSNotFound,
-       "a doubled space keeps its grey background over the dim base");
+    /* The whitespace mark is scoped to the program token -- the path that will
+     * execve -- so an argument's doubled space carries no grey background. */
+    OK([a rangeOfString:@"\033[100m"].location == NSNotFound,
+       "an argument's doubled space carries no grey background");
     EQ(stripSGR(a), @"/bin/echo 'a\\nb' 'x  y'",
        "the anomaly line still strips back to the plain line");
+
+    /* and the mark does appear where it belongs, at full strength over the
+     * dim base: invisible padding inside the program token. */
+    char *pad[] = { (char *)"sudo", (char *)"/tmp/my  tool", NULL };
+    NSString *p = sw_audit_command_line(pad, 1, YES);
+    OK([p rangeOfString:@"\033[100m  \033[0m"].location != NSNotFound,
+       "a doubled space in the program token keeps its grey background");
+    EQ(stripSGR(p), @"'/tmp/my  tool'",
+       "the padded program token still strips back to the plain line");
 
     /* One logical line: never split, never elided, whatever the length. */
     OK([color rangeOfString:@"\n"].location == NSNotFound,

@@ -199,7 +199,7 @@ house palette shared with `pinned`'s `prog_disp`:
 | deceptive Unicode escape `\uNNNN` | `1;31` | anomaly palette, |
 | control-byte escape `\n \r \t \0 \xNN` | `1;35` | as already shipped in |
 | shell metacharacter (`"`, backtick, `\\`, a data `'`) | `1;36` | `colorizeEscaped:` |
-| notable whitespace run | `100` (grey background) | leading/trailing/doubled |
+| notable whitespace run, program token only | `100` (grey background) | leading/trailing/doubled |
 
 The role colour is the base for a token; an anomaly span drops it, takes its own
 colour, and the role resumes after.
@@ -278,6 +278,30 @@ One accepted cost: on the `input:` line our chrome quotes (`2`, dim) stop being
 distinguishable from the base. Attribution stays legible one row down on
 `execute:`, which renders the same tokens through the same walk, so the
 information is not lost — only its second, redundant appearance is.
+
+**Delta (2026-08-27): the whitespace mark is scoped to the program token.** The
+grey background (`100`) on a notable whitespace run now applies only inside
+token[0] — the path sudo will execve — and no longer to flag or argument tokens.
+Two reasons, in order. First, the spoof surface the mark was built for is the
+program path: a trailing space, or a hidden double space, in the thing that
+runs. Second, on arguments it was drowning the display — a multi-line script
+passed as one argument (`sh -c '…'`) renders every newline as `\n` and then
+paints every line of indentation that follows it as a grey block, so the line
+filled with grey and the actual anomalies stopped standing out. Argument bytes
+lose nothing by it: they still render escaped and quoted either way, which is
+what makes them read as data.
+
+The rule is identical on both variants — inside the program token the mark stays
+a full-strength anomaly span under the dim base as under the role palette — and
+it changes no byte: escaping is untouched and the round-trip invariant (strip
+the SGR, get `sw_full_command_line`'s bytes) holds exactly as before.
+Implemented as a `mark_spaces` flag on `colorize_escaped`, passed true for the
+program token's two halves and false everywhere else, so it is one walk still.
+The pre-existing seam nuance survives inside that token: the span, not the
+token, bounds "start/end", so a single space just past the dirname/basename
+split starts the basename span and is marked where a token-level walk would call
+it interior — more emphasis on invisible padding in the program path, never
+less.
 
 ## Restyling the block around it — scope (b), DONE
 

@@ -100,6 +100,16 @@ survives unchanged — the same token list, the same quoting, the same anomaly
 classifier, one different base. See the delta at the end of the colour section
 in `docs/design-terminal-mode.md`.
 
+**Delta (2026-08-27): the grey whitespace mark is scoped to the program token.**
+On both lines. Marking notable whitespace runs in arguments turned out to fight
+the display it was meant to sharpen: a script passed as one argument (`sh -c
+'…'`) paints a grey block on every line of indentation after an escaped `\n`,
+burying the anomalies that matter. The invisible-padding spoof the mark defends
+against lives in the path that will execve, so the mark now lives there too;
+argument bytes still render escaped and quoted, which is what makes them read as
+data. Escaping, tokenisation and the round-trip invariant are untouched. Full
+rationale in the colour section of `docs/design-terminal-mode.md`.
+
 **Delta (2026-08-27): `execDisplay`, a switch for the line itself.** Added at
 the owner's request after this round shipped. "Printed ALWAYS" above describes
 the default and stays the default; `execDisplay = "off"` is an administrator

@@ -250,7 +250,16 @@ const SGR_CONTROL: &str = "\x1b[1;35m";
 /// shell metacharacters the DATA contained: " ` , the escaped backslash \\, and
 /// a ' that arrived through the `'\''` idiom (see `colorize_escaped`)
 const SGR_META: &str = "\x1b[1;36m";
-/// notable whitespace runs: grey background, so invisible padding reads as a block
+/// notable whitespace runs IN THE PROGRAM TOKEN: grey background, so invisible
+/// padding in the path that will execve reads as a block. Scoped to token[0] on
+/// purpose (2026-08-27). The spoof surface this mark exists for is the program
+/// path -- a trailing space or a hidden double space in the thing that runs.
+/// Argument tokens are data: a multi-line script passed as one argument
+/// (sh -c '...') would fill the line with grey indentation blocks after every
+/// escaped \n and drown the display, while those bytes still render escaped and
+/// quoted either way, so the mark bought emphasis on the wrong thing. The rule
+/// is identical on BOTH base variants: inside the program token the mark stays a
+/// full-strength anomaly span, dim base or role base alike.
 const SGR_SPACE: &str = "\x1b[100m";
 /// program path, directory part
 const SGR_PROG_DIR: &str = "\x1b[36m";
@@ -355,7 +364,11 @@ fn push_span(text: &str, color: &str, armed: &mut bool, out: &mut String) {
 /// underneath and single quotes split by who wrote them (see the walk below);
 /// that ObjC method has no production callers and is not kept in step on this
 /// point. Purely additive -- stripping the SGR returns `s`.
-fn colorize_escaped(s: &str, base: &str, out: &mut String) {
+///
+/// `mark_spaces` decides only whether the whitespace-run rule applies to this
+/// span: true for the program token's spans, false for flag and value tokens
+/// (see `SGR_SPACE`). Every other classification is fixed and not a parameter.
+fn colorize_escaped(s: &str, base: &str, mark_spaces: bool, out: &mut String) {
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
     let mut i = 0usize;
@@ -420,15 +433,23 @@ fn colorize_escaped(s: &str, base: &str, out: &mut String) {
             continue;
         }
 
-        // Whitespace runs. Mark a run of spaces that is >=2 long or touches the
-        // start/end of the span -- the invisible-padding cases (a trailing space
-        // on a path, a hidden double space). A single interior space is a normal
-        // separator and stays plain, so ordinary commands are unmarked. Note the
-        // span, not the line, bounds "start/end" here: the only extra boundary a
-        // per-span walk introduces is the program's dirname/basename seam, and a
-        // space there gets MARKED where the line-level walk left it plain -- more
-        // emphasis on invisible padding, never less.
-        if c == ' ' {
+        // Whitespace runs, IN THE PROGRAM TOKEN ONLY (`mark_spaces`). Mark a run
+        // of spaces that is >=2 long or touches the start/end of the span -- the
+        // invisible-padding cases (a trailing space on a path, a hidden double
+        // space). A single interior space is a normal separator and stays plain,
+        // so ordinary commands are unmarked. Note the span, not the line, bounds
+        // "start/end" here: the only extra boundary a per-span walk introduces is
+        // the program's dirname/basename seam, and a space there gets MARKED
+        // where a token-level walk would leave it plain -- more emphasis on
+        // invisible padding, never less. That seam nuance still applies, now
+        // scoped to the one token that has a seam.
+        //
+        // With `mark_spaces` false (flags, values) a space is a routine char and
+        // falls through to `push_plain` like any other: the base colour applies
+        // and no grey block is emitted. The reason is in `SGR_SPACE` -- script
+        // arguments were filling the line with grey indentation blocks, and the
+        // padding spoof the mark defends against is in the path that executes.
+        if mark_spaces && c == ' ' {
             let mut j = i + 1;
             while j < len && chars[j] == ' ' {
                 j += 1;
@@ -458,9 +479,10 @@ fn colorize_escaped(s: &str, base: &str, out: &mut String) {
 /// layered on by role: the program's directory part plain cyan and its basename
 /// bold cyan, option flags bold blue, every other token plain, our own quotes
 /// dim, and anomalous spans (deceptive Unicode, control-byte escapes, shell
-/// metacharacters, notable whitespace) in the anomaly palette on top. One
-/// logical line -- nothing is wrapped, elided or reordered, and the bytes
-/// between the SGR sequences are exactly the plain line's bytes.
+/// metacharacters, and notable whitespace runs inside the program token) in the
+/// anomaly palette on top. One logical line -- nothing is wrapped, elided or
+/// reordered, and the bytes between the SGR sequences are exactly the plain
+/// line's bytes.
 ///
 /// Option flags (a rendered token starting with '-') are coloured by user
 /// choice: colour any flag, no judgement. This is a LEXICAL mark, not a claim
@@ -489,8 +511,8 @@ pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
 /// quiet under the resolved `execute:` line, which keeps the full role palette:
 /// what sudo will actually run is the loud one, and what was typed sits under
 /// it. The anomalies are what the quiet base buys -- against a flat dim line, a
-/// red \uNNNN escape or a grey-backed double space is the only thing on the row
-/// wearing any colour at all.
+/// red \uNNNN escape, or a grey-backed double space in the program token, is the
+/// only thing on the row wearing any colour at all.
 ///
 /// The chrome quotes stay dim here too, and so stop being distinguishable from
 /// the content they wrap. That is deliberate and cheap: quote attribution is
@@ -523,22 +545,27 @@ fn render_command_line(path: &str, argv: &[&str], base: RoleBase, out: &mut Stri
             // char boundary. No '/' -> the whole token is the basename. On the
             // dim variant both halves take the same base, so the split costs one
             // redundant span and changes no byte the terminal shows.
+            //
+            // Both halves pass mark_spaces = true: this is the program, the one
+            // token whose invisible padding changes what executes.
             match rendered.rfind('/') {
                 Some(idx) => {
-                    colorize_escaped(&rendered[..=idx], base.prog_dir(), out);
-                    colorize_escaped(&rendered[idx + 1..], base.prog_base(), out);
+                    colorize_escaped(&rendered[..=idx], base.prog_dir(), true, out);
+                    colorize_escaped(&rendered[idx + 1..], base.prog_base(), true, out);
                 }
-                None => colorize_escaped(&rendered, base.prog_base(), out),
+                None => colorize_escaped(&rendered, base.prog_base(), true, out),
             }
         } else if rendered.starts_with('-') {
             // Option flag (lexical: the rendered token starts with '-'). A token
             // that needed quoting renders as '...' with a leading quote, so it
             // never reaches here -- hostile input stays data-coloured.
-            colorize_escaped(&rendered, base.flag(), out);
+            colorize_escaped(&rendered, base.flag(), false, out);
         } else {
             // Values carry no role colour on the role variant; only the anomaly
-            // palette and our own quotes mark anything inside them.
-            colorize_escaped(&rendered, base.value(), out);
+            // palette and our own quotes mark anything inside them. Spaces are
+            // not marked here: argument bytes are data, and a script argument
+            // would otherwise drown the line in grey indentation blocks.
+            colorize_escaped(&rendered, base.value(), false, out);
         }
     }
 }
@@ -1001,8 +1028,9 @@ mod tests {
         let c = colored("/bin/echo", &["echo", "sudowhat: user: evil"]);
         assert!(c.ends_with("\x1b[2m'\x1b[0m"), "unterminated quote: {c:?}");
         assert!(c.contains("\x1b[2m'\x1b[0msudowhat:"), "opening quote: {c:?}");
-        // the whitespace run rule marks the interior spaces of the quoted token
-        // only when they are runs or at an edge; single ones stay plain.
+        // the whitespace run rule does not reach an argument token at all, so
+        // the spaces inside the quotes carry no grey block.
+        assert!(!c.contains("\x1b[100m"), "argument space marked: {c:?}");
         assert_eq!(strip_sgr(&c), "/bin/echo 'sudowhat: user: evil'");
     }
 
@@ -1016,9 +1044,49 @@ mod tests {
         assert!(c.contains("\x1b[1;31m\\u202e\x1b[0m"), "unicode escape: {c:?}");
         let c = colored("/bin/echo", &["echo", "a\\b"]);
         assert!(c.contains("\x1b[1;36m\\\\\x1b[0m"), "backslash: {c:?}");
-        // notable whitespace keeps its grey background inside a quoted token.
+        // Notable whitespace is marked in the PROGRAM token, where invisible
+        // padding changes what executes.
+        let c = colored("/tmp/my  tool", &[]);
+        assert!(c.contains("\x1b[100m  \x1b[0m"), "program space run: {c:?}");
+        // and NOT in an argument token: those bytes are data, they still render
+        // escaped and quoted, and a script argument would otherwise fill the
+        // line with grey indentation blocks.
         let c = colored("p", &["p", "-x  y"]);
-        assert!(c.contains("\x1b[100m  \x1b[0m"), "space run: {c:?}");
+        assert!(!c.contains("\x1b[100m"), "argument space marked: {c:?}");
+        let c = colored("/bin/sh", &["sh", "-c", "if true; then\n  echo hi\nfi"]);
+        assert!(!c.contains("\x1b[100m"), "script argument marked: {c:?}");
+    }
+
+    #[test]
+    fn program_token_whitespace_marks_both_halves() {
+        // The program token is ONE token for the whitespace rule; the
+        // dirname/basename split exists only so the two halves can take
+        // different base colours. A doubled space in either half is marked.
+        let c = colored("/a  b/my  tool", &[]);
+        assert_eq!(strip_sgr(&c), "'/a  b/my  tool'");
+        assert_eq!(
+            c.matches("\x1b[100m  \x1b[0m").count(),
+            2,
+            "dirname and basename runs: {c:?}"
+        );
+
+        // The pre-existing seam nuance is unchanged by the narrowing: the span,
+        // not the token, bounds "start/end", so a single space just past the
+        // split starts the basename span and IS marked, where a token-level
+        // walk would have called it interior. More emphasis on invisible
+        // padding in the program path, never less.
+        let c = colored("/a/ b", &[]);
+        assert_eq!(strip_sgr(&c), "'/a/ b'");
+        assert!(c.contains("\x1b[100m \x1b[0m"), "seam space: {c:?}");
+
+        // Identical on the quiet variant -- inside the program token the mark
+        // is a full-strength anomaly span under either base.
+        let d = colored_dim("/a  b/my  tool", &[]);
+        assert_eq!(
+            d.matches("\x1b[100m  \x1b[0m").count(),
+            2,
+            "dim variant keeps both runs: {d:?}"
+        );
     }
 
     #[test]
@@ -1118,8 +1186,14 @@ mod tests {
         assert!(d.contains("\x1b[1;31m\\u202e\x1b[0m"), "unicode escape: {d:?}");
         let d = colored_dim("/bin/echo", &["echo", "a\\b"]);
         assert!(d.contains("\x1b[1;36m\\\\\x1b[0m"), "backslash metachar: {d:?}");
+        // The whitespace mark is scoped to the program token on this variant
+        // exactly as on the other one, and it keeps full strength there.
+        let d = colored_dim("/tmp/my  tool", &[]);
+        assert!(d.contains("\x1b[100m  \x1b[0m"), "program space run: {d:?}");
         let d = colored_dim("p", &["p", "-x  y"]);
-        assert!(d.contains("\x1b[100m  \x1b[0m"), "space run: {d:?}");
+        assert!(!d.contains("\x1b[100m"), "argument space marked: {d:?}");
+        // the argument's spaces render on the quiet base like any routine char.
+        assert!(d.contains("\x1b[2m"), "argument lost the dim base: {d:?}");
         // An anomaly inside the program token drops the base for its span and
         // the base resumes after it, exactly as on the role variant.
         let d = colored_dim("/bin/\u{202e}sh", &[]);
@@ -1158,12 +1232,15 @@ mod tests {
     }
 
     /// Colourise ONE token exactly as `colored_command_line` does for a non-
-    /// program token: quote it, then walk it with no role colour underneath.
+    /// program token: quote it, then walk it with no role colour underneath and
+    /// no whitespace marking (that rule is scoped to the program token, so a
+    /// helper modelling a value token must pass mark_spaces = false or it would
+    /// pin behaviour no production call site produces).
     fn colored_token(t: &str) -> String {
         let mut rendered = String::new();
         quote_token(t, &mut rendered);
         let mut out = String::new();
-        colorize_escaped(&rendered, "", &mut out);
+        colorize_escaped(&rendered, "", false, &mut out);
         out
     }
 

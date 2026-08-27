@@ -378,6 +378,20 @@ static void test_colored_hostile_and_anomalies(void) {
     NSString *bidi = rustColoredCmd(@"/bin/echo", @[@"echo", cat(uni(0x202e), @"x")]);
     OK([bidi containsString:@"\033[1;31m\\u202e\033[0m"],
        "deceptive Unicode escape is red");
+
+    /* Notable whitespace is marked in the PROGRAM token, where invisible
+     * padding changes what execve gets -- and nowhere else. An argument's
+     * spaces stay unmarked: those bytes are data, they render escaped and
+     * quoted either way, and a script argument would otherwise fill the line
+     * with grey indentation blocks after every escaped newline. */
+    NSString *progPad = rustColoredCmd(@"/tmp/my  tool", @[]);
+    OK([progPad containsString:@"\033[100m  \033[0m"],
+       "a doubled space in the program token is grey-backed");
+    NSString *argPad = rustColoredCmd(@"/bin/echo", @[@"echo", @"a  b"]);
+    OK([argPad rangeOfString:@"\033[100m"].location == NSNotFound,
+       "an argument's doubled space carries no grey background");
+    EQ(stripSGR(argPad), @"/bin/echo 'a  b'",
+       "and the argument still round-trips to the plain line");
 }
 
 /* The dim variant, which the audit bundle's input: line uses: the routine roles
@@ -398,9 +412,13 @@ static void test_colored_dim_variant(void) {
     NSString *bidi = rustColoredDimCmd(@"/bin/echo", @[@"echo", cat(uni(0x202e), @"x")]);
     OK([bidi containsString:@"\033[1;31m\\u202e\033[0m"],
        "deceptive Unicode escape keeps full-strength red over the dim base");
-    NSString *pad = rustColoredDimCmd(@"/bin/echo", @[@"echo", @"a  b"]);
+    NSString *pad = rustColoredDimCmd(@"/tmp/my  tool", @[]);
     OK([pad containsString:@"\033[100m  \033[0m"],
-       "a doubled space keeps its grey background over the dim base");
+       "a doubled space in the program token keeps its grey background over "
+       "the dim base");
+    NSString *argPad = rustColoredDimCmd(@"/bin/echo", @[@"echo", @"a  b"]);
+    OK([argPad rangeOfString:@"\033[100m"].location == NSNotFound,
+       "an argument's doubled space renders dim, with no grey background");
 }
 
 /* A couple of explicit sanity checks so a totally broken Rust build fails

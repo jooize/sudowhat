@@ -176,7 +176,11 @@ in {
           in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
           metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
           and notable whitespace runs (leading, trailing, or doubled spaces)
-          shown on a grey background.
+          shown on a grey background IN THE PROGRAM TOKEN ONLY -- the path that
+          will execve, where invisible padding changes what runs. Argument
+          tokens do not take that mark: a script passed as one argument would
+          turn every escaped newline's indentation into a grey block, and those
+          bytes render escaped and quoted either way.
 
           The `input:` value takes the same anomaly palette over a QUIET base:
           its routine tokens — program, flags and values alike — all render

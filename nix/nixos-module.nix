@@ -61,7 +61,10 @@ in {
         - `off` emits the display with no colour at all.
         - `on` (the default) is intended to wrap only anomaly spans
           (deceptive Unicode escapes, control-byte escapes, shell metacharacters,
-          notable whitespace) in a fixed reviewed palette, over a quiet base:
+          and notable whitespace runs in the program token -- that last mark is
+          scoped to the path that will execve, so a script argument does not
+          fill the line with grey indentation blocks) in a fixed reviewed
+          palette, over a quiet base:
           as on macOS, the `input:` value's routine tokens are meant to render
           dim so the anomaly spans are the only coloured thing on the row.
 

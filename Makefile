@@ -34,9 +34,12 @@ endif
 # a reader, so one token settles both; each bundle carries its own copy of the
 # token machinery (separate Mach-O images, no shared translation unit). Under
 # "on" the command line is highlighted by role
-# (program dirname plain cyan, basename bold cyan, option flags dim, values
+# (program dirname plain cyan, basename bold cyan, option flags bold blue, values
 # plain) with deceptive Unicode / control-byte escapes, shell metacharacters and
-# notable whitespace in a fixed reviewed palette on top - sudowhat's threat
+# notable whitespace runs IN THE PROGRAM TOKEN (the path that will execve, where
+# invisible padding changes what runs - argument tokens do not take that mark,
+# or a script argument would fill the line with grey indentation blocks) in a
+# fixed reviewed palette on top - sudowhat's threat
 # model. It stays ONE line: the SGR goes around the already-escaped tokens, so
 # stripping it returns the plain line byte for byte, and the isatty / NO_COLOR /
 # TERM=dumb gates keep it off non-terminals. An unknown value normalizes to
