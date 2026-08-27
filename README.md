@@ -27,7 +27,7 @@ sudowhat: execute:    /bin/echo hello
         │                                  │
         │      Verify Code: Z96E           │
         │      Code must match your        │
-        │      terminal                    │
+        │      terminal.                   │
         │                                  │
         │   [ Touch ID / Watch / Password ]│
         └──────────────────────────────────┘
@@ -57,29 +57,32 @@ biometrically approve a sudoers takeover.
 **sudowhat closes that wedge.** The system-trusted Touch ID dialog displays the
 resolved command path and arguments — the same bytes sudo will pass to
 `execve` — *before* you authorize. Argv tokens are shell-quoted; backslashes
-and control characters are escaped (named — `\n`, `\r`, `\t`, `\0`, `\\` — or
-hex — `\xNN`, `\uNNNN`) so the rendered prompt is unambiguous about its source
+and control characters are escaped (named: `\n`, `\r`, `\t`, `\0`, `\\`; or
+hex: `\xNN`, `\uNNNN`) so the rendered prompt is unambiguous about its source
 bytes. An attacker cannot smuggle hidden lines into the prompt, nor can a
 literal `\n` in argv pose as a real newline.
 
 ## What you get
 
-- **The exact command in the Touch ID sheet** — resolved path and arguments,
-  escaped so nothing can hide, shown before you approve.
-- **A verify code** on the terminal that launched sudo, matching the code in
-  the sheet — a prompt you did not start shows a code on no terminal you can
-  see.
-- **A terminal ceremony before any auth**: `run as`, `directory`, `input`
+- **Exact command in the Touch ID sheet**: resolved path and arguments,
+  escaped so nothing can hide, shown before you approve. The sheet has a
+  length budget; a value too long for it is replaced whole by
+  `(see terminal)`, where the full command already is.
+- **A verify code ties the sheet to your terminal**: the same short code
+  prints on the terminal that launched sudo and inside the sheet. A prompt
+  you did not initiate shows no code on any terminal you are watching.
+- **Terminal ceremony before any auth**: `run as`, `directory`, `input`
   (what you typed), `path:` for bare names, and `execute:` (what sudo
-  resolved) — a shadowed `PATH` entry shows up as `input:` and `execute:`
+  resolved). A shadowed `PATH` entry shows up as `input:` and `execute:`
   simply disagreeing.
-- **Console-only biometric**: an SSH or headless caller is *never* shown a
-  sheet on your screen — it gets sudo's native password on its own terminal,
+- **Console-only biometric**: an SSH or headless caller is never shown a
+  sheet on your screen. It gets sudo's native password on its own terminal,
   or is denied. Structural, not a setting.
-- **Fail-closed integrity**: three signed bundles verify each other's code
-  signature on every run; any failure aborts sudo.
+- **Tamper-evident integrity**: the three signed bundles verify each other's
+  code signature on every run. Any verification failure aborts sudo instead
+  of falling back to a password.
 - **Per-command prompts** by default (sudo's auth cache off), and deference to
-  your own sudoers policy — `NOPASSWD` commands run without a sheet, still
+  your own sudoers policy: `NOPASSWD` commands run without a sheet, still
   disclosed on the terminal.
 - **Linux**: the terminal command display, ported as a single pure-Rust plugin
   (no biometric; see [Linux](#linux-terminal-command-display)).
@@ -87,17 +90,17 @@ literal `\n` in argv pose as a real newline.
 ## Standalone by design
 
 sudowhat is a standalone tool that benefits **every** `sudo` invocation on the
-host, whatever launched it — a shell, a Makefile, a package manager, a bespoke
+host, whatever launched it: a shell, a Makefile, a package manager, a bespoke
 ceremony. It is not a component of any one workflow and takes no direction from
 its callers: its disclosure is unconditional, with no caller-settable knob to
 silence it.
 
 The corollary matters for anyone building on top of it: **no tool may assume
 sudowhat is installed.** A program that shells out to `sudo` must display what
-it is about to run, and must be safe and complete, entirely on its own —
+it is about to run, and must be safe and complete, entirely on its own.
 sudowhat is defense in depth *layered over* that, never a dependency it can
 lean on. Callers cannot rely on sudowhat (it may be absent), and sudowhat does
-not rely on — or obey — callers. Each stands alone.
+not rely on, or obey, callers. Each stands alone.
 
 ## Authentication methods
 
@@ -125,16 +128,16 @@ Requires macOS 15 or later (the prompt uses a LocalAuthentication policy added
 in macOS 15) and the Xcode Command Line Tools.
 
 > [!WARNING]
-> **Installing this edits sudo's own configuration — do it deliberately.** It
+> **Installing this edits sudo's own configuration. Do it deliberately.** It
 > writes `/etc/sudo.conf`, `/etc/pam.d/sudo_local`, and `/etc/sudoers.d/sudowhat`
 > (on Linux, the audit plugin needs `/etc/sudo.conf`). A malformed sudo/PAM
-> config can make `sudo` refuse to run — and you may need `sudo` to fix it. The
+> config can make `sudo` refuse to run, and you may need `sudo` to fix it. The
 > installer validates its edits and rolls back on failure, but before you run it,
 > **keep a separate root shell open** (`sudo -s` in another terminal, or a root
 > console / VM snapshot) so a broken `sudo` is always recoverable. On Linux in
 > particular, adding *any* `Plugin` line to `/etc/sudo.conf` disables sudo's
 > default sudoers auto-load, so the file must re-declare the stock `sudoers.so`
-> plugins or every `sudo` fails — the Nix module and the sample config do this;
+> plugins or every `sudo` fails. The Nix module and the sample config do this;
 > a hand-edited file must too.
 
 ```sh
@@ -152,19 +155,20 @@ Verify:
 sudo -k && sudo /bin/echo hello
 ```
 
-A Touch ID dialog should pop up showing `/bin/echo hello`. Approve to run;
-cancel to deny — sudo prints `sudowhat: authorization denied: ...` and exits
+A Touch ID dialog should pop up showing `/bin/echo hello`. Approve to run.
+Cancel to deny: sudo prints `sudowhat: authorization denied: ...` and exits
 non-zero.
 
-Remove with `sudo make uninstall` — it restores stock sudo behavior, reverting
+Remove with `sudo make uninstall`. It restores stock sudo behavior, reverting
 everything the install added (the three `.so` bundles, the two `/etc` files it
 creates, and the two lines it appends to `/etc/sudo.conf`).
 
 ### nix-darwin
 
-If you manage your Mac with nix-darwin, install everything declaratively — the
+If you manage your Mac with nix-darwin, install everything declaratively: the
 binaries live in the Nix store, and the three `/etc` files are owned by
-nix-darwin, rotated atomically with the package:
+nix-darwin, rotated atomically with the package. Add the flake to your darwin
+configuration:
 
 ```nix
 {
@@ -184,7 +188,7 @@ nix-darwin, rotated atomically with the package:
 To audit before depending, pin to a local clone (`git+file:///path/to/clone`)
 or a reviewed commit (`github:jooize/sudowhat/<sha>`).
 
-Every setting is baked into the signed bundles at build time — there is no
+Every setting is baked into the signed bundles at build time: there is no
 runtime configuration to tamper with. The module options
 (`services.sudowhat.*`):
 
@@ -223,11 +227,11 @@ signature. No daemon, no agent, no IPC.
 ```mermaid
 flowchart TD
     S(["sudo …"]) --> A["audit plugin: prints run as /<br/>directory / input on your terminal,<br/>before any authentication<br/>(root callers exempt)"]
-    A --> P["mutual signature verification:<br/>each bundle checks the others —<br/>any failure aborts sudo"]
+    A --> P["mutual signature verification:<br/>each bundle checks the others;<br/>any failure aborts sudo"]
     P --> W{"who is calling?"}
-    W -- "root (uid 0)" --> R["exempt: automation, not escalation<br/>— logged to the auth log"]
+    W -- "root (uid 0)" --> R["exempt: automation, not escalation<br/>(logged to the auth log)"]
     W -- "local console user" --> PD{"did sudoers require<br/>authentication?"}
-    W -- "SSH / headless" --> N["sudo's native password on the<br/>caller's own terminal (default),<br/>or denied — never a sheet<br/>on the console screen"]
+    W -- "SSH / headless" --> N["sudo's native password on the<br/>caller's own terminal (default),<br/>or denied; never a sheet<br/>on the console screen"]
     PD -- "no: NOPASSWD /<br/>cached credential" --> RUN(["command runs"])
     PD -- "yes" --> T["verify code + resolved execute:<br/>on the terminal, then the Touch ID<br/>sheet showing the exact command"]
     T -- "approve" --> RUN
@@ -240,11 +244,11 @@ In order, within one `sudo` invocation:
 
 1. **Audit plugin** (`sudowhat_audit.so`) runs before any auth and prints the
    `run as / directory / input` block (plus `path:` for a bare command name)
-   to `/dev/tty` — every path, biometric or password, with all escaping done
+   to `/dev/tty` on every path, biometric or password, with all escaping done
    in the memory-safe Rust `escape_core`.
 2. **PAM module** (`pam_sudowhat.so`, wired into `/etc/pam.d/sudo_local`)
    verifies the other bundles' signatures and that `/etc/sudo.conf` still
-   loads the approval plugin — then acts as the console gate: the local
+   loads the approval plugin, then acts as the console gate: the local
    console user passes without a password, everyone else falls through to
    sudo's native password stack.
 3. **Approval plugin** (`sudowhat_approval.so`) verifies its peers, classifies
@@ -254,9 +258,9 @@ In order, within one `sudo` invocation:
    with the exact command. It re-stats the target binary after approval and
    denies if it changed.
 
-The full pipeline — the exact PAM chain, the `SessionGetInfo` classification,
-and the rationale for every decision — is in
-[docs/security-design.md](docs/security-design.md).
+The full pipeline is in [docs/security-design.md](docs/security-design.md):
+the exact PAM chain, the `SessionGetInfo` classification, and the rationale
+for every decision.
 
 ## Security model
 
@@ -275,16 +279,16 @@ and identifier "<bundle>"                                -- signed as THIS bundl
 Another team's signature fails, a same-team Apple *Development* certificate
 fails, and a different binary your own team signed fails. The default dev build
 checks signature integrity only (see [Build modes](#build-modes)). In all
-builds this is tamper *evidence*, not a barrier against root — an attacker who
+builds this is tamper *evidence*, not a barrier against root: an attacker who
 can replace root-owned bundles could equally disable the check.
 
 **Fail-closed.** Any failure of any component aborts sudo. No path falls back
-to `pam_tid.so`-style permissive defaults — that is the behavior being fixed.
+to `pam_tid.so`-style permissive defaults; that is the behavior being fixed.
 
 **Policy deference.** The plugins run on every sudo, but the *decision* to
 authenticate stays with your sudoers policy: when sudoers waived it
 (`NOPASSWD`, `Defaults !authenticate`, a cached credential), the console prompt
-is skipped and the command just runs — already disclosed on the terminal by the
+is skipped and the command just runs, already disclosed on the terminal by the
 audit plugin. Fail-safe in every uncertain direction: a caller can only ever
 *force* a prompt, never suppress one.
 
@@ -292,13 +296,13 @@ audit plugin. Fail-safe in every uncertain direction: a caller can only ever
 a plugin cannot constrain root anyway; gating it would only break root-context
 automation (nix-darwin activation, launchd jobs) without adding security.
 
-The complete argument for each of these — and for what sudowhat deliberately
-does *not* do — is in [docs/security-design.md](docs/security-design.md).
+The complete argument for each of these, and for what sudowhat deliberately
+does *not* do, is in [docs/security-design.md](docs/security-design.md).
 
 ## Console vs. non-console callers
 
-sudowhat decides *where* a caller may authenticate by its security session — a
-local GUI login versus a remote or headless one — not by uid. A caller running
+sudowhat decides *where* a caller may authenticate by its security session (a
+local GUI login versus a remote or headless one), not by uid. A caller running
 as the same user as the console login but over SSH is still treated as
 non-console.
 
@@ -310,16 +314,16 @@ non-console.
 | Root (uid 0) | Allowed, logged to the auth log | Allowed, logged to the auth log |
 
 ¹ Skipped when sudoers waived authentication for the command (policy
-deference, on by default), so the command just runs — still disclosed on the
+deference, on by default), so the command just runs, still disclosed on the
 terminal.
 
 A non-console caller is **never** shown a biometric / Authorization Services
-sheet, which would render on the console user's screen — that impossibility is
+sheet, which would render on the console user's screen; that impossibility is
 structural and not configurable
 ([why](docs/security-design.md#non-console-defense-ssh-automation)).
 `nonConsole` grants no authority on its own: sudoers still decides who may run
 what. A background process inside your **local GUI login** shares that login's
-session and is classified as console — see
+session and is classified as console; see
 [Known limitations](#known-limitations).
 
 ## What gets installed
@@ -338,7 +342,7 @@ the install survives system updates that touch `/etc/pam.d/sudo`.
 
 ## Build modes
 
-**Dev / ad-hoc** (default — no Apple Developer account required):
+**Dev / ad-hoc** (default; no Apple Developer account required):
 
 ```sh
 make sign
@@ -360,14 +364,14 @@ Bundles are signed with your Developer ID Application certificate, each under
 its own pinned signing identifier. The code requirement is enforced at
 runtime: tampering breaks the signature, and substitution is detected whether
 the replacement is signed by another team, by a same-team Apple Development
-certificate, or is a *different* binary your own team signed — see
+certificate, or is a *different* binary your own team signed. See
 [Security model](#security-model) for the exact requirement.
 
 ## Linux (terminal command display)
 
 Linux has no Touch ID, so it gets the **display**, not the biometric. A sudo
-audit plugin — a single pure-Rust `.so` reusing the same anti-spoofing core as
-macOS — prints `run as / directory / input` to your terminal *before* sudo's
+audit plugin (a single pure-Rust `.so` reusing the same anti-spoofing core as
+macOS) prints `run as / directory / input` to your terminal *before* sudo's
 native `pam_unix` password prompt, so you read the exact command before you
 type your password:
 
@@ -382,11 +386,11 @@ sudowhat: input: systemctl restart nginx
 **Display-only, by design.** No verify code (no GUI sheet to bind one to), no
 approval plugin or `execute:` line, no `path:` row (macOS-only for now), no PAM
 module: sudo's own authentication is untouched. The trust model: sudo
-perm-checks `/etc/sudo.conf` only — a config not owned by root, or writable by
+perm-checks `/etc/sudo.conf` only. A config not owned by root, or writable by
 group or other, is ignored, fail-closed (`sudo.conf(5)`). sudo does **not**
 perm-check the plugin `.so`; it is protected by ordinary permissions on its
 root-owned install path, which the installer enforces and verifies. There is
-**no code-signing anchor and no tamper-evidence** on Linux — an attacker with
+**no code-signing anchor and no tamper-evidence** on Linux: an attacker with
 root can swap the plugin. Linux gets the UX, not the tamper-evidence. The
 plugin fails soft (no terminal, no command, or bad input shows nothing and
 never breaks sudo), every token is shell-quoted and control-character escaped,
@@ -406,7 +410,7 @@ output goes to `/dev/tty` only, and the root invoker is exempt.
 The module writes `/etc/sudo.conf`. **Important:** on Linux, adding any
 `Plugin` line to `sudo.conf` stops sudo from auto-loading its default sudoers
 policy, so the file must re-declare the stock `sudoers.so` plugins alongside
-ours — the module (and `config/linux/sudo.conf.sample`) does this for you.
+ours. The module (and `config/linux/sudo.conf.sample`) does this for you.
 
 **Manual install:**
 
@@ -434,7 +438,7 @@ unit-test vectors.
 | Latest release | `v0.15.0` |
 | Tested on | macOS Tahoe (Darwin 25.4–25.5) |
 | Architecture | Apple silicon (arm64) |
-| Linux | Audit-plugin display, native PAM password, no tamper-evidence — validated on Debian 12 / sudo 1.9.13p3 / aarch64+x86_64 (`docs/design-linux-port.md`) |
+| Linux | Audit-plugin display, native PAM password, no tamper-evidence; validated on Debian 12 / sudo 1.9.13p3 / aarch64+x86_64 (`docs/design-linux-port.md`) |
 | Signing | ad-hoc dev mode shipped; Developer ID release planned |
 
 ## Known limitations
@@ -460,13 +464,13 @@ form:
 - **Ad-hoc dev mode is integrity-only.** Any validly signed substitute passes;
   use a Developer ID release build outside personal local use.
 - **`sudo bash`, interactive editors.** Approving a shell opens unbounded
-  post-approval risk — inherent to all sudo-likes; sudowhat shows what is being
+  post-approval risk, inherent to all sudo-likes; sudowhat shows what is being
   launched but cannot constrain what happens inside it.
 - **GUI session detached.** Fast-user-switched-out sessions fail the biometric
-  call; the plugin denies — fail-closed.
+  call; the plugin denies, fail-closed.
 - **Generic icon in the prompt.** macOS takes the sheet icon from the calling
   process (`sudo`, no app bundle), and `LAContext` has no override API. Fixing
-  it would need a helper `.app` and IPC — the agent design this project
+  it would need a helper `.app` and IPC, the agent design this project
   rejected.
 - **Prompt budget verified in English only.** The sheet text stays under a
   conservative 480-char budget (LA truncates silently around ~510), measured
