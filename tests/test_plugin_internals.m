@@ -289,7 +289,7 @@ static void test_verify_line_format_and_color(void) {
 }
 
 /* The execute: line -- the RESOLVED command, this plugin's half of the display
- * carve-out (docs/design-resolved-exec.md). The audit plugin owns user:,
+ * carve-out (docs/design-resolved-exec.md). The audit plugin owns run as:,
  * directory: and input:, which are all sudo has produced before resolution;
  * this plugin owns verify:, the sheet, and execute:, which exist only after it.
  *

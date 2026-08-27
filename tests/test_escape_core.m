@@ -278,7 +278,7 @@ static void test_colored_preserves_bytes(void) {
         @[@"/run/current-system/sw/bin/pinned",
           @[@"pinned", @"review", @"--file", @"/Library/App Support/x.json"]],
         @[@"/bin/echo", @[@"echo", @"a b", @"a'b", @"-", @"--", @"-x"]],
-        @[@"/bin/echo", @[@"echo", @"sudowhat: user: evil"]],
+        @[@"/bin/echo", @[@"echo", @"sudowhat: run as: evil"]],
         @[@"/bin/echo", @[@"echo", @"...", @"  padded  ", @""]],
         @[@"/usr/bin/日本", @[@"日本", @"café", @"😀"]],
         @[@"/a b/prog name", @[@"prog name"]],
@@ -364,12 +364,12 @@ static void test_colored_quote_attribution(void) {
  * the quotes carry the metachar colour -- it reads as data, not as a real
  * sudowhat line. The anomaly palette is the one PromptFormatter already ships. */
 static void test_colored_hostile_and_anomalies(void) {
-    NSString *hostile = rustColoredCmd(@"/bin/echo", @[@"echo", @"sudowhat: user: evil"]);
+    NSString *hostile = rustColoredCmd(@"/bin/echo", @[@"echo", @"sudowhat: run as: evil"]);
     OK([hostile containsString:@"\033[2m'\033[0msudowhat:"],
        "hostile token opens with one of our own (dim) quotes");
     OK([hostile hasSuffix:@"\033[2m'\033[0m"],
        "hostile token closes with one of our own (dim) quotes");
-    EQ(stripSGR(hostile), @"/bin/echo 'sudowhat: user: evil'",
+    EQ(stripSGR(hostile), @"/bin/echo 'sudowhat: run as: evil'",
        "hostile token is quoted, not structural");
 
     NSString *nl = rustColoredCmd(@"/bin/echo", @[@"echo", cat(cat(@"a", uni(0x0a)), @"b")]);

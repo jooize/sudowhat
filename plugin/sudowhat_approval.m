@@ -287,7 +287,7 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * with it. The two plugins are separate bundles that never share a translation
  * unit, so the width is duplicated rather than shared; if one moves, move both.
  *
- * The gutter family is now six labels across the two bundles: user:, directory:,
+ * The gutter family is now six labels across the two bundles: run as:, directory:,
  * input: and path: from the audit plugin, then verify: and execute: from this
  * one.
  * Every value starts at column 22 (10 bytes of "sudowhat: " plus the 12-wide
@@ -445,7 +445,7 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  * The `execute:` line -- the RESOLVED command.
  *
  * DISPLAY OWNERSHIP (docs/design-resolved-exec.md, section 3). The audit plugin
- * (plugin/sudowhat_audit.m) owns the PRE-AUTH block -- user:, directory:,
+ * (plugin/sudowhat_audit.m) owns the PRE-AUTH block -- run as:, directory:,
  * input:, and path: (the caller's PATH, shown only for a bare command name;
  * not a claim about the final resolution PATH, which sudoers secure_path may
  * override) -- everything that exists before sudo has resolved the command. This
@@ -533,7 +533,7 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
 /* Which of those two frames an emit site asks for.
  *
  * GROUPED (every site but one): the label is padded out to the shared 12-col
- * gutter so the value lands in the same column as the audit block's user: /
+ * gutter so the value lands in the same column as the audit block's run as: /
  * directory: / input: rows and the verify: line. That column is the entire
  * reason the two bundles duplicate the width rather than share it.
  *

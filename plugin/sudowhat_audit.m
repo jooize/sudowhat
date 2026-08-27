@@ -12,7 +12,7 @@
  * no command. See docs/design-terminal-mode.md.
  *
  * DISPLAY OWNERSHIP CARVE-OUT (docs/design-resolved-exec.md, section 3). This
- * plugin owns everything that exists BEFORE resolution: user:, directory:,
+ * plugin owns everything that exists BEFORE resolution: run as:, directory:,
  * input: -- the command as the user typed it, which is all sudo has produced at
  * this point -- and path:, the caller's PATH as handed to sudo, shown only when
  * the typed command is a bare name (the surface that steers how that name will
@@ -271,7 +271,7 @@ static BOOL sw_audit_is_bare_name(const char *cmd) {
  * failed. Fail-soft like everything else here -- any doubt shows no row, never
  * a broken block.
  *
- * The value is escaped through the same one core as user: and directory:
+ * The value is escaped through the same one core as run as: and directory:
  * (escape_core's sw_escape_control), so a PATH entry carrying control bytes or
  * deceptive Unicode reaches the terminal as text, never as bytes. */
 static NSString *sw_audit_path_row_value(char * const submit_argv[],
@@ -348,7 +348,7 @@ static BOOL sw_audit_color_allowed(char * const envp[]) {
  * lands in the middle of somebody else's output, so each line has to carry its
  * own provenance. The approval plugin's verify: and execute: lines
  * (SW_VERIFY_PREFIX, SW_EXEC_PREFIX) are further fields in the same gutter, so
- * six labels across two bundles -- user:, directory:, input:, path: here,
+ * six labels across two bundles -- run as:, directory:, input:, path: here,
  * verify: and execute: there -- share this one width; keep them in step. */
 #define SW_AUDIT_GUTTER 12
 
@@ -519,7 +519,7 @@ static int sudowhat_audit_open(unsigned int version,
         NSString *userValue = color ? sw_audit_color_user(userLine) : userLine;
 
         NSMutableString *block = [NSMutableString string];
-        [block appendString:sw_audit_row(@"user:", userValue, color)];
+        [block appendString:sw_audit_row(@"run as:", userValue, color)];
         if (dirLine.length > 0) {
             NSString *dirValue = color ? sw_audit_color_dir(dirLine) : dirLine;
             [block appendString:sw_audit_row(@"directory:", dirValue, color)];
@@ -528,7 +528,7 @@ static int sudowhat_audit_open(unsigned int version,
 
         /* path: sits directly after input: because it QUALIFIES that row: it is
          * the environment that decides how the bare name just shown will
-         * resolve. Value plain -- the same treatment user: and directory: get by
+         * resolve. Value plain -- the same treatment run as: and directory: get by
          * default -- because it earns no role colour: it is one opaque string,
          * not a token walk, and the yellow/cyan the frame spends elsewhere
          * already mean specific things.

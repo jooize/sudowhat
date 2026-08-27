@@ -56,7 +56,7 @@ sheet). Printed ALWAYS -- a predictable ceremony beats a clever conditional,
 and "only sometimes present" would itself need explaining.
 
 **Delta (2026-08-27): the root-bypass line is solo.** The gutter above exists
-to align siblings — `user:`, `directory:`, `input:`, `verify:`. On the
+to align siblings — `run as:`, `directory:`, `input:`, `verify:`. On the
 root-bypass path there are none: the audit plugin exempts uid 0, so no block
 precedes the line, and `verify:` is raised only on the console biometric path,
 which that branch returns before reaching. That one emit site therefore prints
@@ -156,7 +156,7 @@ terminal carries the full resolved line in both modes.
 
 ### 2. Honest labels
 
-    sudowhat: user:       root
+    sudowhat: run as:     root
     sudowhat: directory:  /Users/jooize/Projects/claude-code-hardening
     sudowhat: input:      pinned deploy
     sudowhat: path:       /run/current-system/sw/bin:/usr/bin:/bin
@@ -182,20 +182,28 @@ Dropping the as-typed line entirely was considered and rejected: in
 terminal-password mode it is the only command display that exists before the
 password is typed, and without the pair the divergence signal disappears.
 
-**The sheet follows the same grammar (v0.14.0).** Its stacked labels were
-`USER` / `DIRECTORY` / `COMMAND` and are now `user:` / `directory:` /
-`execute:` -- the same words as the terminal, and `execute:` for the same
-reason: the sheet is fed `command_info["command"]`, so its value genuinely is
-the resolved path that will run. The caps used to carry the label-vs-value
-distinction on a surface with no bold and no colour; the trailing colon carries
-it now, and it reads as one vocabulary across both surfaces instead of two.
+**The sheet's stacked labels (settled at the v0.14.0 smoke).** They have worn
+three spellings: `USER` / `DIRECTORY` / `COMMAND` originally, a lowercase
+colon grammar `user:` / `directory:` / `execute:` briefly, and finally
+`RUN AS` / `DIRECTORY` / `EXECUTE` -- the caps back, the colons gone. On a
+surface with no bold and no colour the caps carry the label-vs-value
+distinction better than a trailing colon did, and `RUN AS` names what the
+value actually is -- the runas target -- where a bare `USER` read ambiguously
+on a two-second glance. `EXECUTE` keeps the referent fix from the colon round:
+the sheet is fed `command_info["command"]`, so its value genuinely is the
+resolved path that will run, the same referent as the terminal's `execute:`
+row. The terminal's own row was renamed `user:` -> `run as:` in the same
+round (`run as user:` was considered for greppability and rejected -- at 12
+characters it would have widened the shared gutter and shifted every value
+right), so the two surfaces still speak one vocabulary for the field where
+the name matters most.
 
 Losing the caps costs nothing structurally, because the caps were never the
 anti-forgery mechanism. What makes a label unforgeable is its *shape*: a real
 label sits alone on its own line, directly after a blank line, with its value
 on the line below -- and `escapeControlChars` strips newlines and the Unicode
 line/paragraph separators out of every displayed value, so no value can contain
-a line break at all. A displayed value may well contain the text `execute:`; it
+a line break at all. A displayed value may well contain the text `EXECUTE`; it
 can never put that text alone on a line of its own after a blank line. The unit
 tests pin exactly that (an argv token spelling a fake stacked label leaves the
 structural newline count unchanged at 10).
@@ -204,13 +212,13 @@ Sheet field order (v0.14.0):
 
     run a command.
 
-    user:
+    RUN AS
     root
 
-    directory:
+    DIRECTORY
     /Users/jooize/Projects/claude-code-hardening
 
-    execute:
+    EXECUTE
     /run/current-system/sw/bin/pinned deploy
 
     Verify Code: JL6E
@@ -219,10 +227,9 @@ Sheet field order (v0.14.0):
 
 The verify code moved from directly under the header to just above the closing
 line: read what you are approving, then bind it to the terminal, then act.
-(Order confirmed at the v0.14.0 smoke; `-DSW_SHEET_VERIFY_LAST=0` rebuilds the
-old code-first order for that one A/B. It is a temporary compile-time switch,
-not a supported knob -- no Makefile variable, no nix option -- and the losing
-order is deleted afterwards.)
+The order was A/B'd at the v0.14.0 smoke via a temporary
+`-DSW_SHEET_VERIFY_LAST` compile-time switch; code-last won, and the losing
+code-first order was deleted along with the switch.
 
 ### 3. Display ownership carve-out
 
@@ -230,7 +237,7 @@ order is deleted afterwards.)
 command display. This round adds a stated carve-out rather than an exception
 by accident:
 
-- **audit plugin** owns the PRE-AUTH block (`user:`/`directory:`/`input:`/
+- **audit plugin** owns the PRE-AUTH block (`run as:`/`directory:`/`input:`/
   `path:`/`verify:`) -- everything that exists before resolution.
 - **approval plugin** owns DECISION-ADJACENT display -- the sheet and the
   `execute:` line -- everything that exists only after resolution.
@@ -280,7 +287,7 @@ site in `plugin/sudowhat_audit.m`.
 
 *Rendering.* Label `path:` (5 chars) in the existing 12-column gutter, bold
 under colour like every other label; the value escaped through the one shared
-core (`sw_escape_control`, the same call `user:` and `directory:` take) and
+core (`sw_escape_control`, the same call `run as:` and `directory:` take) and
 rendered **plain** — no role colour, no dim. It is one opaque string, not a
 token walk, and yellow and cyan already mean specific things in this block.
 One logical line; the terminal soft-wraps; nothing truncated. Fail-soft like

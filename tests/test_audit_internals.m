@@ -152,9 +152,9 @@ static void test_command_line_colored(void) {
     /* A hostile token spelled like one of our own display lines lands quoted and
      * coloured as data, so it cannot pass for a real sudowhat line. */
     char *evil[] = { (char *)"sudo", (char *)"/bin/echo",
-                     (char *)"sudowhat: user: evil", NULL };
+                     (char *)"sudowhat: run as: evil", NULL };
     NSString *e = sw_audit_command_line(evil, 1, YES);
-    EQ(stripSGR(e), @"/bin/echo 'sudowhat: user: evil'",
+    EQ(stripSGR(e), @"/bin/echo 'sudowhat: run as: evil'",
        "hostile token stays quoted under colour");
     OK([e hasSuffix:@"\033[2m'\033[0m"],
        "its closing quote is still its own span -- chrome, dim like the base");
@@ -172,8 +172,8 @@ static void test_command_line_nothing_to_show(void) {
  * a table; the "sudowhat: " prefix stays on every row because the block lands
  * mid-stream in output we do not own. */
 static void test_frame_gutter(void) {
-    EQ(sw_audit_row(@"user:", @"root", NO),
-       @"sudowhat: user:       root\n", "user: padded to the gutter");
+    EQ(sw_audit_row(@"run as:", @"root", NO),
+       @"sudowhat: run as:     root\n", "run as: padded to the gutter");
     EQ(sw_audit_row(@"directory:", @"/x", NO),
        @"sudowhat: directory:  /x\n", "the longest label keeps its two spaces");
     EQ(sw_audit_row(@"input:", @"id", NO),
@@ -186,18 +186,18 @@ static void test_frame_gutter(void) {
     /* Every value lands in the same column -- the whole point of the gutter,
      * and the reason the approval plugin's verify: and execute: lines can join the
      * same table from a different bundle. */
-    NSArray<NSString *> *labels = @[ @"user:", @"directory:", @"input:", @"path:" ];
+    NSArray<NSString *> *labels = @[ @"run as:", @"directory:", @"input:", @"path:" ];
     for (NSString *l in labels) {
         NSRange v = [sw_audit_row(l, @"VALUE", NO) rangeOfString:@"VALUE"];
         OK(v.location == 22, "value column is identical across rows");
     }
 
     /* Coloured: only the label wears the bold, and the padding stays plain. */
-    EQ(sw_audit_row(@"user:", @"root", YES),
-       @"sudowhat: \033[1muser:\033[0m       root\n",
+    EQ(sw_audit_row(@"run as:", @"root", YES),
+       @"sudowhat: \033[1mrun as:\033[0m     root\n",
        "colour bolds the label only, never the padding");
-    EQ(stripSGR(sw_audit_row(@"user:", @"root", YES)),
-       sw_audit_row(@"user:", @"root", NO),
+    EQ(stripSGR(sw_audit_row(@"run as:", @"root", YES)),
+       sw_audit_row(@"run as:", @"root", NO),
        "the coloured row strips back to the plain row");
 }
 
@@ -297,7 +297,7 @@ static void test_is_bare_name(void) {
 }
 
 /* The path: row's value: the caller's PATH exactly as handed to sudo, escaped
- * through the same core as user: and directory:, and nil in every case where
+ * through the same core as run as: and directory:, and nil in every case where
  * the row must not print. The row NEVER resolves anything -- it shows the
  * string, it does not walk it -- so there is nothing here that could claim
  * which entry would win; that answer belongs to the execute: line. */

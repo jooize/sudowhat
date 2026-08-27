@@ -48,7 +48,7 @@ plaintext password in-plugin is complex and dangerous, and unnecessary).
 
 ```
 $ sudo systemctl restart nginx
-sudowhat: user:       root              <- audit plugin open(), BEFORE auth
+sudowhat: run as:     root              <- audit plugin open(), BEFORE auth
 sudowhat: directory:  /etc/nginx        <- the invoking cwd (user_info["cwd"])
 sudowhat: input:      systemctl restart nginx  <- as typed (see "resolved path" below)
 sudowhat: path:       /usr/local/bin:/usr/bin:/bin  <- caller's PATH; bare names only
@@ -308,7 +308,7 @@ less.
 A separate round, because any plugin change is a signed-bundle rebuild plus a
 reinstall ceremony, and these touch every caller.
 
-- **Label gutter.** `user:` / `directory:` / `input:` are padded so every value
+- **Label gutter.** `run as:` / `directory:` / `input:` are padded so every value
   starts in one column: the longest label (`directory:`, 10) plus two spaces,
   measured after the `sudowhat: ` prefix. That prefix stays on every row rather
   than being hoisted into a header — the block lands in the middle of somebody
@@ -317,7 +317,7 @@ reinstall ceremony, and these touch every caller.
   dirname-plain-cyan / basename-bold-cyan split as the program path (done in the
   plugin, not by routing the cwd through `sw_full_command_line_colored`, which
   would also shell-quote it and make the coloured and plain blocks differ in
-  bytes). The `user:` value is plain for `root` — the expected target earns no
+  bytes). The `run as:` value is plain for `root` — the expected target earns no
   emphasis — and plain yellow for any other target. The frame stays clear of
   `escape_core`'s anomaly palette (`1;31`, `1;35`, `1;36`, `100`).
 - **The seam: flush, no leading blank.** Reversed from the first draft. The

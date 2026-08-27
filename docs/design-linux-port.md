@@ -113,7 +113,7 @@ doubled) and the command-line assembly are identical by construction. The block
 shape is a direct port:
 
 ```
-sudowhat: user: <target user>
+sudowhat: run as: <target user>
 sudowhat: directory: <invoking cwd>        (omitted when cwd is absent)
 sudowhat: input: <command as typed>
 ```
@@ -147,7 +147,7 @@ plain until `colorizeEscaped:` is ported into escape_core).
 
 - Build the cdylib, install to `/usr/local/libexec/sudo/sudowhat_audit.so`, write
   the sample `sudo.conf`, then:
-  - `sudo /bin/echo hi` → `sudowhat: user: … / directory: … / input: /bin/echo
+  - `sudo /bin/echo hi` → `sudowhat: run as: … / directory: … / input: /bin/echo
     hi` prints **before** `[sudo] password:`; sudo still enforces policy (sudoers
     lines present).
   - `sudo /bin/echo $'a\nb'` → control char escapes literally (`\n`), no raw

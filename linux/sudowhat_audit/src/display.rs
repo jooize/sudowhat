@@ -3,7 +3,7 @@
 //! It parses sudo's `key=value` context arrays and assembles the exact terminal
 //! block the macOS audit plugin emits (plugin/sudowhat_audit.m):
 //!
-//!   sudowhat: user: <target user>
+//!   sudowhat: run as: <target user>
 //!   sudowhat: directory: <invoking cwd>       (omitted when cwd is absent)
 //!   sudowhat: input: <command as typed>
 //!
@@ -127,7 +127,7 @@ pub fn build_block(
     let (lb, lo) = if color { ("\x1b[1m", "\x1b[0m") } else { ("", "") };
 
     let mut block = String::new();
-    block.push_str(&format!("sudowhat: {lb}user:{lo} {user_line}\n"));
+    block.push_str(&format!("sudowhat: {lb}run as:{lo} {user_line}\n"));
     if let Some(d) = &dir_line {
         block.push_str(&format!("sudowhat: {lb}directory:{lo} {d}\n"));
     }
@@ -182,7 +182,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             b,
-            "sudowhat: user: root\n\
+            "sudowhat: run as: root\n\
              sudowhat: directory: /home/alice\n\
              sudowhat: input: /bin/echo hi\n"
         );
@@ -195,14 +195,14 @@ mod tests {
         let b = build_block(&[], &["uid=1000", "cwd=/x"], &["id"], false).unwrap();
         assert_eq!(
             b,
-            "sudowhat: user: root\nsudowhat: directory: /x\nsudowhat: input: id\n"
+            "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: id\n"
         );
         // A genuinely repeated argument (`sudo cp a a`) is preserved — the dedup
         // drops only ONE leading duplicate.
         let b2 = build_block(&[], &["uid=1000", "cwd=/x"], &["/bin/cp", "a", "a"], false).unwrap();
         assert_eq!(
             b2,
-            "sudowhat: user: root\nsudowhat: directory: /x\nsudowhat: input: /bin/cp a a\n"
+            "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: /bin/cp a a\n"
         );
     }
 
@@ -212,7 +212,7 @@ mod tests {
         let b = build_block(&["runas_user=postgres"], &["uid=1000"], &["psql"], false).unwrap();
         assert_eq!(
             b,
-            "sudowhat: user: postgres\nsudowhat: input: psql\n"
+            "sudowhat: run as: postgres\nsudowhat: input: psql\n"
         );
     }
 
@@ -227,7 +227,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             b,
-            "sudowhat: user: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo 'a b'\n"
+            "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo 'a b'\n"
         );
     }
 
@@ -244,7 +244,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             b,
-            "sudowhat: user: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo 'a\\nb'\n"
+            "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo 'a\\nb'\n"
         );
         // exactly one real newline per display line, and only at the ends
         assert_eq!(b.matches('\n').count(), 3);
@@ -263,7 +263,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             b,
-            "sudowhat: user: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo '\\u202eevil'\n"
+            "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo '\\u202eevil'\n"
         );
         // no raw bidi override byte survives into the output
         assert!(!b.contains('\u{202e}'));
@@ -281,7 +281,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             b,
-            "sudowhat: user: root\nsudowhat: directory: /home/\\u2026\nsudowhat: input: /bin/id\n"
+            "sudowhat: run as: root\nsudowhat: directory: /home/\\u2026\nsudowhat: input: /bin/id\n"
         );
     }
 
@@ -290,7 +290,7 @@ mod tests {
         let b = build_block(&[], &["uid=1000", "cwd=/x"], &["/bin/echo", "hi"], true).unwrap();
         assert_eq!(
             b,
-            "sudowhat: \x1b[1muser:\x1b[0m root\n\
+            "sudowhat: \x1b[1mrun as:\x1b[0m root\n\
              sudowhat: \x1b[1mdirectory:\x1b[0m /x\n\
              sudowhat: \x1b[1minput:\x1b[0m /bin/echo hi\n"
         );
