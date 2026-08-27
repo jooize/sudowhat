@@ -12,19 +12,6 @@
 
 SUDOWHAT_TEAM_ID ?= -
 
-# Build-time emphasis preset for the verify-code tty echo. One of a fixed set of
-# named styles (the nix module exposes the same names via
-# services.sudowhat.verifyStyle). Passed as a bare token to -DSW_VERIFY_STYLE,
-# where the plugin maps it to a reviewed SGR sequence. An unknown value
-# normalizes to bold — the safe, theme-independent baseline — with a warning,
-# rather than failing the build.
-SUDOWHAT_VERIFY_STYLE ?= bold
-SUDOWHAT_VALID_STYLES := plain bold red green yellow blue magenta cyan random
-ifeq ($(filter $(SUDOWHAT_VERIFY_STYLE),$(SUDOWHAT_VALID_STYLES)),)
-  $(warning sudowhat: unknown SUDOWHAT_VERIFY_STYLE '$(SUDOWHAT_VERIFY_STYLE)', falling back to bold)
-  override SUDOWHAT_VERIFY_STYLE := bold
-endif
-
 # Build-time master switch for terminal command display via the audit plugin:
 # "on" (default - show user/directory/input on the controlling terminal before
 # the password prompt / Touch ID sheet, on every path) or "off" (never display).
@@ -39,26 +26,26 @@ ifeq ($(filter $(SUDOWHAT_AUDIT_DISPLAY),$(SUDOWHAT_VALID_AUDIT_DISPLAY)),)
   override SUDOWHAT_AUDIT_DISPLAY := on
 endif
 
-# Build-time policy for colouring the terminal command display: "anomalies"
+# Build-time policy for colouring the terminal command display: "on"
 # (default) or "off". The nix module exposes the same names via
 # services.sudowhat.echoColor. Passed as a bare token to -DSW_ECHO_COLOR in the
 # GLOBAL CFLAGS below, because it governs BOTH command values - the audit
 # bundle's `input:` and the approval bundle's `execute:`. They are one display to
 # a reader, so one token settles both; each bundle carries its own copy of the
 # token machinery (separate Mach-O images, no shared translation unit). Under
-# "anomalies" the command line is highlighted by role
+# "on" the command line is highlighted by role
 # (program dirname plain cyan, basename bold cyan, option flags dim, values
 # plain) with deceptive Unicode / control-byte escapes, shell metacharacters and
 # notable whitespace in a fixed reviewed palette on top - sudowhat's threat
 # model. It stays ONE line: the SGR goes around the already-escaped tokens, so
 # stripping it returns the plain line byte for byte, and the isatty / NO_COLOR /
 # TERM=dumb gates keep it off non-terminals. An unknown value normalizes to
-# "anomalies" with a warning, rather than failing.
-SUDOWHAT_ECHO_COLOR ?= anomalies
-SUDOWHAT_VALID_ECHO_COLOR := off anomalies
+# "on" with a warning, rather than failing.
+SUDOWHAT_ECHO_COLOR ?= on
+SUDOWHAT_VALID_ECHO_COLOR := off on
 ifeq ($(filter $(SUDOWHAT_ECHO_COLOR),$(SUDOWHAT_VALID_ECHO_COLOR)),)
-  $(warning sudowhat: unknown SUDOWHAT_ECHO_COLOR '$(SUDOWHAT_ECHO_COLOR)', falling back to anomalies)
-  override SUDOWHAT_ECHO_COLOR := anomalies
+  $(warning sudowhat: unknown SUDOWHAT_ECHO_COLOR '$(SUDOWHAT_ECHO_COLOR)', falling back to on)
+  override SUDOWHAT_ECHO_COLOR := on
 endif
 
 # Master switch for policy deference: "on" (default) skips the console user's
@@ -116,7 +103,6 @@ CC      ?= clang
 CFLAGS  = -O2 -g -Wall -Wextra -Wpedantic -fobjc-arc -fPIC \
           -Iplugin -Ipam -Ishared -Ishared/escape_core \
           -DSUDOWHAT_TEAM_ID='"$(SUDOWHAT_TEAM_ID)"' \
-          -DSW_VERIFY_STYLE=$(SUDOWHAT_VERIFY_STYLE) \
           -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) \
           -DSW_POLICY_DEFERENCE=$(SUDOWHAT_POLICY_DEFERENCE) \
           -DSW_EXEC_CONFIRM=$(SUDOWHAT_EXEC_CONFIRM)

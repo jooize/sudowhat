@@ -52,19 +52,19 @@ in {
     };
 
     echoColor = lib.mkOption {
-      type = lib.types.enum [ "off" "anomalies" ];
-      default = "anomalies";
+      type = lib.types.enum [ "off" "on" ];
+      default = "on";
       description = ''
         Whether the terminal command display (see `auditDisplay`) is coloured to
         draw the eye to the bytes that matter.
 
         - `off` emits the display with no colour at all.
-        - `anomalies` (the default) is intended to wrap only anomaly spans
+        - `on` (the default) is intended to wrap only anomaly spans
           (deceptive Unicode escapes, control-byte escapes, shell metacharacters,
           notable whitespace) in a fixed reviewed palette.
 
         NOTE: the colouriser is a fast-follow — the escape_core port of the
-        anomaly colourer is not done yet — so `anomalies` is accepted but the
+        anomaly colourer is not done yet — so `on` is accepted but the
         display currently renders plain regardless (the bold label emphasis is
         governed separately, by the NO_COLOR / TERM environment gates and the
         tty `isatty()` check). This mirrors the macOS bundle exactly. Baked into
@@ -75,7 +75,7 @@ in {
 
   config = lib.mkIf cfg.enable (let
     # Bake the chosen build-time presets into the plugin. The defaults
-    # (auditDisplay "on", echoColor "anomalies") reproduce the package's own
+    # (auditDisplay "on", echoColor "on") reproduce the package's own
     # defaults, so default users get the same store path with no rebuild; any
     # other value produces a distinct derivation whose /etc/sudo.conf reference
     # below stays consistent (both come from `pkg`).

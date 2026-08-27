@@ -266,6 +266,12 @@ reinstall ceremony, and these touch every caller.
   one colour two meanings. Emitted by the APPROVAL plugin at a later stage, not
   by the audit block. (The `execute:` line, added in v0.13.0, joins the same
   gutter from the same plugin — see `docs/design-resolved-exec.md`.)
+  `verifyStyle` was dropped in v0.14.0: the code's emphasis is now the
+  compile-time constant bold magenta, with no knob. One reviewed SGR, nothing to
+  misconfigure, and the emphasis was never a trust signal anyway. Accepted
+  imperfection: `escape_core`'s anomaly palette also spends bold magenta on
+  control-byte escapes, so a control-byte span in a command value shares the
+  verify code's colour — rare, and a control byte in argv is itself an alarm.
 
 Not carried across: the Linux port's `display.rs` still renders the unpadded
 block, since it renders the command plain too. Adopting both is part of

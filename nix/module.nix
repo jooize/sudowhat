@@ -67,33 +67,6 @@ in {
       '';
     };
 
-    verifyStyle = lib.mkOption {
-      type = lib.types.enum [
-        "plain" "bold" "red" "green" "yellow" "blue" "magenta" "cyan" "random"
-      ];
-      default = "bold";
-      description = ''
-        Emphasis applied to the verify code echoed to the controlling
-        terminal (the out-of-band code the user matches against the Touch ID
-        sheet). Each color is bold-plus-color, so the emphasis still carries
-        on a terminal theme where the color washes out; `bold` (the default)
-        is a background-independent emphasis with no color; `plain` emits no
-        escape sequence at all (a build-time equivalent of `NO_COLOR`);
-        `random` picks a different color per invocation from a curated subset
-        (red, green, magenta, cyan) — purely cosmetic novelty, and the only
-        style resolved at runtime rather than baked.
-
-        This is purely cosmetic and never a trust signal: the anchor is the
-        code matching the system-rendered Touch ID sheet, which cannot be
-        colored. The value is baked into the signed bundle at build time and
-        selects from a fixed, reviewed set of SGR sequences, never a free-form
-        string, so no escape-injection surface is added. The runtime opt-outs
-        still apply: NO_COLOR or TERM=dumb in the invoking environment, a
-        non-tty target, or the stderr fallback always render plain regardless
-        of this setting.
-      '';
-    };
-
     auditDisplay = lib.mkOption {
       type = lib.types.enum [ "on" "off" ];
       default = "on";
@@ -170,8 +143,8 @@ in {
     };
 
     echoColor = lib.mkOption {
-      type = lib.types.enum [ "off" "anomalies" ];
-      default = "anomalies";
+      type = lib.types.enum [ "off" "on" ];
+      default = "on";
       description = ''
         Whether the terminal command display is coloured to draw the eye to the
         bytes that matter. It governs the two command VALUES — the audit
@@ -180,7 +153,7 @@ in {
         display.
 
         - `off` renders both command lines plain.
-        - `anomalies` (the default) highlights them by role — the program's
+        - `on` (the default) highlights them by role — the program's
           directory part in plain cyan and its basename in bold cyan, option
           flags bold blue, every other token plain — and wraps anomaly spans in
           a fixed, reviewed palette on top:
@@ -193,9 +166,10 @@ in {
 
         What it does NOT govern: the frame around those values — the label
         gutter, the bold labels, the `user:` and `directory:` lines, the
-        `verify:` code emphasis (that one is `verifyStyle`). Those are sudowhat's
-        own fixed chrome rather than a rendering of untrusted argv, so they
-        follow the runtime gates alone and stay put at `off`.
+        `verify:` code emphasis (fixed bold magenta, with no option of its own).
+        Those are sudowhat's own fixed chrome rather than a rendering of
+        untrusted argv, so they follow the runtime gates alone — NO_COLOR,
+        TERM absent/empty/`dumb`, or a non-tty target — and stay put at `off`.
 
         The command stays one logical line: the colour goes around tokens that
         are already escaped and quoted, so it never splits, elides or reorders
@@ -304,7 +278,7 @@ in {
 
   config = lib.mkIf cfg.enable (let
     # Bake the chosen build-time presets into the bundle. The defaults
-    # (verifyStyle "bold", echoColor "anomalies", policyDeference "on",
+    # (echoColor "on", policyDeference "on",
     # auditDisplay "on", execDisplay "on", execConfirm "off") reproduce the
     # package's own defaults, so default users get the same store path with no
     # rebuild; any other value produces a distinct derivation whose embedded
@@ -312,7 +286,7 @@ in {
     # `pkg`), preserving mutual signature verification.
     pkg = cfg.package.override {
       inherit (cfg)
-        verifyStyle echoColor policyDeference auditDisplay execDisplay execConfirm;
+        echoColor policyDeference auditDisplay execDisplay execConfirm;
     };
   in {
     # The store-path approach: binaries live in /nix/store, /etc files

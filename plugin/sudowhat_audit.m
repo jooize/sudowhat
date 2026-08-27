@@ -70,13 +70,12 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
 /* Build-time colour policy, chosen by -DSW_ECHO_COLOR (echoColor in the
  * nix module / Makefile).
  *
- *   anomalies - (default) highlight the command line: the program's directory
- *               part plain cyan and its basename bold cyan, every other token
- *               plain, the quotes escape_core itself added dim, and
- *               escaped/anomalous spans (deceptive Unicode, control bytes,
- *               shell metacharacters, notable whitespace) in the fixed anomaly
- *               palette on top.
- *   off       - the command line renders plain.
+ *   on  - (default) highlight the command line: the program's directory part
+ *         plain cyan and its basename bold cyan, every other token plain, the
+ *         quotes escape_core itself added dim, and escaped/anomalous spans
+ *         (deceptive Unicode, control bytes, shell metacharacters, notable
+ *         whitespace) in the fixed anomaly palette on top.
+ *   off - the command line renders plain.
  *
  * This knob governs the COMMAND VALUE only. The frame around it (the label
  * gutter, the bold labels, the directory and target-user emphasis) is governed
@@ -99,10 +98,10 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
  * content. Runtime gates (NO_COLOR / TERM, then isatty) still apply on top, and
  * any failure falls back to the plain line. */
 #ifndef SW_ECHO_COLOR
-#define SW_ECHO_COLOR anomalies
+#define SW_ECHO_COLOR on
 #endif
 #define SW_ACOL_off        0
-#define SW_ACOL_anomalies  1
+#define SW_ACOL_on         1
 #define SW_ACOL_CAT(x)     SW_ACOL_##x
 #define SW_ACOL_SEL(x)     SW_ACOL_CAT(x)
 enum { sw_audit_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
@@ -402,7 +401,7 @@ static int sudowhat_audit_open(unsigned int version,
          * role, not merely emphasised: build knob AND the env opt-outs, with
          * sw_audit_write_tty's isatty() as the final gate. */
         BOOL color = sw_audit_color_allowed(submit_envp);
-        BOOL colorCommand = color && (sw_audit_color_mode == SW_ACOL_anomalies);
+        BOOL colorCommand = color && (sw_audit_color_mode == SW_ACOL_on);
 
         /* The command as typed -- the star of the display, and the reason its
          * label is `input:` rather than `command:`: at audit open() sudo has not

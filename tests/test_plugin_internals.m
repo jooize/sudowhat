@@ -231,9 +231,9 @@ static void test_emit_verify_code_tty_only(void) {
 
 /* The line is a field in the audit block's label gutter: "verify:" padded to
  * column 12, the code, then what to do with it. Styled, the label is bold like
- * the audit plugin's labels, the code carries the build-time verifyStyle
- * emphasis (bold here), and the trailing instruction is dim because it is our
- * own chrome. sw_color_allowed honours the env opt-outs. Color is a legibility
+ * the audit plugin's labels, the code carries the fixed bold magenta emphasis
+ * ("1;35" -- no build-time knob), and the trailing instruction is dim because it
+ * is our own chrome. sw_color_allowed honours the env opt-outs. Color is a legibility
  * aid on the tty echo, never a trust signal (the anchor is the code matching the
  * system-rendered Touch ID sheet, which cannot be colored), so these only pin
  * bytes and env logic. */
@@ -246,9 +246,9 @@ static void test_verify_line_format_and_color(void) {
 
     n = format_verify_line(buf, sizeof buf, "3SNJ", YES);
     OK(n > 0 && strcmp(buf,
-       "sudowhat: \033[1mverify:\033[0m     \033[1m3SNJ\033[0m"
+       "sudowhat: \033[1mverify:\033[0m     \033[1;35m3SNJ\033[0m"
        "  \033[2m(compare with the prompt)\033[0m\n") == 0,
-       "styled rendering: bold label, bold code, dim tail, same gutter");
+       "styled rendering: bold label, bold magenta code, dim tail, same gutter");
 
     /* Layout is identical either way: strip every SGR sequence from the styled
      * line and the plain line comes back, byte for byte. */
@@ -419,12 +419,12 @@ static void test_exec_line_color_split(void) {
 static void test_echo_color_default(void) {
     /* The global CFLAGS pass -DSW_ECHO_COLOR=$(SUDOWHAT_ECHO_COLOR) to BOTH
      * bundles and to this test binary; SUDOWHAT_ECHO_COLOR defaults to
-     * anomalies, so a default build colours the execute: value. Same shape as
+     * on, so a default build colours the execute: value. Same shape as
      * the execConfirm / policyDeference default tests below: it pins the shipped
      * default, so a deliberate `make SUDOWHAT_ECHO_COLOR=off` build is expected
      * to fail this line rather than to pass quietly. */
-    OK(sw_echo_color_mode == SW_ACOL_anomalies,
-       "default build resolves echoColor to anomalies");
+    OK(sw_echo_color_mode == SW_ACOL_on,
+       "default build resolves echoColor to on");
 }
 
 static void test_exec_line_matches_escape_core(void) {

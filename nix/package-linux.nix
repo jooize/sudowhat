@@ -11,11 +11,11 @@
   # the Makefile's SUDOWHAT_VALID_AUDIT_DISPLAY; validated by the nixos module's
   # enum. See services.sudowhat.auditDisplay.
   auditDisplay ? "on",
-  # Colouring of the terminal command display: "anomalies" (default) or "off".
+  # Colouring of the terminal command display: "on" (default) or "off".
   # Parsed for a stable option surface, but the anomaly colouriser is a
   # documented fast-follow (renders plain today), exactly as on macOS. Validated
   # by the nixos module's enum. See services.sudowhat.echoColor.
-  echoColor ? "anomalies",
+  echoColor ? "on",
 }:
 
 # Linux is DISPLAY-ONLY: one pure-Rust cdylib, no approval plugin, no PAM module,

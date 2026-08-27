@@ -296,11 +296,20 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  *   sudowhat: verify:     Z96E  (compare with the prompt)
  *
  * Styling is deliberately thin: the label bold like the other rows, the code
- * carrying the build-time verifyStyle emphasis (bold by default), the trailing
- * instruction dim because it is our own chrome, not a value. No attention
- * colour -- yellow in this block means "the target user is not root", and
- * spending it here would both say something the reader already knows and give
- * one colour two meanings. */
+ * carrying a fixed bold magenta, the trailing instruction dim because it is our
+ * own chrome, not a value. No attention colour -- yellow in this block means
+ * "the target user is not root", and spending it here would both say something
+ * the reader already knows and give one colour two meanings.
+ *
+ * The code's emphasis is a compile-time constant, not a knob: one reviewed SGR
+ * is the only escape sequence that can ever reach the terminal here, so there is
+ * nothing to misconfigure, and the emphasis is cosmetic in the first place --
+ * never a trust signal, since the anchor is the code matching the
+ * system-rendered prompt (see write_verify_code_to_tty). Accepted imperfection:
+ * escape_core's anomaly palette also spends bold magenta on control-byte
+ * escapes, so a control-byte span inside a command value shares this colour.
+ * That is rare, and a control byte in argv is itself an alarm the reader should
+ * stop at, so the collision is accepted rather than designed around. */
 #define SW_VERIFY_LABEL  "verify:"
 #define SW_VERIFY_GAP    "     "     /* pads "verify:" (7) out to the 12-col gutter */
 #define SW_VERIFY_TAIL   "(compare with the prompt)"
@@ -314,93 +323,26 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
 #define SW_VERIFY_SUFFIX_STYLED \
     "  \033[2m" SW_VERIFY_TAIL "\033[0m\n"
 
-/* Build-time emphasis preset for the tty echo, chosen by -DSW_VERIFY_STYLE
- * (services.sudowhat.verifyStyle in the nix module; SUDOWHAT_VERIFY_STYLE in the
- * Makefile). The style names one of the fixed SGR sequences below — never a
- * free-form string — so the only escape bytes that can ever reach a terminal
- * stay a small, reviewed set and a malformed escape cannot be expressed. Every
- * color leads with "1;" (bold + color) so the emphasis still carries on a theme
- * where the color washes out; "plain" is the empty SGR, which routes
- * format_verify_line to its unstyled branch (a compile-time NO_COLOR); "random"
- * picks one of a curated color subset per invocation (sw_verify_sgr below). Bold
- * is the default because it is background-independent. Emphasis only, never a trust
- * signal (see write_verify_code_to_tty).
- *
- * The Makefile normalizes any unknown style to bold (with a warning), so in a
- * supported build this token-paste only ever sees a known name; a raw -D that
- * bypasses the Makefile with an unknown name yields an undefined identifier here
- * and fails the compile — the intended fail-closed result for that unsupported
- * path. */
-#ifndef SW_VERIFY_STYLE
-#define SW_VERIFY_STYLE bold
-#endif
-#define SW_SGR_plain   ""
-#define SW_SGR_bold    "1"
-#define SW_SGR_red     "1;31"
-#define SW_SGR_green   "1;32"
-#define SW_SGR_yellow  "1;33"
-#define SW_SGR_blue    "1;34"
-#define SW_SGR_magenta "1;35"
-#define SW_SGR_cyan    "1;36"
-#define SW_SGR_CAT(x)  SW_SGR_##x
-#define SW_SGR_SEL(x)  SW_SGR_CAT(x)
+/* The code's emphasis: bold magenta, one compile-time constant. Bold leads so
+ * the emphasis still carries on a theme where the colour washes out. There is no
+ * build-time or runtime selector -- see the block comment above for why the
+ * style is fixed. */
+#define SW_VERIFY_SGR "1;35"
 
-/* "random" is the one style resolved at runtime: each invocation picks one of a
- * curated color subset. Detected here so every other style stays compile-time.
- * SW_VS_<name> is 0 for each fixed preset and 1 only for "random"; an undefined
- * SW_VS_<name> (impossible in a Makefile build) evaluates to 0 in #if, i.e. a
- * fixed style, and then fails to compile at SW_SGR_SEL below — the same
- * fail-closed path as an unknown fixed name. */
-#define SW_VS_plain   0
-#define SW_VS_bold    0
-#define SW_VS_red     0
-#define SW_VS_green   0
-#define SW_VS_yellow  0
-#define SW_VS_blue    0
-#define SW_VS_magenta 0
-#define SW_VS_cyan    0
-#define SW_VS_random  1
-#define SW_VS_CAT(x)  SW_VS_##x
-#define SW_VS_SEL(x)  SW_VS_CAT(x)
-
-#if SW_VS_SEL(SW_VERIFY_STYLE)
-/* Curated subset, legible on both light and dark backgrounds. Every entry is
- * bold+color, so even where the color washes out the bold still carries. The
- * table is compile-time constant — only the index is runtime — so the bytes
- * reaching the tty stay the same reviewed set as the fixed presets. blue (dim on
- * common dark backgrounds even bolded) and yellow (washes out on light) are
- * excluded. */
-static const char *const sw_sgr_random_set[] = {
-    SW_SGR_red, SW_SGR_green, SW_SGR_magenta, SW_SGR_cyan,
-};
-static const char *sw_verify_sgr(void) {
-    uint32_t n = (uint32_t)(sizeof sw_sgr_random_set / sizeof sw_sgr_random_set[0]);
-    return sw_sgr_random_set[arc4random_uniform(n)];
-}
-#else
-/* Fixed style: the SGR is a compile-time constant. An unknown name here is an
- * undefined SW_SGR_<name>, which fails the compile (fail-closed). */
-static const char *sw_verify_sgr(void) { return SW_SGR_SEL(SW_VERIFY_STYLE); }
-#endif
-
-/* Render the verify-code line into buf. Styled (bold label, the resolved SGR
- * around the code, dim tail) when colorize is YES and the style is not "plain"
- * (empty SGR); entirely unstyled otherwise -- style "plain" is a compile-time
- * NO_COLOR, so it silences the label and tail emphasis too, not just the code.
- * Both branches lay out the SAME field widths, so the plain line is the styled
- * one with every escape sequence removed. The SGR comes only from the fixed
- * table above, never from input, so substituting it via %s adds no more surface
- * than the nonce already does. Returns snprintf's count so callers can fail
- * closed on truncation. Deterministic for every fixed style (unit-testable);
- * "random" is the sole non-deterministic case. */
+/* Render the verify-code line into buf. Styled (bold label, bold magenta code,
+ * dim tail) when colorize is YES; entirely unstyled otherwise. Both branches lay
+ * out the SAME field widths, so the plain line is the styled one with every
+ * escape sequence removed. Every escape byte here is a literal in this file,
+ * never anything derived from input. Returns snprintf's count so callers can
+ * fail closed on truncation. Fully deterministic, hence unit-testable. */
 static int format_verify_line(char *buf, size_t bufsz, const char *code,
                               BOOL colorize) {
-    const char *sgr = sw_verify_sgr();
-    if (colorize && sgr[0] != '\0') {
+    if (colorize) {
         return snprintf(buf, bufsz,
-                        SW_VERIFY_PREFIX_STYLED "\033[%sm%s\033[0m"
+                        SW_VERIFY_PREFIX_STYLED
+                        "\033[" SW_VERIFY_SGR "m%s\033[0m"
                         SW_VERIFY_SUFFIX_STYLED,
-                        sgr, code);
+                        code);
     }
     return snprintf(buf, bufsz, SW_VERIFY_LINE_FMT, code);
 }
@@ -527,12 +469,11 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  * (services.sudowhat.echoColor in the nix module; SUDOWHAT_ECHO_COLOR in the
  * Makefile).
  *
- *   anomalies - (default) the resolved command line is highlighted by role:
- *               the program's directory part plain cyan and its basename bold
- *               cyan, every other token plain, the quotes the escape core
- *               itself added dim, and escaped/anomalous spans in the fixed
- *               anomaly palette on top.
- *   off       - the resolved command line renders plain.
+ *   on  - (default) the resolved command line is highlighted by role: the
+ *         program's directory part plain cyan and its basename bold cyan, every
+ *         other token plain, the quotes the escape core itself added dim, and
+ *         escaped/anomalous spans in the fixed anomaly palette on top.
+ *   off - the resolved command line renders plain.
  *
  * ONE token governs BOTH command lines, input: and execute:, because a reader
  * sees one display: an admin who silenced the colour on the line the audit
@@ -556,10 +497,10 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  * the intended fail-closed result for a raw -D that bypasses the Makefile's
  * validation. */
 #ifndef SW_ECHO_COLOR
-#define SW_ECHO_COLOR anomalies
+#define SW_ECHO_COLOR on
 #endif
 #define SW_ACOL_off        0
-#define SW_ACOL_anomalies  1
+#define SW_ACOL_on         1
 #define SW_ACOL_CAT(x)     SW_ACOL_##x
 #define SW_ACOL_SEL(x)     SW_ACOL_CAT(x)
 enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
@@ -758,7 +699,7 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
      * echoColor=off strips the role colouring from execute: exactly as it does
      * from the audit bundle's input:, while both lines keep their bold label. */
     BOOL frameColor = colorAllowed && isatty(fd);
-    BOOL valueColor = frameColor && (sw_echo_color_mode == SW_ACOL_anomalies);
+    BOOL valueColor = frameColor && (sw_echo_color_mode == SW_ACOL_on);
 
     /* The value is unbounded (a command line can be arbitrarily long), so the
      * line is assembled as an NSString and written as bytes rather than through

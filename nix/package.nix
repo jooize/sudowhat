@@ -11,15 +11,10 @@
   cargo,
   rustc,
   teamId ? "-",
-  # Emphasis preset for the verify-code tty echo. One of the names in the
-  # Makefile's SUDOWHAT_VALID_STYLES; the nix module validates this with an
-  # enum, so an out-of-set value is caught at eval time rather than reaching
-  # the Makefile's bold fallback. See services.sudowhat.verifyStyle.
-  verifyStyle ? "bold",
-  # Colouring of the audit plugin's terminal command display: "anomalies"
+  # Colouring of the audit plugin's terminal command display: "on"
   # (default) or "off". One of the Makefile's SUDOWHAT_VALID_ECHO_COLOR;
   # validated by the nix module's enum. See services.sudowhat.echoColor.
-  echoColor ? "anomalies",
+  echoColor ? "on",
   # Master switch for policy deference: "on" (default) or "off". One of the
   # Makefile's SUDOWHAT_VALID_DEFERENCE; validated by the nix module's enum.
   # See services.sudowhat.policyDeference.
@@ -85,7 +80,6 @@ stdenv.mkDerivation (finalAttrs: {
 
   makeFlags = [
     "SUDOWHAT_TEAM_ID=${teamId}"
-    "SUDOWHAT_VERIFY_STYLE=${verifyStyle}"
     "SUDOWHAT_ECHO_COLOR=${echoColor}"
     "SUDOWHAT_POLICY_DEFERENCE=${policyDeference}"
     "SUDOWHAT_AUDIT_DISPLAY=${auditDisplay}"

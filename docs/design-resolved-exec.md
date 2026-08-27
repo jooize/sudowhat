@@ -195,9 +195,11 @@ with the key on or off. Off (default) keeps the plain last-look.
 Realized form: "config key" here means what it means for every other sudowhat
 knob — a build-time token baked into the signed bundle, not a runtime config
 file. `SUDOWHAT_EXEC_CONFIRM` in the Makefile (`-DSW_EXEC_CONFIRM`), exposed as
-`services.sudowhat.execConfirm` in the nix module, alongside `verifyStyle`,
-`echoColor`, `policyDeference` and `auditDisplay`. Nothing a caller can set at
-runtime, and no file for an attacker to edit.
+`services.sudowhat.execConfirm` in the nix module, alongside `echoColor`,
+`policyDeference` and `auditDisplay`. (This list also named `verifyStyle` when
+written; that option was dropped in v0.14.0 — the verify code is fixed bold
+magenta.) Nothing a caller can set at runtime, and no file for an attacker to
+edit.
 
 **Delta (2026-08-27): the confirm asks only when the auth stack actually ran.**
 The blunt tty gate shipped first — knob on plus a controlling terminal — asked

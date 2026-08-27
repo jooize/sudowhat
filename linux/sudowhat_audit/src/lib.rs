@@ -73,17 +73,17 @@ const AUDIT_DISPLAY_ON: bool = match option_env!("SW_AUDIT_DISPLAY") {
     None => true,
 };
 
-// Build-time colour policy (SW_AUDIT_ECHO_COLOR: "off" | "anomalies"). Parsed so
+// Build-time colour policy (SW_AUDIT_ECHO_COLOR: "off" | "on"). Parsed so
 // the option surface is stable across platforms, but — exactly as on macOS — the
 // anomaly colouriser is a documented fast-follow (the escape_core port of
 // colorizeEscaped: is not done yet), so this currently has no effect on output;
 // the bold label emphasis is governed independently by display::color_allowed.
 // TODO(colorize fast-follow): route escaped bytes through the Rust colouriser
-// when ECHO_COLOR_ANOMALIES is set.
+// when ECHO_COLOR_ON is set.
 #[allow(dead_code)]
-const ECHO_COLOR_ANOMALIES: bool = match option_env!("SW_AUDIT_ECHO_COLOR") {
-    Some(s) => str_eq(s, "anomalies"),
-    None => true, // default anomalies
+const ECHO_COLOR_ON: bool = match option_env!("SW_AUDIT_ECHO_COLOR") {
+    Some(s) => str_eq(s, "on"),
+    None => true, // default on
 };
 
 // --- struct audit_plugin (vendored layout, plugin/sudo_plugin.h) -------------
