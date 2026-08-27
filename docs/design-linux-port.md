@@ -27,6 +27,14 @@ approval plugin, no PAM module. Sibling to `docs/design-terminal-mode.md`
   - `src/lib.rs` — the FFI shell: the `#[repr(C)]` `struct audit_plugin` layout,
     the `#[no_mangle] pub static sudowhat_audit_plugin`, and `open()` doing
     root-exempt → build block → write → return `1`.
+    The exported struct is wrapped in an `UnsafeCell` so it lands in **writable
+    `.data`**: sudo writes `event_alloc` into every audit plugin's struct after
+    `dlopen` (its `load_plugins.c`, API ≥ 1.17) — the mutable-struct contract
+    every C plugin satisfies implicitly. A plain immutable `pub static` goes to
+    `.data.rel.ro`, sealed read-only by GNU_RELRO before that write, and sudo
+    then SIGSEGVs on every invocation (the v0.11.0–v0.14.0 load fault).
+    `install/linux/verify-plugin-so.bash` guards the placement (plus GNU_RELRO
+    and BIND_NOW presence) in both build pipelines.
 - **NixOS packaging**: `nix/package-linux.nix` (the cdylib derivation),
   `nix/nixos-module.nix` (`services.sudowhat` writing `/etc/sudo.conf`), and the
   multi-platform `flake.nix`.
@@ -34,18 +42,21 @@ approval plugin, no PAM module. Sibling to `docs/design-terminal-mode.md`
   `install/linux/uninstall.bash` (install the `.so` to
   `/usr/local/libexec/sudo/`, print the `sudo.conf` to write) and
   `config/linux/sudo.conf.sample`.
-- **Makefile**: `build-linux` / `test-linux` / `install-linux` /
-  `uninstall-linux`, guarded by `uname` so a macOS `make` is byte-for-byte
+- **Makefile**: `build-linux` / `verify-linux` / `test-linux` / `install-linux`
+  / `uninstall-linux`, guarded by `uname` so a macOS `make` is byte-for-byte
   unchanged.
 
 ## Resolved design forks (confirmed with the user)
 
 ### 1. Audit plugin only — no Linux `pam_sudowhat`
 
-sudo itself already enforces the entire Linux trust model. Per `sudo.conf(5)`
-(verified against sudo.ws): *"The file must be owned by user-ID 0 and only
-writable by its owner"* — sudo refuses to load a plugin, or read `sudo.conf`,
-that fails this, fail-closed. The only thing macOS `pam_sudowhat` adds on top is
+sudo already anchors the Linux trust model in file permissions. Per
+`sudo.conf(5)` (verified against sudo.ws): *"The file must be owned by user-ID 0
+and only writable by its owner"* — sudo ignores a `sudo.conf` that fails this,
+fail-closed. sudo does **not** perm-check the plugin `.so` itself (verified on
+sudo 1.9.13: a world-writable `.so` still loads); the `.so` is protected by
+ordinary permissions on its root-owned install path, which `install.bash`
+enforces and verifies. The only thing macOS `pam_sudowhat` adds on top is
 **code-signing**, which Linux lacks and which we are told not to rebuild. A Linux
 integrity module would merely re-check sudo's own guarantee while forcing an
 invasive `/etc/pam.d/sudo` edit (brick risk) for zero net gain. The audit plugin
@@ -73,8 +84,10 @@ writes `/etc/sudo.conf`.
 
 ## Trust model (Linux) — to be documented, not engineered
 
-- Integrity = **sudo's own** root-owned + non-writable enforcement on the plugin
-  `.so` and `sudo.conf`. We add nothing here.
+- Integrity = **sudo's own** perm-check on `sudo.conf` (ignored unless
+  root-owned and non-writable, fail-closed) plus ordinary permissions on the
+  root-owned install path of the `.so`. sudo does **not** perm-check the `.so`
+  itself; `install.bash` enforces and verifies those permissions instead.
 - **No** code-signing anchor, **no** tamper-evidence claim (stated plainly — this
   mirrors `docs/design-terminal-mode.md`'s *"Linux gets the UX, not the
   tamper-evidence"*). An attacker with root can swap the plugin; that is a fact
@@ -154,8 +167,13 @@ plain until `colorizeEscaped:` is ported into escape_core).
     byte.
   - No controlling tty (piped) → nothing printed, sudo unaffected.
   - Root invoker → no display (root-exempt).
-  - `chmod o+w` the `.so` → sudo itself refuses to load it (confirms sudo's own
-    perms enforcement is the trust anchor).
+  - `chmod o+w /etc/sudo.conf` → sudo ignores the file (warns), fail-closed —
+    the plugin simply stops loading.
+  - `chmod o+w` the `.so` → sudo still loads it without a warning (sudo does
+    **not** perm-check the plugin `.so` — a documented limitation, verified on
+    sudo 1.9.13).
+  - `install.bash --verify` (the fail-closed permission walk) catches the
+    world-writable `.so` (exits nonzero naming the offending path).
 - NixOS: `nix build .#packages.x86_64-linux.default`; a `nixosTest` asserting the
   module writes `sudo.conf` (with the sudoers lines) and the display appears.
 

@@ -307,9 +307,11 @@ to), no approval plugin — and so no resolved `execute:` line, which the approv
 plugin owns — and no `path:` row, which is macOS-only for now (the Linux port
 has its own roadmap) — and no PAM module; sudo's own authentication is
 untouched. The
-trust model is **sudo's own** enforcement: it refuses to load a
-plugin, or read `/etc/sudo.conf`, that is not owned by root and writable only by
-root (`sudo.conf(5)`), fail-closed. There is **no code-signing anchor and no
+trust model: sudo perm-checks `/etc/sudo.conf` only — a config not owned by
+root, or writable by group or other, is ignored, fail-closed (`sudo.conf(5)`).
+sudo does **not** perm-check the plugin `.so`; the `.so` is protected by
+ordinary permissions on its root-owned install path, which the installer
+enforces and verifies. There is **no code-signing anchor and no
 tamper-evidence** on Linux (an attacker with root can swap the plugin) — Linux
 gets the UX, not the tamper-evidence. The plugin fails soft: no terminal, no
 command, or bad input means it shows nothing and never breaks sudo. Every token

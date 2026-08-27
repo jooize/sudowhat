@@ -9,9 +9,11 @@
 # directory, so those three need no absolute path. sudo.conf has no include
 # directive: write the file whole, exactly like this.
 #
-# TRUST: sudo refuses to read this file, or load a plugin, unless it is owned by
-# user-ID 0 and writable only by its owner (sudo.conf(5)) — fail-closed. That
-# root-owned, non-writable enforcement IS the whole Linux trust model. There is
+# TRUST: sudo perm-checks THIS FILE only — it ignores a sudo.conf that is not
+# owned by user-ID 0 or is writable by group/other (sudo.conf(5)), fail-closed.
+# sudo does NOT perm-check the plugin .so; the .so is protected by ordinary
+# permissions on its root-owned install path, which install.bash enforces and
+# verifies. Together those two checks ARE the whole Linux trust model. There is
 # no code-signing anchor and no tamper-evidence here (unlike macOS); the audit
 # plugin is display = disclosure, never authentication. If it is absent or
 # misconfigured it shows nothing and never weakens sudo's own auth.

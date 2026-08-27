@@ -41,8 +41,10 @@ in {
         The display is disclosure, never a trust signal: any process that can
         write your terminal can forge the same bytes. On Linux there is no
         biometric to bind a verify code to, and no code-signing anchor — the
-        trust model is entirely sudo's own root-owned + non-writable enforcement
-        on the `.so` and `sudo.conf` (fail-closed). The block is written to
+        trust model is sudo's own perm-check on `sudo.conf` (ignored unless
+        root-owned and non-writable, fail-closed) plus ordinary permissions on
+        the root-owned store path of the `.so` (sudo does not perm-check the
+        `.so` itself). The block is written to
         /dev/tty only — never to sudo's stderr — so a `2>file` redirect cannot
         capture it, and it is skipped when there is no controlling terminal
         (headless). Every token is shell-quoted and control-character escaped by
@@ -99,9 +101,10 @@ in {
     # whose Apple sudo keeps sudoers built-in — verify on hardware that this
     # host's sudo finds sudoers.so in its default plugin dir.)
     #
-    # The store path is root-owned and mode 0444 (not group/world writable),
-    # which satisfies sudo's fail-closed requirement for sudo.conf and the
-    # plugin — that enforcement IS the Linux trust model; there is no
+    # The .so's store path is root-owned and mode 0444 (not group/world
+    # writable). sudo perm-checks only sudo.conf (this etc file, root-owned by
+    # NixOS, fail-closed); it does NOT perm-check the plugin .so — the
+    # read-only, root-owned store is what protects the .so. There is no
     # code-signing anchor here.
     environment.etc."sudo.conf".text = ''
       # Managed by the sudowhat NixOS module. Disable the module to restore the
