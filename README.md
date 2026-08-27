@@ -353,7 +353,7 @@ listed in the design note.
 
 | | |
 |---|---|
-| Latest release | `v0.12.0` |
+| Latest release | `v0.13.0` |
 | Tested on | macOS Tahoe (Darwin 25.4–25.5) |
 | Architecture | Apple silicon (arm64) |
 | Linux | Phase 2 in progress — audit-plugin display, native PAM password, no tamper-evidence (`docs/design-linux-port.md`) |
