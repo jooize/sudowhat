@@ -344,19 +344,24 @@ sudo make install-linux          # installs the .so, prints the /etc/sudo.conf t
 Then write `/etc/sudo.conf` from the printed snippet (or
 `config/linux/sudo.conf.sample`). Uninstall with `sudo make uninstall-linux`.
 
-This is Phase 2 (in progress); see `docs/design-linux-port.md`. It has not yet
-been exercised on a Linux host — the crate builds, its logic is unit-tested for
-byte-for-byte parity with the macOS display, and the on-hardware smoke tests are
-listed in the design note.
+See `docs/design-linux-port.md`. Validated on Debian 12 with sudo 1.9.13p3
+(aarch64 natively, x86_64 under qemu-user): display before the password prompt,
+control-character escaping, no-tty silence, root exemption, and the permission
+model, byte-for-byte against the unit-test vectors.
+
+> [!IMPORTANT]
+> Linux builds of v0.11.0–v0.14.0 crash sudo (SIGSEGV on every invocation) once
+> the plugin is listed in `/etc/sudo.conf`. Use v0.15.0 or later, which fixes
+> the load fault and adds a build-time guard against its return.
 
 ## Status
 
 | | |
 |---|---|
-| Latest release | `v0.14.0` |
+| Latest release | `v0.15.0` |
 | Tested on | macOS Tahoe (Darwin 25.4–25.5) |
 | Architecture | Apple silicon (arm64) |
-| Linux | Phase 2 in progress — audit-plugin display, native PAM password, no tamper-evidence (`docs/design-linux-port.md`) |
+| Linux | Audit-plugin display, native PAM password, no tamper-evidence — validated on Debian 12 / sudo 1.9.13p3 / aarch64+x86_64 (`docs/design-linux-port.md`) |
 | Signing | ad-hoc dev mode shipped; Developer ID release planned |
 
 ## Known limitations

@@ -26,7 +26,7 @@
 # perm-check the .so itself (see docs/design-linux-port.md).
 stdenv.mkDerivation (finalAttrs: {
   pname = "sudowhat";
-  version = "0.14.0";
+  version = "0.15.0";
 
   src = lib.cleanSource ../.;
 
