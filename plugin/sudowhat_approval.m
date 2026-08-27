@@ -929,6 +929,14 @@ static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
  *         completes AFTER the resolved path is visible -- the same guarantee
  *         biometric mode gives, split into authenticate-then-confirm.
  *
+ * AUTHENTICATE-then-confirm, literally: the question is asked only when sudo
+ * actually ran the PAM auth stack for THIS invocation, i.e. when a human just
+ * presented a factor. A caller sudoers waived authentication for (NOPASSWD,
+ * `Defaults !authenticate`, or a live timestamp cache) is never asked, terminal
+ * or not -- re-gating what sudoers explicitly chose not to gate would contradict
+ * the same deference principle step (3.5) applies on the console path. Detection
+ * reuses that same in-process pam_sudowhat marker; see sw_confirm_decision.
+ *
  * WHY ONLY THAT ONE PATH (docs/design-resolved-exec.md). The asymmetry this
  * closes is specific to terminal-password mode: sudo resolves the command inside
  * the policy step that also collects the password, and no plugin hook exists
@@ -957,23 +965,52 @@ static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
 #define SW_EC_SEL(x)   SW_EC_CAT(x)
 enum { sw_exec_confirm_mode = SW_EC_SEL(SW_EXEC_CONFIRM) };
 
-/* Pure decision: does the confirm prompt run for this invocation? Both inputs
- * explicit so every branch is unit-testable, and both must hold:
- *   knob off        -> NO   (the default; plain last-look, then allow)
- *   no controlling
- *   terminal        -> NO   (nowhere to ask, and nobody to answer -- so a piped
- *                            or automated invocation behaves IDENTICALLY with
- *                            the knob on or off, and can never newly block)
- *   otherwise       -> YES  (print exec:, then ask)
+/* Pure decision: does the confirm prompt run for this invocation? All four
+ * inputs explicit so every branch is unit-testable, exactly like
+ * sw_defer_decision:
+ *   knob off                  -> NO   (the default; plain last-look, then allow)
+ *   no controlling terminal   -> NO   (nowhere to ask, and nobody to answer --
+ *                                      so a piped or automated invocation
+ *                                      behaves IDENTICALLY with the knob on or
+ *                                      off, and can never newly block)
+ *   marker present            -> YES  (sudo ran the PAM auth stack: a human just
+ *                                      authenticated, so ask them to confirm.
+ *                                      This is the knob's whole meaning)
+ *   integrity line not wired  -> YES  (an absent marker can't be trusted to mean
+ *                                      "waived" if pam_sudowhat may be unwired,
+ *                                      so ask rather than skip)
+ *   otherwise                 -> NO   (marker absent, chain intact => sudoers
+ *                                      waived authentication for this
+ *                                      invocation -- NOPASSWD, !authenticate, or
+ *                                      a live timestamp cache. Print the exec:
+ *                                      line and allow, exactly as the knob-off
+ *                                      branch does; do not re-gate what sudoers
+ *                                      chose not to gate)
  *
- * Note this gate is not "fail-safe" in the sw_defer_decision sense, because
- * neither outcome is the dangerous one: NO lands on today's behaviour (sudo has
- * already authenticated the caller and sudoers has already authorized them), and
- * YES only adds a question. */
-static BOOL sw_confirm_gate_active(BOOL confirmOn, BOOL haveTty) {
-    if (!confirmOn) return NO;
-    if (!haveTty)   return NO;
-    return YES;
+ * The last two rows are the whole point of the marker being read here at all:
+ * without them the knob asked every non-console caller on a live terminal,
+ * NOPASSWD ones included, which contradicts step (3.5)'s deference principle on
+ * the console path.
+ *
+ * FAIL DIRECTION, and note it is the OPPOSITE of sw_defer_decision's: there,
+ * uncertainty returns NO, meaning "prompt for Touch ID"; here, uncertainty
+ * returns YES, meaning "ask the y/N". Both fail TOWARD the gate -- the shared
+ * rule is "when in doubt, put the question to the human", and the two functions
+ * only differ in which boolean expresses that.
+ *
+ * Neither outcome here is dangerous in the sw_defer_decision sense: NO lands on
+ * today's behaviour (sudo has already authenticated the caller and sudoers has
+ * already authorized them), and YES only adds a question. The marker's
+ * unforgeable direction (absence cannot be faked -- see sw_defer_decision) still
+ * matters, though: it is exactly what keeps a caller from suppressing the
+ * question after a real authentication. */
+static BOOL sw_confirm_decision(BOOL confirmOn, BOOL haveTty,
+                                BOOL markerPresent, BOOL integrityInstalled) {
+    if (!confirmOn)          return NO;
+    if (!haveTty)            return NO;
+    if (markerPresent)       return YES;
+    if (!integrityInstalled) return YES;
+    return NO;
 }
 
 /* Classify the answer to `run? [y/N]`. Accepts only an affirmative: "y" or
@@ -1052,22 +1089,35 @@ static BOOL sw_ask_run_confirm(void) {
  *
  * Knob off (the default) is the whole of this function's first branch: print
  * exec: and allow. Reaching this path at all means sudo's PAM auth already
- * succeeded on the caller's own terminal, so the line is a last-look, not a
- * decision -- the honest maximum in a mode where the password is collected
- * inside the policy step that resolves the command.
+ * succeeded on the caller's own terminal -- OR that sudoers waived it -- so the
+ * line is a last-look, not a decision: the honest maximum in a mode where the
+ * password is collected inside the policy step that resolves the command.
  *
- * Knob on adds the decision back. Then a TOCTOU pin is required and it is NOT
- * optional: the confirm introduces an authorization DELAY on a path that
- * previously had none, which opens the same binary-swap window the console
- * biometric path already guards against with its pre-prompt open()+fstat and
- * post-auth re-stat. The pin is taken BEFORE the human is asked anything, so
- * what they approve is the file that was there when the question was posed. */
+ * markerPresent is the stashed pam_sudowhat auth marker, read once per check()
+ * up at (1d): YES means sudo really ran the PAM auth stack for this invocation.
+ * It is what separates the two callers this path sees -- a human who just typed
+ * a password, and a NOPASSWD rule -- and only the first is asked anything (see
+ * sw_confirm_decision). The integrity-line read stays LAZY, exactly as on the
+ * console deference path: it is consulted only when it can change the answer,
+ * i.e. knob on AND a tty AND the marker absent.
+ *
+ * Knob on (for a caller who authenticated) adds the decision back. Then a TOCTOU
+ * pin is required and it is NOT optional: the confirm introduces an
+ * authorization DELAY on a path that previously had none, which opens the same
+ * binary-swap window the console biometric path already guards against with its
+ * pre-prompt open()+fstat and post-auth re-stat. The pin is taken BEFORE the
+ * human is asked anything, so what they approve is the file that was there when
+ * the question was posed. */
 static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
-                               const char **errstr) {
+                               BOOL markerPresent, const char **errstr) {
     BOOL confirmOn = (sw_exec_confirm_mode == SW_EC_on);
     BOOL haveTty = confirmOn ? sw_have_controlling_tty("/dev/tty") : NO;
+    BOOL integrityInstalled =
+        (confirmOn && haveTty && !markerPresent)
+            ? sudowhat_pam_integrity_line_installed() : NO;
 
-    if (!sw_confirm_gate_active(confirmOn, haveTty)) {
+    if (!sw_confirm_decision(confirmOn, haveTty, markerPresent,
+                             integrityInstalled)) {
         emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
                        sw_color_allowed());
         return 1;
@@ -1305,6 +1355,32 @@ static int sudowhat_check(char * const command_info[],
          * root bypass does not newly turn a missing key into an error. */
         const char *commandC = find_kv(command_info, "command");
 
+        /* (1d) Read the pam_sudowhat auth marker, ONCE, before any caller
+         * classification -- two consumers need it now and they sit on opposite
+         * sides of that fork: the non-console step-aside's confirm gate (see
+         * sw_confirm_decision) and the console path's policy deference at (3.5).
+         * Reading it in one place is what keeps them from disagreeing, and is
+         * the only way the non-console branch can see it at all: (3.5) runs
+         * AFTER that branch has already returned.
+         *
+         * Read and immediately clear (this is the hygiene rationale that used to
+         * live at (3.5), moved here with the read): no stale value can linger
+         * into a later consumer. sudo builds the command's environment
+         * separately, so this never reaches the execed program regardless. The
+         * clear now also runs on the root-bypass and deny paths, which
+         * previously returned before reaching it -- strictly more hygienic, and
+         * behaviourally invisible, since neither path consults the marker.
+         *
+         * PRESENT means sudo ran the PAM auth stack for this invocation, i.e.
+         * sudoers required authentication. ABSENT means it did not: a NOPASSWD
+         * rule, `Defaults !authenticate`, or a valid timestamp cache. Absence
+         * cannot be forged -- pam_sudowhat's setenv() runs in-process, after the
+         * caller's environment was captured, and overwrites any pre-set value --
+         * which is what makes both consumers safe to key on it. */
+        const char *authMarker = getenv(SUDOWHAT_AUTH_MARKER_ENV);
+        BOOL markerPresent = (authMarker != NULL);
+        unsetenv(SUDOWHAT_AUTH_MARKER_ENV);
+
         /* (2) Caller classification.
          *
          * sudowhat gates *escalation* — an unprivileged principal reaching
@@ -1386,8 +1462,11 @@ static int sudowhat_check(char * const command_info[],
                  * inside the policy step that also resolved the command, so the
                  * exec: line lands after auth and before exec: a last-look, not
                  * a preview. With execConfirm on, the decision moves back after
-                 * the display -- see sw_step_aside_allow. */
-                int verdict = sw_step_aside_allow(commandC, run_argv, errstr);
+                 * the display -- but only for a caller sudo actually
+                 * authenticated, which is what the marker from (1d) tells it.
+                 * See sw_step_aside_allow. */
+                int verdict = sw_step_aside_allow(commandC, run_argv,
+                                                  markerPresent, errstr);
                 if (verdict != 1) return verdict;
                 syslog(LOG_AUTHPRIV | LOG_NOTICE,
                        "sudowhat: non-console caller allowed (invoking uid %u, "
@@ -1461,23 +1540,23 @@ static int sudowhat_check(char * const command_info[],
          * gate. Separate from the root and non-console exits above; it only
          * affects the console user's prompt.
          *
-         * Read the marker and immediately clear it (hygiene: no stale value can
-         * linger; sudo builds the command's environment separately, so this
-         * never reaches the execed program regardless). The integrity-line check
-         * runs only when it can matter (deference on AND marker absent) and
-         * confirms an absent marker really means "the auth stack did not run"
-         * rather than "pam_sudowhat is unwired" — otherwise sw_defer_decision
-         * fails toward prompting. No TOCTOU pre-stat is needed on this path:
-         * there is no authorization delay, hence no window to swap the binary.
+         * The marker itself was read and cleared once at (1d), before the caller
+         * classification, because the non-console step-aside needs it too and
+         * returns long before this point; the read-and-immediately-clear hygiene
+         * rationale moved there with it. This step just consumes the stashed
+         * markerPresent -- same value, same one read per check(). The
+         * integrity-line check runs only when it can matter (deference on AND
+         * marker absent) and confirms an absent marker really means "the auth
+         * stack did not run" rather than "pam_sudowhat is unwired" — otherwise
+         * sw_defer_decision fails toward prompting. No TOCTOU pre-stat is needed
+         * on this path: there is no authorization delay, hence no window to swap
+         * the binary.
          *
          * timestamp interaction: with a non-zero timestamp_timeout a cached
          * credential also skips the auth stack, so a second in-window command on
          * the same tty is deferred and runs with no sheet — sudo's normal grace
          * after the first real factor on that tty. Set timestamp_timeout=0 (the
          * module default) for a sheet on every command. */
-        const char *authMarker = getenv(SUDOWHAT_AUTH_MARKER_ENV);
-        BOOL markerPresent = (authMarker != NULL);
-        unsetenv(SUDOWHAT_AUTH_MARKER_ENV);
         BOOL deferenceOn = (sw_policy_deference_mode == SW_PD_on);
         BOOL integrityInstalled =
             (deferenceOn && !markerPresent)

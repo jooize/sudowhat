@@ -190,6 +190,52 @@ file. `SUDOWHAT_EXEC_CONFIRM` in the Makefile (`-DSW_EXEC_CONFIRM`), exposed as
 `echoColor`, `policyDeference` and `auditDisplay`. Nothing a caller can set at
 runtime, and no file for an attacker to edit.
 
+**Delta (2026-08-27): the confirm asks only when the auth stack actually ran.**
+The blunt tty gate shipped first — knob on plus a controlling terminal — asked
+every non-console caller on a live terminal, `NOPASSWD` ones included. That is
+the one thing this round said it would not do: "where the decision is deferred
+today, nothing else changes". A deploy script in an SSH session calling a
+`NOPASSWD` sudo has a controlling terminal, so the blunt gate re-gated exactly
+what sudoers had explicitly waived. Refined at the owner's request to be
+authenticate-then-confirm literally: the question is asked only when sudo ran
+the PAM auth stack for *this* invocation, i.e. when a human just presented a
+factor.
+
+Detection reuses the policy-deference marker (`SUDOWHAT_AUTH_MARKER_ENV`, set
+in-process by `pam_sudowhat` whenever the auth stack runs, after the caller's own
+environment was captured — so a caller can add it but never remove it, and its
+absence cannot be forged). Mechanically the marker is now read and cleared once
+per `check()`, hoisted above the caller classification, because the two consumers
+sit on opposite sides of that fork: the non-console step-aside returns long
+before the console path's deference step. The decision itself is a pure
+`sw_confirm_decision(confirmOn, haveTty, markerPresent, integrityInstalled)`,
+table-tested like `sw_defer_decision`:
+
+| knob | tty | marker | integrity line | result |
+|---|---|---|---|---|
+| off | — | — | — | no prompt (unchanged default) |
+| on | none | — | — | no prompt (automation identical either way) |
+| on | yes | present | — | **prompt** — the knob's whole meaning |
+| on | yes | absent | wired | no prompt — sudoers waived auth; print `exec:` and allow, exactly as the knob-off branch does |
+| on | yes | absent | not verifiable | **prompt** — an absent marker cannot be trusted to mean "waived" if `pam_sudowhat` may be unwired |
+
+The integrity-line read stays lazy everywhere: it happens only when it can change
+the answer (knob on, tty present, marker absent), the same laziness the console
+deference path already had.
+
+Fail direction: uncertainty **asks**. Note that is the opposite boolean from
+`sw_defer_decision`, where uncertainty means "do not skip the Touch ID sheet" —
+both fail *toward* the gate, and the shared rule is "when in doubt, put the
+question to the human". Here the doubt is cheap to resolve: the knob's owner
+opted into confirmation, and one extra y/N costs less than silently re-gating or
+silently skipping.
+
+This restores the round's "where the decision is deferred today, nothing else
+changes" principle on the non-console path, which is where it had been quietly
+broken: with the refinement, a waived run gets the informational `exec:` line
+(`execDisplay`-gated, through `emit_exec_line`) and allows, byte-identical to the
+knob-off behaviour.
+
 A divergence-triggered variant (prompt only when typed differs from resolved)
 was considered and cut: every bare name "diverges", so it would fire on
 essentially every sudo while being less predictable than a mode-wide key.

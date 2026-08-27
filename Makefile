@@ -79,7 +79,9 @@ endif
 # before exec; "on" additionally asks one `run? [y/N]` there via sudo's
 # conversation API, so the decision completes after the resolved path is visible
 # -- the same guarantee biometric mode gives. Tty-gated either way, so a piped or
-# automated invocation behaves identically with it on or off. The nix module
+# automated invocation behaves identically with it on or off, and asked only when
+# sudo actually ran the PAM auth stack for that invocation, so a NOPASSWD caller
+# is never re-gated. The nix module
 # exposes the same names via services.sudowhat.execConfirm. Passed as a bare
 # token to -DSW_EXEC_CONFIRM. An unknown value normalizes to "off" with a
 # warning, rather than failing.

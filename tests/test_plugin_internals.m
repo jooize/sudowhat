@@ -514,9 +514,9 @@ static void test_exec_display_default(void) {
 }
 
 /* exec_confirm: the off-by-default post-resolution question on the
- * terminal-password path. The gate and the answer classifier are pure, so both
- * are pinned here without a terminal; the surrounding TOCTOU pin is the same
- * pattern the console path already uses. */
+ * terminal-password path. The decision and the answer classifier are pure, so
+ * both are pinned here without a terminal; the surrounding TOCTOU pin is the
+ * same pattern the console path already uses. */
 
 static void test_exec_confirm_default(void) {
     /* The test binary is compiled with no -DSW_EXEC_CONFIRM, so it sees the
@@ -527,12 +527,47 @@ static void test_exec_confirm_default(void) {
        "default build resolves execConfirm to off");
 }
 
-static void test_confirm_gate(void) {
-    OK(!sw_confirm_gate_active(NO, YES), "knob off -> no prompt, tty or not");
-    OK(!sw_confirm_gate_active(NO, NO),  "knob off, no tty -> no prompt");
-    OK(!sw_confirm_gate_active(YES, NO),
-       "no controlling terminal -> no prompt (automation never blocks)");
-    OK(sw_confirm_gate_active(YES, YES), "knob on AND a tty -> prompt");
+/* sw_confirm_decision, all 16 input combinations, in the order the function
+ * tests them: knob, tty, marker, integrity line.
+ *
+ * The two marker rows are the refinement: the confirm is authenticate-then-
+ * confirm literally, so it fires only when sudo actually ran the PAM auth stack
+ * for this invocation. A caller sudoers waived auth for (NOPASSWD,
+ * !authenticate, a live timestamp cache) leaves the marker absent and is NOT
+ * re-gated -- the same deference sw_defer_decision applies on the console path.
+ * Uncertainty (marker absent, chain unverifiable) asks: the fail direction is
+ * the mirror image of sw_defer_decision's NO, and both mean "put the question to
+ * the human". */
+static void test_confirm_decision(void) {
+    /* Knob off: nothing else can turn the question on. */
+    OK(!sw_confirm_decision(NO, YES, YES, YES), "knob off -> no prompt");
+    OK(!sw_confirm_decision(NO, YES, YES, NO),  "knob off, chain unverified -> no prompt");
+    OK(!sw_confirm_decision(NO, YES, NO,  YES), "knob off, auth waived -> no prompt");
+    OK(!sw_confirm_decision(NO, YES, NO,  NO),  "knob off, nothing verifiable -> no prompt");
+    OK(!sw_confirm_decision(NO, NO,  YES, YES), "knob off, no tty -> no prompt");
+    OK(!sw_confirm_decision(NO, NO,  YES, NO),  "knob off, no tty, chain unverified -> no prompt");
+    OK(!sw_confirm_decision(NO, NO,  NO,  YES), "knob off, no tty, auth waived -> no prompt");
+    OK(!sw_confirm_decision(NO, NO,  NO,  NO),  "knob off, no tty, nothing verifiable -> no prompt");
+
+    /* No controlling terminal: nowhere to ask, so a piped or automated
+     * invocation behaves identically with the knob on or off. */
+    OK(!sw_confirm_decision(YES, NO, YES, YES),
+       "no tty -> no prompt even though the caller authenticated");
+    OK(!sw_confirm_decision(YES, NO, YES, NO),  "no tty, chain unverified -> no prompt");
+    OK(!sw_confirm_decision(YES, NO, NO,  YES), "no tty, auth waived -> no prompt");
+    OK(!sw_confirm_decision(YES, NO, NO,  NO),  "no tty, nothing verifiable -> no prompt");
+
+    /* Knob on, a tty, and sudo ran the auth stack: the knob's whole meaning. */
+    OK(sw_confirm_decision(YES, YES, YES, YES),
+       "marker present (a human just authenticated) -> PROMPT");
+    OK(sw_confirm_decision(YES, YES, YES, NO),
+       "marker present -> PROMPT regardless of the integrity line");
+
+    /* Knob on, a tty, marker absent: the two rows this refinement added. */
+    OK(!sw_confirm_decision(YES, YES, NO, YES),
+       "marker absent AND integrity line wired -> NO prompt (sudoers waived auth)");
+    OK(sw_confirm_decision(YES, YES, NO, NO),
+       "marker absent but integrity line not wired -> PROMPT (absence untrusted)");
 }
 
 static void test_confirm_answer_classifier(void) {
@@ -680,7 +715,7 @@ int main(void) {
         test_emit_exec_line_tty_only();
         test_exec_display_default();
         test_exec_confirm_default();
-        test_confirm_gate();
+        test_confirm_decision();
         test_confirm_answer_classifier();
         test_integrity_line_detection();
         test_defer_decision();

@@ -275,11 +275,24 @@ in {
 
         Tty-gated: with no controlling terminal there is no prompt and behaviour
         is identical to `off`, so piped and automated invocations can never newly
-        block. Read that gate honestly, though — it exempts only genuinely
-        terminal-less invocations: a script run *from* a live terminal (a deploy
-        script in an SSH session calling `NOPASSWD` sudo, say) does have a
-        controlling terminal and **will** be asked `run? [y/N]`. The prompt
-        applies to the terminal-password path only; the root exemption and
+        block.
+
+        Authenticate-*then*-confirm, literally: the question is asked only when
+        sudo actually collected a factor for **this** invocation. That is
+        detected with the same in-process PAM marker `policyDeference` uses —
+        `pam_sudowhat` sets it whenever sudo runs the auth stack, in-process and
+        after the caller's own environment was captured, so a caller can add the
+        marker but never remove it. Runs where sudoers waived authentication — a
+        `NOPASSWD` rule, `Defaults !authenticate` — leave the marker absent and
+        are **never** asked, terminal or not: re-gating what sudoers explicitly
+        waived would contradict the deference `policyDeference` applies on the
+        console path. The timestamp cache follows the same rule, which is worth
+        stating: within a non-zero `timestampTimeout` window a cached credential
+        also skips the auth stack, so the follow-up command is treated as waived
+        and is not asked either. At the module default of 0 every command
+        authenticates, and so every command is asked.
+
+        The prompt applies to the terminal-password path only; the root exemption and
         `policyDeference` skips are untouched, and the biometric
         path already decides after resolution. Baked into the signed bundle at
         build time. macOS only — the Linux port ships the display plugin without
