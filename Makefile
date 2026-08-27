@@ -241,10 +241,19 @@ build/pam_SessionGuard.o: shared/SessionGuard.m shared/SessionGuard.h shared/Con
 %.o: %.m
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Signing identifiers are set explicitly (one codesign invocation per bundle:
+# --identifier applies to every path in an invocation, so batching would stamp
+# all three with one name). They must match the SUDOWHAT_*_IDENT constants in
+# shared/Constants.h - release-build SignatureVerifier pins them in its code
+# requirement, and a mismatch makes verification fail closed. The values equal
+# codesign's basename-derived defaults; setting them explicitly removes that
+# derivation from the trust chain. Dev mode sets them too, for parity.
 sign: all
 	@if [ "$(SUDOWHAT_TEAM_ID)" = "-" ]; then \
 		echo "ad-hoc signing build/*.so (dev mode)"; \
-		codesign --force --sign - build/sudowhat_approval.so build/pam_sudowhat.so build/sudowhat_audit.so; \
+		codesign --force --sign - --identifier sudowhat_approval build/sudowhat_approval.so; \
+		codesign --force --sign - --identifier pam_sudowhat build/pam_sudowhat.so; \
+		codesign --force --sign - --identifier sudowhat_audit build/sudowhat_audit.so; \
 	else \
 		if [ -z "$$DEVELOPER_NAME" ]; then \
 			echo "DEVELOPER_NAME must be set for release builds" >&2; \
@@ -253,7 +262,13 @@ sign: all
 		echo "Developer ID signing as team $(SUDOWHAT_TEAM_ID)"; \
 		codesign --force --options runtime \
 		    --sign "Developer ID Application: $$DEVELOPER_NAME ($(SUDOWHAT_TEAM_ID))" \
-		    build/sudowhat_approval.so build/pam_sudowhat.so build/sudowhat_audit.so; \
+		    --identifier sudowhat_approval build/sudowhat_approval.so; \
+		codesign --force --options runtime \
+		    --sign "Developer ID Application: $$DEVELOPER_NAME ($(SUDOWHAT_TEAM_ID))" \
+		    --identifier pam_sudowhat build/pam_sudowhat.so; \
+		codesign --force --options runtime \
+		    --sign "Developer ID Application: $$DEVELOPER_NAME ($(SUDOWHAT_TEAM_ID))" \
+		    --identifier sudowhat_audit build/sudowhat_audit.so; \
 	fi
 
 install: sign
@@ -287,11 +302,21 @@ test: install
 # test_escape_core is the cross-language guard: it links the Rust staticlib and
 # asserts it escapes byte-identically to the ObjC PromptFormatter.
 test-unit: build/test_prompt_formatter build/test_plugin_internals \
-		build/test_escape_core build/test_audit_internals
+		build/test_escape_core build/test_audit_internals \
+		build/test_sigverifier
 	@build/test_prompt_formatter
 	@build/test_plugin_internals
 	@build/test_escape_core
 	@build/test_audit_internals
+	@build/test_sigverifier
+
+# Guards the release-build code requirement offline (syntax + non-vacuous
+# rejection of an Apple-signed binary); see the test file's header comment.
+build/test_sigverifier: tests/test_sigverifier.m tests/sw_test.h \
+		shared/SignatureVerifier.m shared/SignatureVerifier.h shared/Constants.h | build
+	$(CC) $(TEST_CFLAGS) -DSW_SIGVERIFIER_CLASS=SudoWhatSignatureVerifier \
+	    -framework Foundation -framework CoreFoundation -framework Security \
+	    -o $@ tests/test_sigverifier.m shared/SignatureVerifier.m
 
 build/test_prompt_formatter: tests/test_prompt_formatter.m tests/sw_test.h \
 		plugin/PromptFormatter.m plugin/PromptFormatter.h | build

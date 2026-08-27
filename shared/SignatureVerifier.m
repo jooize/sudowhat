@@ -4,7 +4,46 @@
 
 @implementation SW_SIGVERIFIER_CLASS
 
-+ (BOOL)verifyPath:(NSString *)path error:(NSError **)error {
+/* Release-build code requirement. Four clauses, each load-bearing:
+ *
+ *   anchor apple generic
+ *     The chain terminates at Apple's root CA (Developer ID, App Store,
+ *     and Apple's own code all satisfy this alone -- hence the next two).
+ *   certificate 1[field.1.2.840.113635.100.6.2.6]
+ *     The intermediate is Apple's "Developer ID Certification Authority"
+ *     (marker OID present). Excludes App Store / Apple-internal chains.
+ *   certificate leaf[field.1.2.840.113635.100.6.1.13]
+ *     The leaf is a "Developer ID Application" certificate (marker OID
+ *     present). Excludes same-team Apple Development / Mac Installer
+ *     certificates, which carry the same subject.OU but are easier to
+ *     obtain (any team member can mint a development cert).
+ *   certificate leaf[subject.OU] = "<team>"
+ *     The Developer ID belongs to THIS team, not merely any developer.
+ *   identifier "<ident>"
+ *     The signature's embedded identifier names THIS bundle, so another
+ *     binary signed by the same team cannot stand in for it. The expected
+ *     identifiers are compile-time constants (Constants.h) matching the
+ *     `codesign --identifier` values the Makefile sign target sets.
+ *
+ * The team ID and identifier are compile-time constants, never runtime
+ * input, so no escaping of the quoted strings is needed. Guarded by
+ * tests/test_sigverifier.m: the text must compile via
+ * SecRequirementCreateWithString, and must NOT validate an
+ * arbitrary Apple-signed binary. */
++ (NSString *)requirementTextForTeamID:(NSString *)teamID
+                            identifier:(NSString *)identifier {
+    return [NSString stringWithFormat:
+            @"anchor apple generic"
+             " and certificate 1[field.1.2.840.113635.100.6.2.6]"
+             " and certificate leaf[field.1.2.840.113635.100.6.1.13]"
+             " and certificate leaf[subject.OU] = \"%@\""
+             " and identifier \"%@\"",
+            teamID, identifier];
+}
+
++ (BOOL)verifyPath:(NSString *)path
+        identifier:(NSString *)identifier
+             error:(NSError **)error {
     if (path.length == 0) {
         if (error) *error = [NSError errorWithDomain:@"sudowhat.SignatureVerifier"
                                                 code:1
@@ -30,9 +69,17 @@
     SecCSFlags flags = kSecCSStrictValidate | kSecCSCheckAllArchitectures;
 
     if (!SUDOWHAT_IS_DEV_BUILD()) {
+        /* Fail closed: a release build must always pin an identifier. */
+        if (identifier.length == 0) {
+            CFRelease(code);
+            if (error) *error = [NSError errorWithDomain:@"sudowhat.SignatureVerifier"
+                                                    code:2
+                                                userInfo:@{NSLocalizedDescriptionKey: @"empty expected identifier"}];
+            return NO;
+        }
         NSString *requirementText =
-            [NSString stringWithFormat:@"anchor apple generic and certificate leaf[subject.OU] = \"%s\"",
-             SUDOWHAT_TEAM_ID];
+            [self requirementTextForTeamID:@SUDOWHAT_TEAM_ID
+                                identifier:identifier];
         status = SecRequirementCreateWithString((__bridge CFStringRef)requirementText,
                                                 kSecCSDefaultFlags,
                                                 &requirement);

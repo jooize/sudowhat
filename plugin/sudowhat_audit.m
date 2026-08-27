@@ -449,6 +449,7 @@ static int sudowhat_audit_open(unsigned int version,
          * and pam_sudowhat verify it, present-but-tampered, and fail closed.) */
         NSError *sigErr = nil;
         if (![SudoWhatAuditSigVerifier verifyPath:@SUDOWHAT_PLUGIN_PATH
+                                       identifier:@SUDOWHAT_PLUGIN_IDENT
                                             error:&sigErr]) {
             syslog(LOG_AUTHPRIV | LOG_WARNING,
                    "sudowhat_audit: approval plugin signature invalid; "
@@ -456,6 +457,7 @@ static int sudowhat_audit_open(unsigned int version,
             return 1;
         }
         if (![SudoWhatAuditSigVerifier verifyPath:@SUDOWHAT_PAM_PATH
+                                       identifier:@SUDOWHAT_PAM_IDENT
                                             error:&sigErr]) {
             syslog(LOG_AUTHPRIV | LOG_WARNING,
                    "sudowhat_audit: pam_sudowhat signature invalid; "

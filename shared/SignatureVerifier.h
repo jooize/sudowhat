@@ -3,11 +3,13 @@
  * PAM module can mutually verify each other's bundle. Single source of truth:
  * both bundles compile this one file (and shared/SignatureVerifier.m).
  *
- * In release builds (SUDOWHAT_TEAM_ID != "-") a Designated Requirement of
- *   anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"
- * is enforced. In dev builds the requirement is dropped and only signature
- * integrity is checked, allowing ad-hoc signing without an Apple Developer
- * account.
+ * In release builds (SUDOWHAT_TEAM_ID != "-") a code requirement pinning the
+ * Developer ID chain (Apple anchor + Developer ID CA and leaf marker OIDs),
+ * the team (leaf subject.OU), and the per-bundle signing identifier is
+ * enforced -- see requirementTextForTeamID:identifier: in the .m for the
+ * exact text and per-clause rationale. In dev builds the requirement is
+ * dropped and only signature integrity is checked, allowing ad-hoc signing
+ * without an Apple Developer account.
  *
  * Why a build-time class-name macro: sudo loads both bundles into the same
  * process, and two Objective-C classes with the same name trigger a runtime
@@ -32,7 +34,17 @@
 
 @interface SW_SIGVERIFIER_CLASS : NSObject
 
-+ (BOOL)verifyPath:(NSString *)path error:(NSError **)error;
+/* Verify the bundle at path. identifier is the expected codesign signing
+ * identifier (one of the SUDOWHAT_*_IDENT constants); it is enforced in
+ * release builds and ignored in dev builds (no requirement there). */
++ (BOOL)verifyPath:(NSString *)path
+        identifier:(NSString *)identifier
+             error:(NSError **)error;
+
+/* Exposed for tests (tests/test_sigverifier.m): the release-build
+ * requirement text for a given team and identifier. */
++ (NSString *)requirementTextForTeamID:(NSString *)teamID
+                            identifier:(NSString *)identifier;
 
 @end
 

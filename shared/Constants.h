@@ -4,9 +4,10 @@
  *
  * SUDOWHAT_TEAM_ID is provided at build time via -DSUDOWHAT_TEAM_ID=\"...\".
  * When it equals "-", the build is in ad-hoc / dev mode: SignatureVerifier
- * validates that signatures are intact but does not enforce a
- * team-identifier requirement. In release builds, the team-ID requirement
- * is enforced.
+ * validates that signatures are intact but enforces no code requirement.
+ * In release builds it enforces the full Developer ID requirement (Apple
+ * anchor + Developer ID marker OIDs + team + per-bundle identifier); see
+ * shared/SignatureVerifier.m.
  *
  * SUDOWHAT_PLUGIN_PATH and SUDOWHAT_PAM_PATH default to /usr/local for the
  * stock make/install flow, but can be overridden at build time via
@@ -44,6 +45,18 @@
 #ifndef SUDOWHAT_AUDIT_PATH
 #define SUDOWHAT_AUDIT_PATH     "/usr/local/libexec/sudo/sudowhat_audit.so"
 #endif
+
+/* Expected codesign signing identifiers, one per bundle. The Makefile sign
+ * target sets these explicitly via `codesign --identifier` (dev and release
+ * alike), and SignatureVerifier pins them in the release-build requirement
+ * (`identifier "..."`) so a different binary signed by the same team cannot
+ * stand in for a bundle. The values match the bundle basenames, which is
+ * also what codesign would derive by default -- setting them explicitly
+ * removes the derivation from the trust chain. Keep these and the Makefile
+ * in sync: a mismatch makes release-build verification fail closed. */
+#define SUDOWHAT_PLUGIN_IDENT   "sudowhat_approval"
+#define SUDOWHAT_PAM_IDENT      "pam_sudowhat"
+#define SUDOWHAT_AUDIT_IDENT    "sudowhat_audit"
 
 #define SUDOWHAT_PLUGIN_SYMBOL  "sudowhat_approval_plugin"
 #define SUDOWHAT_AUDIT_SYMBOL   "sudowhat_audit_plugin"

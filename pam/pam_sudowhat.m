@@ -109,7 +109,9 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags,
             return PAM_AUTH_ERR;
         }
 
-        if (![SudoWhatPamSigVerifier verifyPath:@SUDOWHAT_PLUGIN_PATH error:&err]) {
+        if (![SudoWhatPamSigVerifier verifyPath:@SUDOWHAT_PLUGIN_PATH
+                                     identifier:@SUDOWHAT_PLUGIN_IDENT
+                                          error:&err]) {
             sudowhat_log(LOG_ERR, "approval plugin signature check failed: %s",
                          utf8_or(err.localizedDescription, "unknown"));
             return PAM_AUTH_ERR;
@@ -122,7 +124,9 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags,
          * Removing the bundle needs root, which is outside the threat model:
          * tamper-evident in place, not removal-proof. */
         if ([[NSFileManager defaultManager] fileExistsAtPath:@SUDOWHAT_AUDIT_PATH]
-            && ![SudoWhatPamSigVerifier verifyPath:@SUDOWHAT_AUDIT_PATH error:&err]) {
+            && ![SudoWhatPamSigVerifier verifyPath:@SUDOWHAT_AUDIT_PATH
+                                        identifier:@SUDOWHAT_AUDIT_IDENT
+                                             error:&err]) {
             sudowhat_log(LOG_ERR, "audit plugin signature check failed: %s",
                          utf8_or(err.localizedDescription, "unknown"));
             return PAM_AUTH_ERR;

@@ -1270,7 +1270,9 @@ static BOOL sudowhat_audit_bundle_ok(NSError **error) {
     if (![[NSFileManager defaultManager] fileExistsAtPath:@SUDOWHAT_AUDIT_PATH]) {
         return YES;
     }
-    return [SudoWhatSignatureVerifier verifyPath:@SUDOWHAT_AUDIT_PATH error:error];
+    return [SudoWhatSignatureVerifier verifyPath:@SUDOWHAT_AUDIT_PATH
+                                       identifier:@SUDOWHAT_AUDIT_IDENT
+                                            error:error];
 }
 
 static int sudowhat_check(char * const command_info[],
@@ -1283,7 +1285,9 @@ static int sudowhat_check(char * const command_info[],
         /* (1) Mutual integrity check: verify pam_sudowhat.so before
          * trusting that the PAM step was actually our module. */
         NSError *sigErr = nil;
-        if (![SudoWhatSignatureVerifier verifyPath:@SUDOWHAT_PAM_PATH error:&sigErr]) {
+        if (![SudoWhatSignatureVerifier verifyPath:@SUDOWHAT_PAM_PATH
+                                        identifier:@SUDOWHAT_PAM_IDENT
+                                             error:&sigErr]) {
             set_errstr(errstr, "sudowhat: pam_sudowhat signature invalid: %s",
                        utf8_or(sigErr.localizedDescription, "unknown"));
             return 0;

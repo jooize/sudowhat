@@ -211,7 +211,17 @@ them (no sheet) once sudo has authenticated them. Set `nonConsole = "deny"` to
 install `auth sufficient pam_permit.so` instead, which terminates the chain with
 no password path, so the approval plugin denies every non-console caller.
 
-**Trust root:** Apple Developer ID code signing. In a release build, `SignatureVerifier` enforces the team-identifier requirement `anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"`. Forging the integrity check requires forging your developer signature.
+**Trust root:** Apple Developer ID code signing. In a release build the team ID is compiled into each bundle, and `SignatureVerifier` enforces this requirement on every peer it checks:
+
+```
+anchor apple generic                                     -- chains to Apple's root
+and certificate 1[field.1.2.840.113635.100.6.2.6]        -- via the Developer ID CA
+and certificate leaf[field.1.2.840.113635.100.6.1.13]    -- to a Developer ID Application leaf
+and certificate leaf[subject.OU] = "<TEAM_ID>"           -- issued to YOUR team
+and identifier "<bundle>"                                -- signed as THIS bundle
+```
+
+So a valid signature from another developer fails (wrong team), a same-team Apple *Development* certificate fails (wrong certificate flavor — those are mintable by any team member), and a different binary your own team signed fails (wrong identifier). Defeating the check needs a Developer ID certificate Apple issued to your team, signing an impostor under this bundle's exact identifier. This is a release-build property only — the default dev build validates signature integrity but enforces no requirement, so any intact signature passes there (see [Build modes](#build-modes)). In all builds the check is tamper *evidence* inside the mutual-signature web, not a barrier against root: replacing a root-owned bundle already requires root, which could equally disable the check.
 
 **Fail-closed:** any failure of either component aborts sudo. No path leads to `pam_opendirectory`-style permissive defaults. Apple's stock `pam_tid.so` is the broken behavior we're fixing — falling back to it would be regression, not recovery.
 
@@ -284,7 +294,7 @@ Bundles are ad-hoc-signed. `SignatureVerifier` validates that signatures are int
 make SUDOWHAT_TEAM_ID=XXXXXXXXXX DEVELOPER_NAME="Your Name" sign
 ```
 
-Bundles are signed with your Developer ID Application certificate. The team-identifier requirement is enforced at runtime: tampering breaks the signature, and replacement with a differently-signed binary is detected.
+Bundles are signed with your Developer ID Application certificate, each under its own pinned signing identifier. The code requirement is enforced at runtime: tampering breaks the signature, and substitution is detected whether the replacement is signed by another team, by a same-team Apple Development certificate, or is a *different* binary your own team signed — see [Trust root](#how-it-works) for the exact requirement.
 
 ## Linux (terminal command display)
 
