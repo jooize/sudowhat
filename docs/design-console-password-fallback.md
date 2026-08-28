@@ -115,13 +115,33 @@ rejected: environment variables and `SSH_TTY` are invisible through a tmux
 server (the server's environment, not the client's, reaches sudo), spoofable
 where visible, and would hand every caller an auth-routing knob.
 
-One extension was explored and left undecided: **dialog-timeout fallback** —
-when the dialog dies of timeout or system cancel (never user cancel), fall
-through to the terminal password. The remote user waits out the dialog once
-and then types a password; an attacker-spawned hidden sudo gains nothing,
-since the fallback prompt lands on a pty the attacker cannot answer with a
-password they do not have. Costs: it is slow by construction, and it teaches
-that ignoring the dialog produces a prompt, which erodes "cancel means no".
+One extension was explored: **dialog-timeout fallback**. Half of it is easy.
+The plugin's `evaluatePolicy` wait is a semaphore; a timed wait plus
+`[ctx invalidate]` closes the dialog deterministically after an operator-set
+timeout, and the resulting `LAErrorAppCancel` is cleanly distinguishable
+from the user's own Cancel (`LAErrorUserCancel`), so an explicit no still
+denies. The other half is the blocker: by approval-plugin time sudo's PAM
+phase is already over — the console-gate succeeded, which is exactly what
+suppressed the native password — and sudo offers no way to re-enter it.
+Collecting a terminal password at that point means the plugin running its
+own PAM conversation (`pam_start` / `pam_authenticate`, proxied over sudo's
+conversation API): possible with openpam, but it puts password bytes through
+plugin code, breaking the invariant `execConfirm` was designed around ("no
+password ever touches plugin code") and adding real attack surface to the
+most sensitive component. That splits the idea into two tiers:
+
+- **Timeout-then-deny** (viable, cheap, safe): a `dialogTimeout` that
+  invalidates the dialog and denies with a message pointing at the
+  non-console path. For case 4 it only makes the failure fast; it collects
+  nothing.
+- **Timeout-then-password** (parked): requires the plugin-side PAM
+  transaction above. The runtime security story otherwise holds — an
+  attacker-spawned hidden sudo gains nothing, since the fallback prompt
+  lands on a pty the attacker cannot answer with a password they do not
+  have — but it is slow by construction, it teaches that ignoring the
+  dialog produces a prompt (eroding "cancel means no"), and its
+  implementation price is a standing invariant.
+
 Parked until someone actually wants it. The workaround today is simply to
 run sudo from the plain SSH shell, outside the console-session tmux, which
 takes the ordinary non-console terminal-password path.
