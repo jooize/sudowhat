@@ -16,21 +16,21 @@ sudowhat: execute:    /bin/echo hello
         ┌────────────────────────────────────┐
         │  sudo is trying to run a command.  │
         │                                    │
-        │  RUN AS                            │   ┌──────────────────┐
-        │  root                              │   │ sudo is trying   │
-        │                                    │   │ to run a         │
-        │  DIRECTORY                         │   │ command.         │
+        │  RUN AS                            │
+        │  root                              │
+        │                                    │
+        │  DIRECTORY                         │   ┌──────────────────┐
         │  /Users/you                        │   │                  │
-        │                                    │   │ RUN AS           │
-        │  EXECUTE                           │   │ root             │
-        │  /bin/echo hello                   │   │  ⋮               │
-        │                                    │   │ Verify Code:     │
-        │  Verify Code: Z96E                 │   │ Z96E             │
+        │                                    │   │  "sudo" wants    │
+        │  EXECUTE                           │   │  to              │
+        │  /bin/echo hello                   │   │  authenticate    │
         │                                    │   │                  │
-        │  Code must match your terminal.    │   │ Double-click the │
-        │                                    │   │ side button to   │
-        │  Touch ID or enter your password   │   │ approve.         │
-        │  to allow this.                    │   └──────────────────┘
+        │  Verify Code: Z96E                 │   │  Double-click    │
+        │                                    │   │  to approve      │
+        │  Code must match your terminal.    │   │                  │
+        │                                    │   └──────────────────┘
+        │  Touch ID or enter your password   │
+        │  to allow this.                    │
         │                                    │
         │          [ Use Password… ]         │
         │          [    Cancel     ]         │
@@ -39,9 +39,10 @@ hello
 ```
 
 Everything above is real output: the terminal block prints before any
-authentication, and the Touch ID dialog (left) and the Apple Watch prompt
-(right) are rendered by the system. The verify code on the terminal must
-match the one in the prompt.
+authentication, and the system renders the Touch ID dialog (left). Approving
+from Apple Watch (right) shows no command detail on the wrist; the dialog on
+screen still carries the command, and the verify code on the terminal must
+match it.
 
 > [!IMPORTANT]
 > This project is programmed entirely with AI. It is security-critical
