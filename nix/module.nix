@@ -53,7 +53,7 @@ in {
     };
 
     authCacheMinutes = lib.mkOption {
-      type = lib.types.nullOr lib.types.int;
+      type = lib.types.either lib.types.int (lib.types.enum [ "defer" ]);
       default = 0;
       description = ''
         Value for sudo's `Defaults timestamp_timeout` (minutes). 0 (the
@@ -61,7 +61,7 @@ in {
         re-prompts. A positive value re-enables sudo's normal per-tty grace
         period; under the default per-tty scope a cached credential is only
         ever reused on the same terminal that already authenticated a real
-        factor. `null` defers entirely: the module writes no
+        factor. `"defer"` defers entirely: the module writes no
         `/etc/sudoers.d/sudowhat` and no `timestamp_timeout` line, so whatever
         your sudoers already configures (or sudo's stock default, 5 minutes)
         stays in effect. The module never sets `timestamp_type=global` — the
@@ -239,7 +239,7 @@ in {
         `sudo_local` / `sudo` PAM files, which is outside the threat model.
 
         Note the timestamp-cache interaction: with `on` and a credential cache
-        in effect (`authCacheMinutes` non-zero, or `null` deferring to a
+        in effect (`authCacheMinutes` non-zero, or `"defer"` with a
         non-zero sudoers timeout), a second command within the grace window on
         the same terminal is treated as deferred and runs with no dialog — sudo's normal
         grace after the first real factor on that terminal. Keep
@@ -292,7 +292,7 @@ in {
         waived would contradict the deference `policyDeference` applies on the
         console path. The timestamp cache follows the same rule, which is worth
         stating: within a live credential-cache window (`authCacheMinutes`
-        non-zero, or `null` deferring to sudoers) a cached credential
+        non-zero, or `"defer"` deferring to sudoers) a cached credential
         also skips the auth stack, so the follow-up command is treated as waived
         and is not asked either. At the module default of 0 every command
         authenticates, and so every command is asked.
@@ -344,10 +344,10 @@ in {
     # writable, which is sudo's only hard requirement for sudoers.d files.
     # The 0440 convention is convention, not enforcement.
     #
-    # authCacheMinutes = null means full deference: no file at all, so an
+    # authCacheMinutes = "defer" means full deference: no file at all, so an
     # existing sudoers timestamp_timeout (or sudo's stock default) governs.
     environment.etc."sudoers.d/sudowhat" =
-      lib.mkIf (cfg.authCacheMinutes != null) {
+      lib.mkIf (cfg.authCacheMinutes != "defer") {
         text = ''
           # Managed by the sudowhat nix-darwin module.
           # timestamp_timeout is services.sudowhat.authCacheMinutes (default 0 =
