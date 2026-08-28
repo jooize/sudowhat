@@ -45,7 +45,7 @@ screen still carries the command, and the verify code on the terminal must
 match it.
 
 > [!IMPORTANT]
-> This project is programmed entirely with AI. It is security-critical
+> This project is **programmed entirely with AI**. It is security-critical
 > software in your authentication path, and installing and using it carries
 > risk. Read the code and [docs/security-design.md](docs/security-design.md)
 > and judge for yourself before trusting it with your sudo.

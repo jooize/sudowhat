@@ -63,12 +63,44 @@ Mirrors the non-console flow; no new trust machinery.
   unavailable, and the in-process PAM marker shows sudo actually ran the
   auth stack for this invocation. Marker, step-aside, and ceremony are the
   existing non-console code paths.
-- **`nonConsole = "deny"` composes.** The gate variant is what makes a
-  native password path exist at all. With the `pam_permit` (deny) variant
-  installed there is no password stack to fall through to, so
-  `consoleNoBiometric = "password"` requires `nonConsole = "password"`; the
-  module should assert this pairing at eval time rather than install a
-  configuration that can only deny.
+- **Requires `nonConsole = "password"` — plumbing, not policy.** `nonConsole`
+  sounds like policy for remote callers, but its values install different
+  PAM plumbing: `"password"` installs the gate variant, whose fall-through
+  to sudo's native password modules is the rails this feature rides;
+  `"deny"` installs the `pam_permit` variant, which ends the chain so
+  nobody is ever prompted — that is precisely how "denied without a
+  prompt" is achieved, and it leaves no password stack in the chain for
+  the console user to fall through to. Building the rails under deny
+  semantics is worse than the coupling: SSH callers would be prompted for
+  a password that is always discarded afterward — collecting credentials
+  that are never honored. The module asserts the pairing at eval time
+  rather than install a configuration that can only deny.
+
+## Implementation risk (why this needs a spike)
+
+The console-gate lives in `pam_sudowhat`, so declining at PAM time means
+linking LocalAuthentication into the PAM module and calling
+`canEvaluatePolicy` inside sudo's setuid-root PAM phase. Three hazards, none
+fatal, all spike-gated:
+
+1. **Framework reachability from PAM context.** LocalAuthentication talks
+   to `coreauthd` over Mach IPC, and PAM runs early, in a setuid process,
+   sometimes under restricted bootstrap contexts (SSH, launchd, early
+   boot). A daemon unreachable from there can error oddly — or hang, and a
+   hang in PAM hangs every sudo on the machine. Precedent in this repo:
+   `design-nonconsole-sudo.md` flagged `SCDynamicStore`-in-PAM as
+   configd-reachability-sensitive, the same failure class. Hardware spike
+   before trust, as policy-deference got.
+2. **Growth of the trusted core.** `pam_sudowhat` is deliberately tiny
+   (integrity checks plus the console gate). Linking LocalAuthentication
+   pulls that framework and its dependencies into the auth-critical path
+   of every sudo, even for configurations that never enable the option.
+3. **Two probes that can disagree.** The PAM module and the approval
+   plugin probe availability independently (the plugin never trusts the
+   module's conclusion). Different moments or contexts can yield different
+   answers — "PAM fell through to password but the plugin's probe says
+   biometric is available" — and every such state needs a specified,
+   fail-closed resolution before this ships.
 
 ## Security analysis
 
