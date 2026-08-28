@@ -52,7 +52,7 @@ in {
       '';
     };
 
-    timestampTimeout = lib.mkOption {
+    authCacheMinutes = lib.mkOption {
       type = lib.types.int;
       default = 0;
       description = ''
@@ -236,10 +236,10 @@ in {
         `sudo_local` / `sudo` PAM files, which is outside the threat model.
 
         Note the timestamp-cache interaction: with `on` and a non-zero
-        `timestampTimeout`, a second command within the grace window on the same
+        `authCacheMinutes`, a second command within the grace window on the same
         terminal is treated as deferred and runs with no sheet — sudo's normal
         grace after the first real factor on that terminal. Keep
-        `timestampTimeout = 0` (the default) for a Touch ID sheet on every
+        `authCacheMinutes = 0` (the default) for a Touch ID sheet on every
         command. Baked into the signed bundle at build time.
       '';
     };
@@ -287,7 +287,7 @@ in {
         are **never** asked, terminal or not: re-gating what sudoers explicitly
         waived would contradict the deference `policyDeference` applies on the
         console path. The timestamp cache follows the same rule, which is worth
-        stating: within a non-zero `timestampTimeout` window a cached credential
+        stating: within a non-zero `authCacheMinutes` window a cached credential
         also skips the auth stack, so the follow-up command is treated as waived
         and is not asked either. At the module default of 0 every command
         authenticates, and so every command is asked.
@@ -340,10 +340,10 @@ in {
     # The 0440 convention is convention, not enforcement.
     environment.etc."sudoers.d/sudowhat".text = ''
       # Managed by the sudowhat nix-darwin module.
-      # timestamp_timeout is services.sudowhat.timestampTimeout (default 0 =
+      # timestamp_timeout is services.sudowhat.authCacheMinutes (default 0 =
       # cache disabled, every invocation re-prompts). timestamp_type is left at
       # sudo's default (per-tty) and never set to global.
-      Defaults timestamp_timeout=${toString cfg.timestampTimeout}
+      Defaults timestamp_timeout=${toString cfg.authCacheMinutes}
     '';
 
     # /etc/pam.d/sudo_local — two variants. Apple's openpam fork does not parse

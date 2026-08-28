@@ -51,7 +51,7 @@ rebuilding it inside the plugin.**
   `pam_permit` config), a non-console caller is denied exactly as before —
   stepping aside over a `pam_permit` chain would grant passwordless root.
 - **One opt-in.** `services.sudowhat.allowNonConsole` (default `false`) selects
-  the gate variant of `sudo_local`. `timestampTimeout` is a separate option
+  the gate variant of `sudo_local`. `authCacheMinutes` is a separate option
   (default `0`); the module never emits `timestamp_type=global`.
 
 The README's "Console vs. non-console callers" table gives the resulting

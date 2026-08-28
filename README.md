@@ -202,7 +202,7 @@ runtime configuration to tamper with. The module options
 | `enable` | `false` | Install the bundles and wire up sudo. |
 | `package` | the flake's package | Which sudowhat build to install. |
 | `nonConsole` | `"password"` \| `"deny"` (`"password"`) | What SSH / headless callers get: sudo's native password on their own terminal, or refusal. See [the table below](#console-vs-non-console-callers). |
-| `timestampTimeout` | minutes (`0`) | sudo's credential cache. `0` = every command re-prompts. Never sets `timestamp_type=global`. |
+| `authCacheMinutes` | minutes (`0`) | sudo's credential cache. `0` = every command re-prompts. Never sets `timestamp_type=global`. |
 | `auditDisplay` | `"on"` \| `"off"` (`"on"`) | The pre-auth `run as / directory / input` (+ `path:`) terminal block. |
 | `execDisplay` | `"on"` \| `"off"` (`"on"`) | The resolved `execute:` terminal line. |
 | `echoColor` | `"on"` \| `"off"` (`"on"`) | Role-highlighting of the `input:` / `execute:` values. `NO_COLOR` / `TERM=dumb` still force plain at runtime. |
