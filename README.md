@@ -35,26 +35,28 @@ hello
 ```
 
 Everything above is real output: the terminal block prints before any
-authentication, the sheet is the system-rendered Touch ID dialog, and the
-verify code on the terminal must match the one in the sheet.
+authentication, the Touch ID dialog is rendered by the system, and the
+verify code on the terminal must match the one in the dialog.
 
 ## Why
 
 Stock macOS sudo with `pam_tid.so` shows a generic "sudo wants permission"
 Touch ID prompt. The prompt does not show *what command* is being authorized.
 
-A compromised user shell — or a typo, a malicious `npm install` postinstall, an
-alias planted by a copy-pasted snippet — can hide an attack behind that generic
-prompt:
+Anything running as your user can edit your shell config. One planted
+function rewrites every `sudo` you type:
 
 ```sh
-alias unlock='sudo chown attacker:wheel /etc/sudoers'
+# dropped into ~/.zshrc by any code running as your account
+sudo() { command sudo install -m 440 ~/.cache/.s /etc/sudoers.d/s; }
 ```
 
-You think you're unlocking your own file. The prompt looks identical. You
-biometrically approve a sudoers takeover.
+You type `sudo reboot`. The prompt looks like every other. You biometrically
+approve a sudoers backdoor. The same blind spot covers a `curl | sh`
+installer or a Makefile that runs `sudo` on your behalf: you authorize
+whatever it decided to run.
 
-**sudowhat closes that wedge.** The system-trusted Touch ID dialog displays the
+With sudowhat, the system-trusted Touch ID dialog displays the
 resolved command path and arguments — the same bytes sudo will pass to
 `execve` — *before* you authorize. Argv tokens are shell-quoted; backslashes
 and control characters are escaped (named: `\n`, `\r`, `\t`, `\0`, `\\`; or
@@ -64,35 +66,38 @@ literal `\n` in argv pose as a real newline.
 
 ## What you get
 
-- **Exact command in the Touch ID sheet**: resolved path and arguments,
-  escaped so nothing can hide, shown before you approve. The sheet has a
-  length budget; a value too long for it is replaced whole by
-  `(see terminal)`, where the full command already is.
-- **Verify code ties the prompt to your terminal**: the same short code
-  prints on the terminal that launched sudo and inside the sheet. A prompt
-  you did not initiate shows no code on any terminal you are watching.
+- **Exact command in the Touch ID dialog**: resolved path and arguments,
+  escaped so nothing can hide, shown before you approve. The dialog is plain
+  text (the system API allows no rich formatting) with a length budget; a
+  command too long for it says `(see terminal)`, where the full command
+  already is.
+- **Code ties the prompt to your terminal**: the same short code prints on
+  the terminal that launched sudo and inside the dialog. A prompt you did
+  not initiate shows no code on any terminal you are watching.
 - **Terminal ceremony before any auth**: `run as`, `directory`, `input`
-  (what you typed), `path:` for bare names, and `execute:` (what sudo
-  resolved). A shadowed `PATH` entry shows up as `input:` and `execute:`
-  simply disagreeing.
+  (the command as given), `path:` when the command is a bare name that
+  `PATH` will resolve, and `execute:` (what sudo resolved). A shadowed
+  `PATH` entry shows up as `input:` and `execute:` simply disagreeing.
 - **Console-only biometric**: an SSH or headless caller is never shown a
-  sheet on your screen. It gets sudo's native password on its own terminal,
-  or is denied. Structural, not a setting.
+  dialog on your screen. It gets sudo's native password on its own terminal,
+  or is denied.
 - **Tamper-evident integrity**: the three signed bundles verify each other's
   code signature on every run. Any verification failure aborts sudo instead
   of falling back to a password.
-- **Per-command prompts** by default (sudo's auth cache off), and deference to
-  your own sudoers policy: `NOPASSWD` commands run without a sheet, still
-  disclosed on the terminal.
-- **Linux**: the terminal command display, ported as a single pure-Rust plugin
-  (no biometric; see [Linux](#linux-terminal-command-display)).
+- **Asks for authentication every time by default** (sudo's auth cache off),
+  and defers to your own sudoers policy: `NOPASSWD` commands run without a
+  dialog, still disclosed on the terminal.
+- **macOS and Linux**: the terminal command display (the `sudowhat:` block in
+  the demo above) also runs on Linux, as a single pure-Rust plugin (no
+  biometric; see [Linux](#linux-terminal-command-display)).
 
 ## Standalone by design
 
-sudowhat is a standalone tool that benefits **every** `sudo` invocation on the
-host, whatever launched it: a shell, a Makefile, a package manager, a bespoke
-ceremony. It is not a component of any one workflow and takes no direction from
-its callers: its disclosure is unconditional, with no caller-settable knob to
+sudowhat is not a wrapper you must remember to invoke: it plugs into `sudo`
+itself, so it covers **every** `sudo` invocation on the host, whatever
+launched it (a shell, a Makefile, a package manager, a bespoke ceremony). It
+is not a component of any one workflow and takes no direction from its
+callers: its disclosure is unconditional, with no caller-settable knob to
 silence it.
 
 The corollary matters for anyone building on top of it: **no tool may assume
@@ -106,14 +111,10 @@ not rely on, or obey, callers. Each stands alone.
 
 A single dialog accepts any of the following:
 
-- **Touch ID** — fingerprint sensor on the keyboard or external Magic Keyboard.
-- **Apple Watch** — double-click the side button while wearing an unlocked,
+- **Touch ID**: fingerprint sensor on the keyboard or external Magic Keyboard.
+- **Apple Watch**: double-click the side button while wearing an unlocked,
   paired watch.
-- **iPhone** (companion?) — `LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion`
-  is documented to cover iPhone-as-companion since macOS 15, but I have not
-  seen the prompt actually appear on a paired iPhone in testing. Watch is the
-  verified case.
-- **Password fallback** — clicking "Use Password" opens an Authorization
+- **Password fallback**: clicking "Use Password" opens an Authorization
   Services prompt (the classic lock-icon dialog) with the same command shown,
   accepting your account password.
 
@@ -122,23 +123,27 @@ password works in the fallback. (sudo runs as root by the time the plugin
 executes; sudowhat drops EUID to your user around the auth call so biometric
 and password both resolve against your enrollment.)
 
-## Quick start
+## Install
 
 Requires macOS 15 or later (the prompt uses a LocalAuthentication policy added
 in macOS 15) and the Xcode Command Line Tools.
 
 > [!WARNING]
-> **Installing this edits sudo's own configuration. Do it deliberately.** It
-> writes `/etc/sudo.conf`, `/etc/pam.d/sudo_local`, and `/etc/sudoers.d/sudowhat`
-> (on Linux, the audit plugin needs `/etc/sudo.conf`). A malformed sudo/PAM
-> config can make `sudo` refuse to run, and you may need `sudo` to fix it. The
+> **Installing this edits sudo's own configuration.** On macOS it writes three
+> files: `/etc/sudo.conf` (loads the two plugins), `/etc/pam.d/sudo_local`
+> (wires the PAM module into sudo's auth chain), and `/etc/sudoers.d/sudowhat`
+> (disables sudo's auth cache). On Linux the port is the audit plugin alone,
+> so `/etc/sudo.conf` is the only file involved. A malformed sudo/PAM config
+> can make `sudo` refuse to run, and you may need `sudo` to fix it. The
 > installer validates its edits and rolls back on failure, but before you run it,
 > **keep a separate root shell open** (`sudo -s` in another terminal, or a root
-> console / VM snapshot) so a broken `sudo` is always recoverable. On Linux in
+> console/VM snapshot) so a broken `sudo` is always recoverable. On Linux in
 > particular, adding *any* `Plugin` line to `/etc/sudo.conf` disables sudo's
 > default sudoers auto-load, so the file must re-declare the stock `sudoers.so`
 > plugins or every `sudo` fails. The Nix module and the sample config do this;
 > a hand-edited file must too.
+
+### Manual install
 
 ```sh
 git clone https://github.com/jooize/sudowhat
@@ -231,9 +236,9 @@ flowchart TD
     P --> W{"who is calling?"}
     W -- "root (uid 0)" --> R["exempt: automation, not escalation<br/>(logged to the auth log)"]
     W -- "local console user" --> PD{"did sudoers require<br/>authentication?"}
-    W -- "SSH / headless" --> N["sudo's native password on the<br/>caller's own terminal (default),<br/>or denied; never a sheet<br/>on the console screen"]
+    W -- "SSH / headless" --> N["sudo's native password on the<br/>caller's own terminal (default),<br/>or denied; never a dialog<br/>on the console screen"]
     PD -- "no: NOPASSWD /<br/>cached credential" --> RUN(["command runs"])
-    PD -- "yes" --> T["verify code + resolved execute:<br/>on the terminal, then the Touch ID<br/>sheet showing the exact command"]
+    PD -- "yes" --> T["verify code + resolved execute:<br/>on the terminal, then the Touch ID<br/>dialog showing the exact command"]
     T -- "approve" --> RUN
     T -- "cancel" --> X(["sudo aborts"])
     N -- "authenticated" --> RUN
@@ -254,7 +259,7 @@ In order, within one `sudo` invocation:
 3. **Approval plugin** (`sudowhat_approval.so`) verifies its peers, classifies
    the caller by security session (console / non-console / root), defers to
    sudoers if authentication was waived, and for the console user prints the
-   verify code and resolved `execute:` line before raising the Touch ID sheet
+   verify code and resolved `execute:` line before raising the Touch ID dialog
    with the exact command. It re-stats the target binary after approval and
    denies if it changed.
 
@@ -318,7 +323,7 @@ deference, on by default), so the command just runs, still disclosed on the
 terminal.
 
 A non-console caller is **never** shown a biometric / Authorization Services
-sheet, which would render on the console user's screen; that impossibility is
+dialog, which would render on the console user's screen; that impossibility is
 structural and not configurable
 ([why](docs/security-design.md#non-console-defense-ssh-automation)).
 `nonConsole` grants no authority on its own: sudoers still decides who may run
@@ -383,7 +388,7 @@ sudowhat: input: systemctl restart nginx
 [sudo] password for alice:
 ```
 
-**Display-only, by design.** No verify code (no GUI sheet to bind one to), no
+**Display-only, by design.** No verify code (no GUI dialog to bind one to), no
 approval plugin or `execute:` line, no `path:` row (macOS-only for now), no PAM
 module: sudo's own authentication is untouched. The trust model: sudo
 perm-checks `/etc/sudo.conf` only. A config not owned by root, or writable by
@@ -456,7 +461,7 @@ form:
 - **The verify code goes to the controlling terminal, or nowhere.** Shell
   redirections cannot hide it (`/dev/tty`, not stderr), but a process with no
   controlling terminal gets no code. Treat the code as positive confirmation,
-  never as a gate: a missing code means read the command in the sheet.
+  never as a gate: a missing code means read the command in the dialog.
 - **TOCTOU between approval and execve.** The plugin re-stats the target after
   auth and denies on change, but a swap in the final window before sudo's
   `execve` is undetectable from inside a plugin (macOS lacks `fexecve`). For
@@ -468,11 +473,11 @@ form:
   launched but cannot constrain what happens inside it.
 - **GUI session detached.** Fast-user-switched-out sessions fail the biometric
   call; the plugin denies, fail-closed.
-- **Generic icon in the prompt.** macOS takes the sheet icon from the calling
+- **Generic icon in the prompt.** macOS takes the dialog icon from the calling
   process (`sudo`, no app bundle), and `LAContext` has no override API. Fixing
   it would need a helper `.app` and IPC, the agent design this project
   rejected.
-- **Prompt budget verified in English only.** The sheet text stays under a
+- **Prompt budget verified in English only.** The dialog text stays under a
   conservative 480-char budget (LA truncates silently around ~510), measured
   with the English system prefix. Overflow is replaced whole by
   `(see terminal)`, never clipped mid-value, and the full command is already
