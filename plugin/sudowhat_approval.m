@@ -202,7 +202,7 @@ static BOOL sudowhat_text_is_gate_variant(NSString *content) {
 /* Reads /etc/pam.d/sudo_local and reports whether the non-console password
  * path (the gate variant) is installed. Unreadable / absent / wrong shape ->
  * NO, so the step-aside falls back to a deny. */
-static BOOL sudowhat_noncon_password_path_installed(void) {
+static BOOL sudowhat_nonconsole_password_path_installed(void) {
     NSString *content = [NSString stringWithContentsOfFile:@SUDOWHAT_SUDO_LOCAL
                                                   encoding:NSUTF8StringEncoding
                                                      error:NULL];
@@ -1416,7 +1416,7 @@ static int sudowhat_check(char * const command_info[],
              * config: `sufficient pam_permit.so`), PAM authenticated nobody, so
              * stepping aside would grant passwordless root — deny instead,
              * exactly as before this feature existed. */
-            if (sudowhat_noncon_password_path_installed()) {
+            if (sudowhat_nonconsole_password_path_installed()) {
                 /* Terminal-password mode. sudo already collected the factor,
                  * inside the policy step that also resolved the command, so the
                  * execute: line lands after auth and before execve -- a
