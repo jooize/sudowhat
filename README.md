@@ -19,16 +19,16 @@ sudowhat: execute:    /bin/echo hello
         │  RUN AS                            │
         │  root                              │
         │                                    │
-        │  DIRECTORY                         │   ┌──────────────────┐
-        │  /Users/you                        │   │                  │
-        │                                    │   │  "sudo" wants    │
-        │  EXECUTE                           │   │  to              │
-        │  /bin/echo hello                   │   │  authenticate    │
-        │                                    │   │                  │
-        │  Verify Code: Z96E                 │   │  Double-click    │
-        │                                    │   │  side button    »│
-        │  Code must match your terminal.    │   │  to approve      │
-        │                                    │   └──────────────────┘
+        │  DIRECTORY                         │          Apple Watch
+        │  /Users/you                        │      ┌──────────────────┐
+        │                                    │      │  "sudo" wants    │
+        │  EXECUTE                           │      │  to              │
+        │  /bin/echo hello                   │      │  authenticate    │
+        │                                    │      │                  │
+        │  Verify Code: Z96E                 │      │  Double-click    │
+        │                                    │      │  side button    »│
+        │  Code must match your terminal.    │      │  to approve      │
+        │                                    │      └──────────────────┘
         │  Touch ID or enter your password   │
         │  to allow this.                    │
         │                                    │

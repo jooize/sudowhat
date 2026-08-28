@@ -106,7 +106,7 @@ typing your password for sudo, which is what makes fake prompts unrewarding.
 biometric-less machine the habit exists regardless (the dialog is already a
 password box); this is the argument that the option is acceptable at all.
 
-## Case 4: the attached-from-SSH tmux (open, not solved here)
+## Case 4: the attached-from-SSH tmux (not solved; timeout rejected)
 
 A static setting cannot split case 4 from the attended console: the same
 session, the same tmux server, differs only in whether a human is at the
@@ -142,9 +142,11 @@ most sensitive component. That splits the idea into two tiers:
   dialog produces a prompt (eroding "cancel means no"), and its
   implementation price is a standing invariant.
 
-Parked until someone actually wants it. The workaround today is simply to
-run sudo from the plain SSH shell, outside the console-session tmux, which
-takes the ordinary non-console terminal-password path.
+**Rejected (2026-08-28): neither tier ships.** Timeout-then-deny buys
+little — case 4 merely fails faster — and timeout-then-password costs a
+standing invariant. The workaround stands: run sudo from the plain SSH
+shell, outside the console-session tmux, which takes the ordinary
+non-console terminal-password path.
 
 ## Rejected alternatives
 
