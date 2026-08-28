@@ -68,7 +68,7 @@ literal `\n` in argv pose as a real newline.
   escaped so nothing can hide, shown before you approve. The sheet has a
   length budget; a value too long for it is replaced whole by
   `(see terminal)`, where the full command already is.
-- **A verify code ties the sheet to your terminal**: the same short code
+- **Verify code ties the prompt to your terminal**: the same short code
   prints on the terminal that launched sudo and inside the sheet. A prompt
   you did not initiate shows no code on any terminal you are watching.
 - **Terminal ceremony before any auth**: `run as`, `directory`, `input`
@@ -322,7 +322,7 @@ sheet, which would render on the console user's screen; that impossibility is
 structural and not configurable
 ([why](docs/security-design.md#non-console-defense-ssh-automation)).
 `nonConsole` grants no authority on its own: sudoers still decides who may run
-what. A background process inside your **local GUI login** shares that login's
+what. A background process inside your local GUI login shares that login's
 session and is classified as console; see
 [Known limitations](#known-limitations).
 
