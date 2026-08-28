@@ -188,7 +188,9 @@ off with `services.sudowhat.policyDeference = "off"`.
 
 `Defaults timestamp_timeout=0` in `/etc/sudoers.d/sudowhat` disables sudo's
 auth cache, so every privileged command re-prompts. The value is configurable
-via `services.sudowhat.authCacheMinutes`; the module never sets
+via `services.sudowhat.authCacheMinutes` (`null` defers entirely: no
+`/etc/sudoers.d/sudowhat` is written, and any `timestamp_timeout` your sudoers
+already sets stays in effect); the module never sets
 `timestamp_type=global`. Note this composes with policy deference: with a
 non-zero timeout, a second command within the window on the same terminal has a
 cached credential (auth stack skipped, marker absent) and so runs with no

@@ -53,7 +53,7 @@ in {
     };
 
     authCacheMinutes = lib.mkOption {
-      type = lib.types.int;
+      type = lib.types.nullOr lib.types.int;
       default = 0;
       description = ''
         Value for sudo's `Defaults timestamp_timeout` (minutes). 0 (the
@@ -61,9 +61,12 @@ in {
         re-prompts. A positive value re-enables sudo's normal per-tty grace
         period; under the default per-tty scope a cached credential is only
         ever reused on the same terminal that already authenticated a real
-        factor. The module never sets `timestamp_type=global` — the one mode
-        that would let a console credential be reused by a same-uid remote
-        session.
+        factor. `null` defers entirely: the module writes no
+        `/etc/sudoers.d/sudowhat` and no `timestamp_timeout` line, so whatever
+        your sudoers already configures (or sudo's stock default, 5 minutes)
+        stays in effect. The module never sets `timestamp_type=global` — the
+        one mode that would let a console credential be reused by a same-uid
+        remote session.
       '';
     };
 
@@ -235,9 +238,10 @@ in {
         *forces* a prompt); suppressing it would require editing the root-owned
         `sudo_local` / `sudo` PAM files, which is outside the threat model.
 
-        Note the timestamp-cache interaction: with `on` and a non-zero
-        `authCacheMinutes`, a second command within the grace window on the same
-        terminal is treated as deferred and runs with no sheet — sudo's normal
+        Note the timestamp-cache interaction: with `on` and a credential cache
+        in effect (`authCacheMinutes` non-zero, or `null` deferring to a
+        non-zero sudoers timeout), a second command within the grace window on
+        the same terminal is treated as deferred and runs with no sheet — sudo's normal
         grace after the first real factor on that terminal. Keep
         `authCacheMinutes = 0` (the default) for a Touch ID sheet on every
         command. Baked into the signed bundle at build time.
@@ -287,7 +291,8 @@ in {
         are **never** asked, terminal or not: re-gating what sudoers explicitly
         waived would contradict the deference `policyDeference` applies on the
         console path. The timestamp cache follows the same rule, which is worth
-        stating: within a non-zero `authCacheMinutes` window a cached credential
+        stating: within a live credential-cache window (`authCacheMinutes`
+        non-zero, or `null` deferring to sudoers) a cached credential
         also skips the auth stack, so the follow-up command is treated as waived
         and is not asked either. At the module default of 0 every command
         authenticates, and so every command is asked.
@@ -338,13 +343,19 @@ in {
     # The default symlink target in /nix/store is mode 0444 — not group/world
     # writable, which is sudo's only hard requirement for sudoers.d files.
     # The 0440 convention is convention, not enforcement.
-    environment.etc."sudoers.d/sudowhat".text = ''
-      # Managed by the sudowhat nix-darwin module.
-      # timestamp_timeout is services.sudowhat.authCacheMinutes (default 0 =
-      # cache disabled, every invocation re-prompts). timestamp_type is left at
-      # sudo's default (per-tty) and never set to global.
-      Defaults timestamp_timeout=${toString cfg.authCacheMinutes}
-    '';
+    #
+    # authCacheMinutes = null means full deference: no file at all, so an
+    # existing sudoers timestamp_timeout (or sudo's stock default) governs.
+    environment.etc."sudoers.d/sudowhat" =
+      lib.mkIf (cfg.authCacheMinutes != null) {
+        text = ''
+          # Managed by the sudowhat nix-darwin module.
+          # timestamp_timeout is services.sudowhat.authCacheMinutes (default 0 =
+          # cache disabled, every invocation re-prompts). timestamp_type is left
+          # at sudo's default (per-tty) and never set to global.
+          Defaults timestamp_timeout=${toString cfg.authCacheMinutes}
+        '';
+      };
 
     # /etc/pam.d/sudo_local — two variants. Apple's openpam fork does not parse
     # the Linux-PAM bracket-list syntax `[success=done default=die]`, so the
