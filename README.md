@@ -1,7 +1,8 @@
 # sudowhat
 
-A sudo plugin suite for macOS that shows you the **exact command** — inside the
-system Touch ID prompt and on your terminal — before you authorize it.
+A **sudo plugin** suite for macOS and Linux that **shows you the exact
+command** inside the system Touch ID prompt and on your terminal before you
+authorize it.
 
 ```
 $ sudo echo hello
@@ -12,31 +13,41 @@ sudowhat: path:       /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
 sudowhat: verify:     Z96E  (compare with the prompt)
 sudowhat: execute:    /bin/echo hello
 
-        ┌──────────────────────────────────┐
-        │  🔒  "sudo" is trying to         │
-        │      run a command.              │
-        │                                  │
-        │      RUN AS                      │
-        │      root                        │
-        │                                  │
-        │      DIRECTORY                   │
-        │      /Users/you                  │
-        │                                  │
-        │      EXECUTE                     │
-        │      /bin/echo hello             │
-        │                                  │
-        │      Verify Code: Z96E           │
-        │      Code must match your        │
-        │      terminal.                   │
-        │                                  │
-        │   [ Touch ID / Watch / Password ]│
-        └──────────────────────────────────┘
+        ┌────────────────────────────────────┐
+        │  sudo is trying to run a command.  │
+        │                                    │
+        │  RUN AS                            │   ┌──────────────────┐
+        │  root                              │   │ sudo is trying   │
+        │                                    │   │ to run a         │
+        │  DIRECTORY                         │   │ command.         │
+        │  /Users/you                        │   │                  │
+        │                                    │   │ RUN AS           │
+        │  EXECUTE                           │   │ root             │
+        │  /bin/echo hello                   │   │  ⋮               │
+        │                                    │   │ Verify Code:     │
+        │  Verify Code: Z96E                 │   │ Z96E             │
+        │                                    │   │                  │
+        │  Code must match your terminal.    │   │ Double-click the │
+        │                                    │   │ side button to   │
+        │  Touch ID or enter your password   │   │ approve.         │
+        │  to allow this.                    │   └──────────────────┘
+        │                                    │
+        │          [ Use Password… ]         │
+        │          [    Cancel     ]         │
+        └────────────────────────────────────┘
 hello
 ```
 
 Everything above is real output: the terminal block prints before any
-authentication, the Touch ID dialog is rendered by the system, and the
-verify code on the terminal must match the one in the dialog.
+authentication, and the Touch ID dialog (left) and the Apple Watch prompt
+(right) are rendered by the system. The verify code on the terminal must
+match the one in the prompt.
+
+> [!IMPORTANT]
+> This project is programmed entirely with AI. It is security-critical
+> software in your authentication path, and installing and using it carries
+> risk. Read the code and [docs/security-design.md](docs/security-design.md)
+> and judge for yourself before trusting it with your sudo.
 
 ## Why
 
@@ -69,15 +80,17 @@ literal `\n` in argv pose as a real newline.
 - **Exact command in the Touch ID dialog**: resolved path and arguments,
   escaped so nothing can hide, shown before you approve. The dialog is plain
   text (the system API allows no rich formatting) with a length budget; a
-  command too long for it says `(see terminal)`, where the full command
-  already is.
+  command too long for it says `(see terminal)`, where the full resolved
+  command already shows (written to `/dev/tty`, so shell redirections cannot
+  hide it).
 - **Code ties the prompt to your terminal**: the same short code prints on
   the terminal that launched sudo and inside the dialog. A prompt you did
   not initiate shows no code on any terminal you are watching.
 - **Terminal ceremony before any auth**: `run as`, `directory`, `input`
   (the command as given), `path:` when the command is a bare name that
-  `PATH` will resolve, and `execute:` (what sudo resolved). A shadowed
-  `PATH` entry shows up as `input:` and `execute:` simply disagreeing.
+  `PATH` will resolve, and `execute:` (what sudo resolved). If an attacker's
+  binary sits earlier in `PATH` than the real one, the hijack shows up as
+  `input:` and `execute:` simply disagreeing.
 - **Console-only biometric**: an SSH or headless caller is never shown a
   dialog on your screen. It gets sudo's native password on its own terminal,
   or is denied.
