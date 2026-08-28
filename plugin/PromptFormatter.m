@@ -243,8 +243,12 @@
 
     /* Closing reminder. Bounded either way; reserve the larger for the budget
      * so the fit holds before we know which one we will emit. */
-    NSString *bottomClean = @"Code must match your terminal";
-    NSString *bottomTrunc = @"⚠️ Long items are shown in your terminal";
+    /* Both end in a full stop deliberately: the biometric sheet forces one
+     * onto the reason text anyway (Apple's framing), while the AS dialog
+     * shows the text verbatim -- writing it ourselves keeps the two dialogs
+     * rendering the same line. */
+    NSString *bottomClean = @"Code must match your terminal.";
+    NSString *bottomTrunc = @"⚠️ Long items are shown in your terminal.";
     NSUInteger bottomReserve = (bottomClean.length > bottomTrunc.length)
         ? bottomClean.length : bottomTrunc.length;
 

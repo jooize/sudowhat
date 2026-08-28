@@ -18,8 +18,8 @@
 
 /* Closing-line constants copied verbatim from PromptFormatter.m. If these ever
  * mismatch the source the exact-match tests below will flag it. */
-static NSString *const BOTTOM_CLEAN = @"Code must match your terminal";
-static NSString *const BOTTOM_TRUNC = @"⚠️ Long items are shown in your terminal";
+static NSString *const BOTTOM_CLEAN = @"Code must match your terminal.";
+static NSString *const BOTTOM_TRUNC = @"⚠️ Long items are shown in your terminal.";
 static NSString *const SEE_TERMINAL = @"(see terminal)";
 
 static const NSUInteger kMaxTotal = 480;   /* PromptFormatter.m kMaxTotal */
@@ -262,7 +262,7 @@ static void test_format_basic_exact_systemsheet(void) {
                         @[@"echo", @"hello"], SWPromptStyleSystemSheet);
     NSString *expected =
         @"run a command.\n\nRUN AS\nroot\n\nEXECUTE\n/bin/echo hello\n\n"
-        @"Verify Code: AB12\n\nCode must match your terminal";
+        @"Verify Code: AB12\n\nCode must match your terminal.";
     EQ(out, expected, "basic SystemSheet exact layout (lowercase, period at top)");
 }
 
@@ -271,7 +271,7 @@ static void test_format_basic_exact_selfcontained(void) {
                         @[@"echo", @"hello"], SWPromptStyleSelfContained);
     NSString *expected =
         @"Run a command.\n\nRUN AS\nroot\n\nEXECUTE\n/bin/echo hello\n\n"
-        @"Verify Code: AB12\n\nCode must match your terminal";
+        @"Verify Code: AB12\n\nCode must match your terminal.";
     EQ(out, expected, "basic SelfContained exact layout (capital Run, period at top)");
 }
 
@@ -280,7 +280,7 @@ static void test_format_path_line(void) {
                         @[@"echo"], SWPromptStyleSystemSheet);
     NSString *expected =
         @"run a command.\n\nRUN AS\nroot\n\nDIRECTORY\n/tmp\n\n"
-        @"EXECUTE\n/bin/echo\n\nVerify Code: AB12\n\nCode must match your terminal";
+        @"EXECUTE\n/bin/echo\n\nVerify Code: AB12\n\nCode must match your terminal.";
     EQ(out, expected,
        "cwd rendered under its own DIRECTORY label, between RUN AS and EXECUTE");
     /* no cwd -> no DIRECTORY field at all */
