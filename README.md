@@ -231,14 +231,14 @@ signature. No daemon, no agent, no IPC.
 
 ```mermaid
 flowchart TD
-    S(["sudo …"]) --> A["audit plugin: prints run as /<br/>directory / input on your terminal,<br/>before any authentication<br/>(root callers exempt)"]
-    A --> P["mutual signature verification:<br/>each bundle checks the others;<br/>any failure aborts sudo"]
+    S(["sudo …"]) --> A["audit plugin prints the<br/>command on the terminal,<br/>before any authentication"]
+    A --> P["bundles verify each other's<br/>signature; failure aborts"]
     P --> W{"who is calling?"}
-    W -- "root (uid 0)" --> R["exempt: automation, not escalation<br/>(logged to the auth log)"]
-    W -- "local console user" --> PD{"did sudoers require<br/>authentication?"}
-    W -- "SSH / headless" --> N["sudo's native password on the<br/>caller's own terminal (default),<br/>or denied; never a dialog<br/>on the console screen"]
+    W -- "root (uid 0)" --> R["exempt: automation,<br/>not escalation (logged)"]
+    W -- "console user" --> PD{"sudoers requires<br/>authentication?"}
+    W -- "SSH / headless" --> N["password on the caller's<br/>own terminal, or denied;<br/>never a dialog on<br/>the console screen"]
     PD -- "no: NOPASSWD /<br/>cached credential" --> RUN(["command runs"])
-    PD -- "yes" --> T["verify code + resolved execute:<br/>on the terminal, then the Touch ID<br/>dialog showing the exact command"]
+    PD -- "yes" --> T["verify code on the<br/>terminal, then the<br/>Touch ID dialog with<br/>the exact command"]
     T -- "approve" --> RUN
     T -- "cancel" --> X(["sudo aborts"])
     N -- "authenticated" --> RUN
