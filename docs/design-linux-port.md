@@ -6,7 +6,7 @@ terminal command **display** into a standalone sudo *audit* plugin
 escape/quote logic ported to Rust (`shared/escape_core/`). Phase 2 delivers that
 same display on **Linux**, where there is no biometric: a user runs `sudo <cmd>`,
 sees `user / directory / command` on the terminal, then gives their password to
-sudo's **native `pam_unix`**. No verify code (no GUI sheet to channel-bind), no
+sudo's **native `pam_unix`**. No verify code (no GUI dialog to channel-bind), no
 approval plugin, no PAM module. Sibling to `docs/design-terminal-mode.md`
 (the cross-platform display-layer design) and `docs/design-noncon-sudo.md`.
 

@@ -30,7 +30,7 @@ sudo /usr/bin/foo bar
   └── Plugin sudowhat_audit_plugin /usr/local/libexec/sudo/sudowhat_audit.so
       • SecStaticCodeCheckValidity on pam_sudowhat.so + the approval plugin
       • writes run as / directory / input to /dev/tty -- every path,
-        before the password prompt or Touch ID sheet; escaping done in the
+        before the password prompt or Touch ID dialog; escaping done in the
         memory-safe Rust escape_core. tty-only, skipped when headless.
   │
   ▼  PAM auth chain
@@ -51,12 +51,12 @@ sudo /usr/bin/foo bar
       • uid 0 (root) caller: exempt -- system automation, not escalation
       • else: caller must be the LOCAL CONSOLE session -- SessionGetInfo()
         reports graphic access and is not remote, and the console UID equals
-        the invoking UID. A non-console caller never reaches this sheet: it is
+        the invoking UID. A non-console caller never reaches this dialog: it is
         sent to a native password (nonConsole="password", default) or denied
         (nonConsole="deny") -- see below.
       • formats the command with shell-quoting and control-char escapes
       • writes the verify code and the resolved execute: line to /dev/tty --
-        before the sheet in biometric mode; execute: after the password on
+        before the dialog in biometric mode; execute: after the password on
         the terminal path
       • seteuid drops to the user
       • LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometricsOrCompanion)
@@ -75,7 +75,7 @@ console-gate succeeds (no password) **only** for the local console user, and
 fails for everyone else, so a non-console caller falls through the parent
 `/etc/pam.d/sudo` chain to sudo's native `pam_smartcard` / `pam_opendirectory`
 password on the caller's *own* terminal, and the approval plugin steps aside for
-them (no sheet) once sudo has authenticated them. Set `nonConsole = "deny"` to
+them (no dialog) once sudo has authenticated them. Set `nonConsole = "deny"` to
 install `auth sufficient pam_permit.so` instead, which terminates the chain with
 no password path, so the approval plugin denies every non-console caller.
 
@@ -121,17 +121,17 @@ uid: a local GUI login has graphic access and is not remote, whereas an SSH
 session is remote and a non-graphical (system-daemon) session lacks graphic
 access (`SessionGetInfo`). A uid comparison alone cannot tell them apart (the
 same user, logged in at the Mac and over SSH, shares one uid), and a same-uid
-SSH session could otherwise render a Touch ID sheet on the console screen.
+SSH session could otherwise render a Touch ID dialog on the console screen.
 
 **A non-console caller is never shown the biometric / Authorization Services
-sheet. This is structural, not a setting, and deliberately not configurable.**
-A Touch ID sheet raised for a remote or background caller renders on the
+dialog. This is structural, not a setting, and deliberately not configurable.**
+A Touch ID dialog raised for a remote or background caller renders on the
 *console* user's screen, and that user reflexively approves a command they
 never initiated. That reflexive approval is the exact hole sudowhat exists to
 close, so there is no option to permit it: the code returns before the
 `LAContext` call for any non-console caller (with a maintainer tripwire
 forbidding its reordering). It could not do anything useful anyway: the remote
-human isn't at the sensor, so a local sheet can never represent *them*
+human isn't at the sensor, so a local dialog can never represent *them*
 authenticating; whoever is at the console would be approving on the remote
 caller's behalf. The only honest remote factor is a password *they* know on
 *their* terminal. (Genuine remote biometric would need an out-of-band push to
@@ -167,7 +167,7 @@ the gate can actually defend against.
 
 The approval plugin runs on *every* `sudo` that sudoers authorizes (`NOPASSWD`
 does not bypass it), so without this, the console user would get a Touch ID
-sheet even for a command sudoers authorized `NOPASSWD`. sudowhat instead
+dialog even for a command sudoers authorized `NOPASSWD`. sudowhat instead
 **defers to sudoers' own authentication decision**: sudo runs the PAM auth
 stack (where `pam_sudowhat` sets a process-local marker) only when it requires
 authentication, so an *absent* marker means sudoers waived it (a `NOPASSWD`
@@ -194,8 +194,8 @@ already sets stays in effect); the module never sets
 `timestamp_type=global`. Note this composes with policy deference: with a
 non-zero timeout, a second command within the window on the same terminal has a
 cached credential (auth stack skipped, marker absent) and so runs with no
-sheet, sudo's normal grace after the first real factor. Keep the default `0`
-for a Touch ID sheet on every command.
+dialog, sudo's normal grace after the first real factor. Keep the default `0`
+for a Touch ID dialog on every command.
 
 ## The terminal ceremony
 
@@ -205,7 +205,7 @@ The code echoed to the controlling terminal is **bold magenta**, fixed: there
 is no setting for it. One reviewed escape sequence is the only one that can
 reach your terminal on this line, so there is nothing to misconfigure, and the
 emphasis is cosmetic in the first place: never a trust signal, since the anchor
-is the code matching the system-rendered Touch ID sheet, which cannot be
+is the code matching the system-rendered Touch ID dialog, which cannot be
 colored. The runtime opt-outs are unchanged: `NO_COLOR` or `TERM`
 absent/empty/`dumb` in the invoking environment, a non-terminal destination, or
 the stderr fallback all render the line plain.
@@ -213,7 +213,7 @@ the stderr fallback all render the line plain.
 ### Terminal command display (audit plugin)
 
 The audit plugin shows the command on the controlling terminal **before
-authentication, on every path**: the local console (before the Touch ID sheet
+authentication, on every path**: the local console (before the Touch ID dialog
 and its verify code) and non-console / SSH sessions (before sudo's native
 password prompt). This closes the gap where a non-console sudo used to step
 aside silently, showing a bare `Password:` with no command. It prints
@@ -229,24 +229,24 @@ override it) and sudowhat never walks the list or says which entry would win;
 **before the gate** on the password path, where `execute:` cannot appear until
 your password is already spent, so it prints wherever the block prints, at the
 cost of being mildly redundant on a biometric console, where `execute:` already
-appears before the sheet. Type an absolute or relative path and the row is
+appears before the dialog. Type an absolute or relative path and the row is
 absent, because `PATH` decided nothing. It is written to `/dev/tty` only
 (never sudo's stderr), so a `2>file` redirect cannot capture it, and it is
 skipped when there is no controlling terminal (headless). Once sudo has
 resolved the command, the approval plugin adds one more row, `execute:`. It is
 the absolute path sudo will actually execute, read out of sudo's own
 `command_info` and never resolved plugin-side. In biometric mode it prints
-*before* the Touch ID sheet is raised; on the terminal-password path (where
+*before* the Touch ID dialog is raised; on the terminal-password path (where
 the password happens inside sudo's policy step) it prints after auth, as a
 last look. `input:` states what was asked for and `execute:` what sudo found,
 so a bare name shadowed by an unexpected `PATH` entry shows up as the two
 simply disagreeing, with no heuristic to tune. Because the full command is
-already on the terminal, when the Touch ID sheet has to replace an over-long
+already on the terminal, when the Touch ID dialog has to replace an over-long
 item (past its ~480-char budget) with a `(see terminal)` marker, the marker
-always points at something, including the resolved path the sheet could not
+always points at something, including the resolved path the dialog could not
 fit. The display is disclosure only, never a trust signal: any process that
 can write your terminal can forge the same bytes, so the anchor stays the
-verify code matching the system-rendered sheet (biometric) or sudo's own PAM
+verify code matching the system-rendered dialog (biometric) or sudo's own PAM
 (terminal). Turn it off with `services.sudowhat.auditDisplay = "off"`. The
 `execute:` row has its own switch, `services.sudowhat.execDisplay` (`"on"` by
 default). The two display settings map one per line family: `auditDisplay` for
@@ -322,7 +322,7 @@ same line in plain, never to showing nothing.
 ### Confirm after the resolved line (`execConfirm`, off by default)
 
 In biometric mode the decision already completes with the resolved path in
-view: `execute:` prints before the sheet is raised. The terminal-password path
+view: `execute:` prints before the dialog is raised. The terminal-password path
 cannot do that (sudo resolves the command inside the same policy step that
 collects the password), so there `execute:` is a last look rather than a
 preview. Setting `services.sudowhat.execConfirm = "on"` closes the asymmetry by
@@ -357,7 +357,7 @@ biometric. It cannot, from inside one process, distinguish *you at the
 keyboard* from another process running inside the *same* GUI login: a
 gui-domain `LaunchAgent`, a `nohup`/`setsid` job, or a helper of a compromised
 app all inherit the login session's attributes and are classified as console.
-Such a process can raise a Touch ID sheet on your screen. The defense against
+Such a process can raise a Touch ID dialog on your screen. The defense against
 approving one you did not initiate is sudowhat's core design, not the session
 guard: the prompt shows the **exact command**, and a **verification code** is
 printed to the terminal that launched sudo. A prompt you did not start shows a
@@ -377,15 +377,15 @@ in-session process launched by something other than a shell (the Dock,
 Spotlight, a GUI agent, or a tool like Claude Code). In that case the code is
 simply not printed: it goes to `/dev/tty` or nowhere, never to stderr, so it
 can neither clutter a captured error stream nor be slurped into a `2>file`. The
-exact-command display inside the Touch ID sheet is, as always, the
+exact-command display inside the Touch ID dialog is, as always, the
 redirect-proof primary signal. So treat the code as *positive confirmation* (a
 matching code means the prompt is the sudo you just launched), never as a gate:
-a missing code is a cue to read the command in the sheet, not to approve
+a missing code is a cue to read the command in the dialog, not to approve
 reflexively. For legibility the code is rendered in **bold** on an interactive
 terminal (bold rather than a color, so it survives any terminal theme), but
 this is emphasis only, never a trust cue: any process that can write the
 terminal can forge the same bytes, so the anchor stays the code matching the
-sheet (which is system-rendered and cannot be colored). Set `NO_COLOR` (any
+dialog (which is system-rendered and cannot be colored). Set `NO_COLOR` (any
 value, per [no-color.org](https://no-color.org)) or run with an unset or `dumb`
 `TERM` to disable it; the echo is always plain when the destination is not a
 real terminal.
@@ -430,10 +430,10 @@ limit at which `LAContext` silently truncates `localizedReason`). That limit
 was observed only with the English system prefix (`"sudo" is trying to …`).
 sudowhat's own prompt text is not localized, so its length is locale-invariant,
 but it has not been verified whether macOS caps our reason string alone or
-the *total* sheet text including a longer localized prefix. If you run macOS in
+the *total* dialog text including a longer localized prefix. If you run macOS in
 another language, sanity-check that a near-maximal command's trailer is not
-clipped in the Touch ID sheet; if it is, the budget needs lowering. Whenever
-the sheet does truncate, the full command is already on the controlling
+clipped in the Touch ID dialog; if it is, the budget needs lowering. Whenever
+the dialog does truncate, the full command is already on the controlling
 terminal from the audit plugin (`services.sudowhat.auditDisplay`, on by
 default), so the clipped tail stays available regardless of how conservative
 the budget is.

@@ -16,7 +16,7 @@ NOPASSWD path (already shipped in v0.5.0).
 
 ## The problem
 
-For the **active console user**, sudowhat pops the Touch ID sheet on *every*
+For the **active console user**, sudowhat pops the Touch ID dialog on *every*
 `sudo`, including commands the operator authorized `NOPASSWD` in sudoers. An
 operator who wrote an exact-command `NOPASSWD` rule has made a deliberate
 "this command needs no authentication" decision; being biometric-prompted anyway

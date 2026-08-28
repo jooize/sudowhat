@@ -23,9 +23,9 @@ deference, shipped).
 
 Let a user **without Touch ID** (or on a headless macOS session, or on Linux)
 use sudowhat with a **regular terminal password prompt** that still shows
-user / path / command but **no verify code** (there is no GUI sheet to bind, so
+user / path / command but **no verify code** (there is no GUI dialog to bind, so
 the code has nothing to channel-bind). Today such a user gets a macOS GUI
-password sheet (LAContext's password fallback) — fine on a Mac with an Aqua
+password dialog (LAContext's password fallback) — fine on a Mac with an Aqua
 session, useless headless and impossible on Linux.
 
 ## The key mechanism: show the command from a sudo AUDIT plugin
@@ -78,7 +78,7 @@ password**, and audit `open()` runs before that. So the resolved path *does not
 exist yet* pre-password; it first appears at approval `check()` / audit
 `accept()`, both **post-password**. Consequences:
 
-- **Biometric (macOS):** the LAContext sheet already shows the **resolved** path
+- **Biometric (macOS):** the LAContext dialog already shows the **resolved** path
   (the approval plugin has `command_info`), and LAContext *is* the auth (no
   earlier password), so "resolved, before you approve" already holds. Unchanged.
 - **Terminal:** the pre-password display is necessarily **as-typed**
@@ -104,14 +104,14 @@ human to approve through it. What shipped instead is the `input:` / `execute:`
 juxtaposition (the pair *is* the anomaly display, judged by the human, with no
 heuristic to tune) plus the opt-in `exec_confirm` y/N gate for the
 terminal-password path. Biometric mode also improved on the "last-look" framing:
-there the `execute:` line prints *before* the sheet is raised, so it is a
+there the `execute:` line prints *before* the dialog is raised, so it is a
 pre-decision preview after all — only the terminal-password path is limited to a
 last look, and that limit is the constraint this section describes, unchanged.
 
 ## Structure: DISPLAY / AUTH / TRUST as separate layers
 
 The audit plugin lets **display** happen once, early, and universally, instead of
-being fused into the biometric sheet.
+being fused into the biometric dialog.
 
 ```
   DISPLAY  (shared, cross-platform)
@@ -119,8 +119,8 @@ being fused into the biometric sheet.
     Same sudo audit API on macOS + Linux; reuses PromptFormatter.
 
   AUTH  (per platform + session)
-    macOS console      -> approval plugin + LAContext sheet (resolved cmd)
-                          + verify code binding sheet <-> tty
+    macOS console      -> approval plugin + LAContext dialog (resolved cmd)
+                          + verify code binding dialog <-> tty
     terminal / no-GUI  -> native PAM password on the tty; approval plugin
     / Linux               approves + does the post-password resolved last-look
                           (shipped v0.13.0 as the execute: line; macOS only)
@@ -129,7 +129,7 @@ being fused into the biometric sheet.
     PAM module: macOS = mutual code-signing; Linux = file perms only (weaker)
 ```
 
-- The **verify code stays biometric-only** — it binds a *sheet* to the tty;
+- The **verify code stays biometric-only** — it binds a *dialog* to the tty;
   terminal mode has nothing to bind. (See [[project-tty-only-signals]].)
 - **Policy deference** (v0.9.0 NOPASSWD skip) stays a biometric-mode concern; in
   terminal mode, NOPASSWD simply means native PAM does not prompt.
@@ -152,16 +152,16 @@ being fused into the biometric sheet.
    aside *silently* (shows nothing). The audit plugin closes that gap: you judge
    the command before committing, in every mode.
 2. **Unify tty command display in one place.** *(Shipped in v0.10.0.)* Before
-   v0.10.0 the approval plugin owned both the sheet and the post-auth tty echo
+   v0.10.0 the approval plugin owned both the dialog and the post-auth tty echo
    (`emit_full_context`, `echoCommand`).
    Let the audit plugin own the tty command display (pre-auth); shrink the
-   approval plugin to sheet + verify code + resolved last-look (that last-look
+   approval plugin to dialog + verify code + resolved last-look (that last-look
    shipped in v0.13.0 as the `execute:` line — the ownership carve-out is
    stated in `docs/design-resolved-exec.md`). Fewer display sites, clearer
    ownership.
-   (Mind the ordering: the verify code still emits at sheet time in the approval
+   (Mind the ordering: the verify code still emits at dialog time in the approval
    plugin, so on the biometric path the tty shows the command first (audit),
-   then the code + sheet (approval) — verify on hardware.)
+   then the code + dialog (approval) — verify on hardware.)
 
 ## Highlighting the command line — scope (a), SHIPPED
 
@@ -184,7 +184,7 @@ SGR and the bytes are `sw_full_command_line`'s exactly — the round-trip
 invariant, pinned by unit tests on both sides of the FFI. So the highlight can
 neither add nor hide a byte, and colouring attacker-influenced content is safe:
 emphasis is not a trust signal (the anchor stays the verify code matching the
-system-rendered sheet), and the input is already free of raw control bytes, so
+system-rendered dialog), and the input is already free of raw control bytes, so
 no attacker byte can become an escape sequence.
 
 **Role palette** (`sw_full_command_line_colored`, `shared/escape_core`), one
@@ -360,7 +360,7 @@ adopting `colored_command_line` there is part of finishing Phase 2, not of (a).
    LAContext.
 2. **When the audit plugin displays vs stays quiet.** It runs first and does not
    yet know if biometric will be used. Either it displays always (redundant with
-   the sheet on the biometric path — extra tty lines) or it re-derives the
+   the dialog on the biometric path — extra tty lines) or it re-derives the
    session/biometric decision itself (two places making one decision -> the
    split-brain risk from `docs/design-noncon-sudo.md`; collapse to one source of
    truth if so).

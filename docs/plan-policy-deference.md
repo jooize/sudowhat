@@ -34,14 +34,14 @@ Claude (Opus) session. Read this whole file before editing anything, then read:
 ## Goal — three user-visible modes
 
 1. **Console session + biometrics available** (today's behavior, unchanged):
-   Touch ID / Apple Watch sheet with the command, verify code written to `/dev/tty`
+   Touch ID / Apple Watch dialog with the command, verify code written to `/dev/tty`
    (tty-or-nothing, structural invariant — do NOT add any fallback for the code).
 2. **Authentication required, but no GUI prompt possible** (no biometrics
    configured, or non-console session such as ssh): sudowhat prints the context
    block (user / cwd / command — no verify code, nothing to bind) and returns
    accept; sudo's native PAM password prompt follows in the terminal.
 3. **sudoers waived authentication** (NOPASSWD tag, invoking user is root,
-   `Defaults !authenticate`, or a live timestamp cache): **no Touch ID sheet, no
+   `Defaults !authenticate`, or a live timestamp cache): **no Touch ID dialog, no
    password** — the command just runs. Context block still printed unless the
    admin turns that off.
 
@@ -88,7 +88,7 @@ Security analysis (already red-teamed in conversation, record in docs):
   v0.4.2 root exemption), `Defaults !authenticate`, and valid timestamp cache.
   All are "root-configured policy waived auth". Document all four explicitly,
   with the callout that `!authenticate` and `timestamp_timeout > 0` also silence
-  Touch ID (recommend `timestamp_timeout=0` for sheet-every-time semantics).
+  Touch ID (recommend `timestamp_timeout=0` for dialog-every-time semantics).
 
 ### Step 0 — REQUIRED spike before building anything
 

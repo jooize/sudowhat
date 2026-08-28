@@ -27,7 +27,7 @@ in {
       description = ''
         What a non-console caller — an SSH session, unattended automation, any
         non-GUI-login security session — may do with sudo. A non-console caller
-        is NEVER shown a Touch ID / Authorization Services sheet (that would
+        is NEVER shown a Touch ID / Authorization Services dialog (that would
         render on the console user's screen — the reflexive-approval hole this
         tool exists to close); this option only chooses between password and
         denial.
@@ -80,7 +80,7 @@ in {
         - `on` (the default): the audit plugin prints `user:`, `directory:` (the
           working directory), `input:` (the command as typed) and — when the
           typed command is a bare name — `path:` to the controlling terminal on
-          EVERY path — the local console (before the Touch ID sheet and its
+          EVERY path — the local console (before the Touch ID dialog and its
           verify code) and non-console / SSH sessions (before sudo's native
           password prompt). This closes the gap where a non-console sudo used to
           step aside silently, showing a bare `Password:` with no command.
@@ -103,12 +103,12 @@ in {
         already been spent. It is printed on every path that shows the block:
         the plugin cannot know pre-authentication which mode this invocation
         will take, so the slight redundancy on a biometric console (where
-        `execute:` also appears before the sheet) is accepted rather than
+        `execute:` also appears before the dialog) is accepted rather than
         guessed at. macOS only for now — the Linux plugin has its own roadmap.
 
         The display is disclosure, never a trust signal: any process that can
         write your terminal can forge the same bytes, so the anchor stays the
-        verify code matching the system-rendered sheet (biometric path) or
+        verify code matching the system-rendered dialog (biometric path) or
         sudo's own PAM (terminal path). It is written to /dev/tty only — never to
         sudo's stderr — so it cannot be captured by a `2>file` redirect, and it
         is skipped when there is no controlling terminal (headless). Every token
@@ -135,7 +135,7 @@ in {
         never resolved plugin-side).
 
         - `on` (the default): the line is printed on every path that reaches it
-          — before the Touch ID sheet in biometric mode (pre-decision), after
+          — before the Touch ID dialog in biometric mode (pre-decision), after
           sudo's own password on the non-console terminal path (a last look),
           on a `policyDeference` skip, and on the root-initiated bypass, whose
           line is the unpadded solo form.
@@ -204,7 +204,7 @@ in {
         are already escaped and quoted, so it never splits, elides or reorders
         anything, and stripping it returns the plain line byte for byte. It is
         emphasis only, never a trust signal (the anchor stays the verify code
-        matching the system-rendered sheet), the runtime opt-outs still force
+        matching the system-rendered dialog), the runtime opt-outs still force
         plain — NO_COLOR or TERM=dumb in the invoking environment, or a non-tty
         target — and any colouriser failure falls back to the plain line rather
         than showing nothing. Baked into both signed bundles at build time.
@@ -241,9 +241,9 @@ in {
         Note the timestamp-cache interaction: with `on` and a credential cache
         in effect (`authCacheMinutes` non-zero, or `null` deferring to a
         non-zero sudoers timeout), a second command within the grace window on
-        the same terminal is treated as deferred and runs with no sheet — sudo's normal
+        the same terminal is treated as deferred and runs with no dialog — sudo's normal
         grace after the first real factor on that terminal. Keep
-        `authCacheMinutes = 0` (the default) for a Touch ID sheet on every
+        `authCacheMinutes = 0` (the default) for a Touch ID dialog on every
         command. Baked into the signed bundle at build time.
       '';
     };
@@ -257,14 +257,14 @@ in {
 
         Background: sudo resolves the command inside the same policy step that
         collects the password, and no plugin hook exists between resolution and
-        authentication. In biometric mode that does not matter — the sheet *is*
+        authentication. In biometric mode that does not matter — the dialog *is*
         the decision, sudowhat raises it, and the resolved `execute:` line is
         printed before it. In terminal-password mode the password is already
         spent by the time sudowhat sees the resolved path, so `execute:` can
         only be a last-look.
 
         - `off` (the default): the resolved line prints and the command runs.
-          The one existing decision — the sheet, or sudo's own password — stays
+          The one existing decision — the dialog, or sudo's own password — stays
           the only decision.
         - `on`: after sudo's own authentication has succeeded, the approval
           plugin prints `execute:` and asks one `run? [y/N]` on the terminal via

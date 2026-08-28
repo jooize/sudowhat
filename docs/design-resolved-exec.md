@@ -11,13 +11,13 @@ the writable-target check").
 The terminal block prints at audit `open()`, before sudo has resolved the
 command, so it can only show the line as typed. The resolved absolute path --
 the thing that answers "which binary will actually run" -- appears only on the
-biometric sheet. Two concrete failures:
+biometric dialog. Two concrete failures:
 
 1. **The overflow referral is a broken promise.** When the command exceeds the
-   sheet's length budget, the sheet shows `(see terminal)` -- but the terminal
-   holds only the as-typed line. In exactly the case where the sheet cannot
+   dialog's length budget, the dialog shows `(see terminal)` -- but the terminal
+   holds only the as-typed line. In exactly the case where the dialog cannot
    show the command, the resolved path is visible NOWHERE.
-2. **Terminal-password mode never shows it at all.** No sheet exists there;
+2. **Terminal-password mode never shows it at all.** No dialog exists there;
    the human authenticates against the as-typed line only.
 
 And one labeling failure: the field name `command:` over-claims. It reads as
@@ -52,7 +52,7 @@ they differ in weight only, see the delta below):
 
 Content: `command_info["command"]` + `run_argv[1..]` (argv[0] dropped when it
 duplicates the path/basename, exactly as `commandPartsForPath` does for the
-sheet). Printed ALWAYS -- a predictable ceremony beats a clever conditional,
+dialog). Printed ALWAYS -- a predictable ceremony beats a clever conditional,
 and "only sometimes present" would itself need explaining.
 
 **Delta (2026-08-27): the root-bypass line is solo.** The gutter above exists
@@ -114,7 +114,7 @@ rationale in the colour section of `docs/design-terminal-mode.md`.
 the owner's request after this round shipped. "Printed ALWAYS" above describes
 the default and stays the default; `execDisplay = "off"` is an administrator
 opting out of the whole informational echo -- the root-bypass solo line, the
-step-aside last-look, the policy-deference skip and the biometric pre-sheet
+step-aside last-look, the policy-deference skip and the biometric pre-dialog
 line together. The plugin loads, verifies and gates identically; it simply
 narrates nothing, which is exactly what `auditDisplay = "off"` already means
 for the other bundle. The name pairs with `auditDisplay` (the two display
@@ -142,7 +142,7 @@ honest states beat three, one of which lies.
 Timing by mode:
 
 - **Biometric:** printed by approval `check()` BEFORE raising the LAContext
-  sheet. The human sees the resolved path in the terminal, then approves.
+  dialog. The human sees the resolved path in the terminal, then approves.
   Pre-decision.
 - **Terminal password:** the password happens inside the policy step, so the
   line prints after auth but before exec. A last-look, not a preview -- the
@@ -151,7 +151,7 @@ Timing by mode:
   behavior otherwise unchanged. No prompts are added in any mode, so
   non-interactive invocations (agents, scripts) cannot newly block.
 
-This makes the sheet's `(see terminal)` referral truthful: by exec time the
+This makes the dialog's `(see terminal)` referral truthful: by exec time the
 terminal carries the full resolved line in both modes.
 
 ### 2. Honest labels
@@ -182,7 +182,7 @@ Dropping the as-typed line entirely was considered and rejected: in
 terminal-password mode it is the only command display that exists before the
 password is typed, and without the pair the divergence signal disappears.
 
-**The sheet's stacked labels (settled at the v0.14.0 smoke).** They have worn
+**The dialog's stacked labels (settled at the v0.14.0 smoke).** They have worn
 three spellings: `USER` / `DIRECTORY` / `COMMAND` originally, a lowercase
 colon grammar `user:` / `directory:` / `execute:` briefly, and finally
 `RUN AS` / `DIRECTORY` / `EXECUTE` -- the caps back, the colons gone. On a
@@ -190,7 +190,7 @@ surface with no bold and no colour the caps carry the label-vs-value
 distinction better than a trailing colon did, and `RUN AS` names what the
 value actually is -- the runas target -- where a bare `USER` read ambiguously
 on a two-second glance. `EXECUTE` keeps the referent fix from the colon round:
-the sheet is fed `command_info["command"]`, so its value genuinely is the
+the dialog is fed `command_info["command"]`, so its value genuinely is the
 resolved path that will run, the same referent as the terminal's `execute:`
 row. The terminal's own row was renamed `user:` -> `run as:` in the same
 round (`run as user:` was considered for greppability and rejected -- at 12
@@ -239,7 +239,7 @@ by accident:
 
 - **audit plugin** owns the PRE-AUTH block (`run as:`/`directory:`/`input:`/
   `path:`/`verify:`) -- everything that exists before resolution.
-- **approval plugin** owns DECISION-ADJACENT display -- the sheet and the
+- **approval plugin** owns DECISION-ADJACENT display -- the dialog and the
   `execute:` line -- everything that exists only after resolution.
 
 Both render command lines through the shared escape core, so the split cannot
@@ -280,7 +280,7 @@ be needed), even a console session can land on the password path, and the
 bundle cannot see the `sudo_local` variant either. So at `open()` the plugin
 cannot know which mode this invocation will take. Decision: **print whenever
 (a) holds**, accepting mild redundancy on biometric consoles, where `execute:`
-also appears pre-sheet. A row that is occasionally redundant beats a row that
+also appears pre-dialog. A row that is occasionally redundant beats a row that
 is occasionally missing from the one path that needs it, and the alternative
 would be a guess dressed as a mode. Recorded in a comment at the row's build
 site in `plugin/sudowhat_audit.m`.
@@ -356,7 +356,7 @@ the answer (knob on, tty present, marker absent), the same laziness the console
 deference path already had.
 
 Fail direction: uncertainty **asks**. Note that is the opposite boolean from
-`sw_defer_decision`, where uncertainty means "do not skip the Touch ID sheet" —
+`sw_defer_decision`, where uncertainty means "do not skip the Touch ID dialog" —
 both fail *toward* the gate, and the shared rule is "when in doubt, put the
 question to the human". Here the doubt is cheap to resolve: the knob's owner
 opted into confirmation, and one extra y/N costs less than silently re-gating or
@@ -382,7 +382,7 @@ approval plugin fails OPEN.
 
 ## Cut: the writable-target check
 
-Considered: warn (on sheet + terminal) when the resolved executable or its
+Considered: warn (on dialog + terminal) when the resolved executable or its
 directory is writable by the invoking user, as a portable substitute for
 sudoers `secure_path` hygiene. CUT, for habituation, not implementability:
 
@@ -390,7 +390,7 @@ sudoers `secure_path` hygiene. CUT, for habituation, not implementability:
   nix/Lix installs have a user-owned store. On such systems -- i.e. a large
   share of real deployments -- the warning fires on nearly every sudo.
 - A warning that almost always fires trains the human to approve through
-  warnings. That habituation spends the sheet's alarm authority, which is
+  warnings. That habituation spends the dialog's alarm authority, which is
   worth more than this check.
 - The `execute:` line already carries the actionable fact. A human reading
   `/Users/me/.local/bin/foo` where a system path was expected has the signal;
@@ -407,7 +407,7 @@ field evidence shows the display alone is not enough.
 
 - No new prompts or denials by default; the only optional addition is the
   off-by-default `exec_confirm` key above. With it off, the one existing
-  decision (sheet, or PAM password) stays the only decision.
+  decision (dialog, or PAM password) stays the only decision.
 - No plugin-side PATH resolution, ever.
 - Policy deference / NOPASSWD behavior unchanged: where the decision is
   deferred today, only the `execute:` line is added, nothing else.
@@ -415,10 +415,10 @@ field evidence shows the display alone is not enough.
 ## Test plan (sketch)
 
 - Line order per mode: `input:` before auth; `execute:` after resolution and,
-  in biometric mode, before the sheet is raised.
+  in biometric mode, before the dialog is raised.
 - `execute:` content equals `command_info["command"]` + argv rendering,
-  byte-compared against the escape-core rendering used by the sheet.
-- Overflow case: sheet shows `(see terminal)`; terminal contains the full
+  byte-compared against the escape-core rendering used by the dialog.
+- Overflow case: dialog shows `(see terminal)`; terminal contains the full
   resolved line by exec time.
 - No-tty invocation: no `execute:` line, no error, exit behavior unchanged.
 - Marker migration: harness/tests asserting on `command:` move to `typed:`

@@ -18,7 +18,7 @@ sudo to the console is the opt-in hardening. Wherever this doc says
 "`allowNonConsole` on/true" read `nonConsole = "password"`, and "off/false
 (default)" read `nonConsole = "deny"` (no longer the default). The non-console
 caller is still NEVER shown biometric — that is structural and deliberately not
-configurable (a remote caller's sheet would render on the console user's screen;
+configurable (a remote caller's dialog would render on the console user's screen;
 see the README "Non-console defense").
 
 ## As built (v0.5.0)
@@ -34,7 +34,7 @@ rebuilding it inside the plugin.**
   console **iff** the session has graphic access, is not remote, and the console
   uid equals the invoking uid. A uid comparison alone cannot tell "user 501 at
   the Mac" from "user 501 over SSH" — and a hardware probe confirmed a same-uid
-  SSH session *does* render the LAContext sheet on the console. This swap also
+  SSH session *does* render the LAContext dialog on the console. This swap also
   closes a latent same-uid hole in the previous uid-only guard.
 - **The console-gate.** `pam_sudowhat` gains a second role: invoked as
   `auth sufficient … console-gate`, it returns `PAM_SUCCESS` only for the local
@@ -79,7 +79,7 @@ installed* before the plugin steps aside.
 
 The non-console work above lets a non-console NOPASSWD caller through (the
 step-aside). It left one gap the README's originating use case cares about: **the
-local console user still got a Touch ID sheet for a `NOPASSWD` command.** The
+local console user still got a Touch ID dialog for a `NOPASSWD` command.** The
 approval plugin runs on every `check_policy` success — NOPASSWD does not bypass
 it (that is the whole reason 0.4.2 needed the root exemption) — so a console user
 running a passwordless command was still prompted. Policy deference closes that.
@@ -119,7 +119,7 @@ invocation," which happens in exactly four ways, every one a decision made by
 root-owned configuration:
 
 1. **A `NOPASSWD` rule** — the headline case; the console user's passwordless
-   command runs with no sheet.
+   command runs with no dialog.
 2. **The invoking user is root** — sudoers exempts uid 0 from authentication.
    Already handled by the v0.4.2 root exemption (which exits before the marker
    check), so this is consistent, not new behavior.
@@ -131,9 +131,9 @@ root-owned configuration:
    the same terminal (default `tty` scope) skips PAM. Under the default
    `timestamp_timeout=0` this never occurs and cases 1–4 collapse to "NOPASSWD /
    root / `!authenticate`". With a non-zero timeout it means an in-window command
-   runs with no sheet — sudo's normal grace after the first real factor on that
+   runs with no dialog — sudo's normal grace after the first real factor on that
    terminal, per the credential-cache analysis below. This is why
-   `timestamp_timeout=0` remains the default for "a sheet on every command".
+   `timestamp_timeout=0` remains the default for "a dialog on every command".
 
 ### Why it is safe (forgery analysis)
 
@@ -195,7 +195,7 @@ the main process per the invocation-order contract).
 **Verified 2026-07-20.** The self-contained spike (`spike/`, run per
 `spike/README.md`) confirms the `setenv`→`getenv` primitive end-to-end against
 real openpam, and the full hardware checklist passed on real `sudo`:
-auth-required commands still prompt; NOPASSWD commands skip with no sheet; root
+auth-required commands still prompt; NOPASSWD commands skip with no dialog; root
 is exempt; the tamper drill (integrity line commented out) **prompts**
 (fail-safe); and a non-zero `timestamp_timeout` defers an in-window command.
 
@@ -339,7 +339,7 @@ unattended NOPASSWD case genuinely requires the plugin to step aside.
 The only real work is:
 
 > Make the approval plugin **step aside** for a non-console caller that sudo has already
-> authorized — returning allow *without ever rendering a GUI/biometric sheet* — but only
+> authorized — returning allow *without ever rendering a GUI/biometric dialog* — but only
 > when the configuration guarantees that a non-console caller cannot reach success without
 > a real authentication factor on its own session.
 
@@ -424,7 +424,7 @@ chain is:
   - (3) `sufficient pam_smartcard.so` **succeeds** → chain breaks with **success**;
     `pam_opendirectory` is never reached. This is *not* a fall-through — `sufficient`
     success is itself the terminal authentication, satisfied by the caller's own PIV/token
-    + PIN **on the caller's own session**. No console sheet. Acceptable: a smartcard is a
+    + PIN **on the caller's own session**. No console dialog. Acceptable: a smartcard is a
     real factor, no weaker than the console biometric it replaces.
   - (3) smartcard absent/declined → continue; (4) `required pam_opendirectory.so` prompts
     for the **password on the caller's own PTY**. Correct → a later module succeeded →
@@ -458,7 +458,7 @@ error, return `PAM_AUTH_ERR` (force the password fall-through). The failure mode
   - The dangerous direction is a *split-brain* between this read and the plugin's own
     `SessionGuard` read (two independent `SCDynamicStore` calls, two lifecycle phases): if
     the PAM gate sees console (skips password) while the plugin sees non-console (steps
-    aside), the caller gets root with neither a password nor a sheet. Within a single sudo
+    aside), the caller gets root with neither a password nor a dialog. Within a single sudo
     process the two reads almost certainly see the same configd reachability, but this must
     be **demonstrated on hardware** (open item), and if they can ever disagree the two
     reads must be collapsed to a single source of truth.
@@ -499,7 +499,7 @@ sudowhat_check (non-console branch, replacing the deny at :270):
       return deny
   # sudoers authorized this caller, and the configuration guarantees a non-console caller
   # cannot reach success without a real factor on its own session (password / smartcard),
-  # OR via an operator-authored NOPASSWD rule. Either way, rendering a sheet here would put
+  # OR via an operator-authored NOPASSWD rule. Either way, rendering a dialog here would put
   # it on the console user. Step aside.
   syslog(LOG_AUTHPRIV) non-console allow, uid, tty
   return allow                           # BEFORE any seteuid/LAContext/AS call
@@ -588,8 +588,8 @@ actually delivers the coupling the safety argument needs.
 - **SSH attacker (admin user, non-console), `allowNonConsole` on:** sudoers authorizes
   (they are admin); the gate fails for non-console; the caller authenticates on their own
   PTY via `pam_opendirectory` (password) or `pam_smartcard` (PIV + PIN) — never a console
-  sheet. Unknown factor → deny. Known factor → ordinary "an admin who proves a factor can
-  sudo over SSH," the stock sudo trust model; the *reflexive-approval* hole (a sheet the
+  dialog. Unknown factor → deny. Known factor → ordinary "an admin who proves a factor can
+  sudo over SSH," the stock sudo trust model; the *reflexive-approval* hole (a dialog the
   seated user taps) is never engaged.
 - **Same attacker within the grace window:** if the operator runs a non-zero
   `timestamp_timeout`, a second command on the *same tty* within the window skips the
@@ -601,7 +601,7 @@ actually delivers the coupling the safety argument needs.
   (or any failed chain check) → denies non-console without prompting. Identical to today.
 - **Unattended NOPASSWD job (uid 501):** sudoers authorizes via the exact-command NOPASSWD
   rule; PAM is not invoked (operator's explicit no-auth grant); the plugin verifies the
-  effective chain is safe and steps aside. No password, no sheet — stock NOPASSWD semantics,
+  effective chain is safe and steps aside. No password, no dialog — stock NOPASSWD semantics,
   scoped to one exact command by the operator.
 - **Admin adds Touch-ID-over-SSH (`pam_tid`/`pam_reattach`) to `/etc/pam.d/sudo`:** check 2
   detects the unconditional-success `sufficient` line after the include and **denies** the
@@ -623,9 +623,9 @@ actually delivers the coupling the safety argument needs.
 - **No forbidding of `pam_smartcard`.** A PIV/token + PIN on the caller's own session is a
   legitimate non-console factor, no weaker than the console biometric. The design accepts
   it; it does not special-case or block it.
-- **No AS / LAContext / biometric / companion sheet for a non-console caller, ever.**
+- **No AS / LAContext / biometric / companion dialog for a non-console caller, ever.**
   `BiometricsOrCompanion` is a *same-session* SEP confirmation of a locally rendered
-  sheet, **not** an out-of-band push. "Approve on the phone" for a non-console caller
+  dialog, **not** an out-of-band push. "Approve on the phone" for a non-console caller
   either fails (no Aqua session) or renders in the *console* user's session — reopening
   the exact hole. True remote approval needs the rejected daemon. Out of scope. Leave a
   code comment at the step-aside site stating this, so no future maintainer reuses
