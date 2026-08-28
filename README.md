@@ -137,6 +137,14 @@ password works in the fallback. (sudo runs as root by the time the plugin
 executes; sudowhat drops EUID to your user around the auth call so biometric
 and password both resolve against your enrollment.)
 
+The GUI password dialog is preferred over a terminal password prompt on
+purpose. The system renders it out of process and takes the password through
+secure input, so it never passes through the terminal, the multiplexer, or
+the shell: the stack a compromised session reads without effort. Other
+software can still draw a lookalike window; the verify code is the tell. The
+genuine dialog shows the code printed on your terminal, and a spoof that
+cannot read your terminal cannot show it.
+
 ## Install
 
 Requires macOS 15 or later (the prompt uses a LocalAuthentication policy added
@@ -518,6 +526,10 @@ test matrix.
 
 - Apple Developer ID release build with notarization.
 - Homebrew tap / formula.
+- `consoleNoBiometric = "dialog" | "password"`: native terminal password for
+  consoles with no biometric and no watch, instead of the GUI password
+  dialog (designed in
+  [docs/design-console-password-fallback.md](docs/design-console-password-fallback.md)).
 - Optional: a small `sudowhat status` CLI for users to inspect install state.
 
 ## Disclaimer
