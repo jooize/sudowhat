@@ -526,10 +526,6 @@ test matrix.
 
 - Apple Developer ID release build with notarization.
 - Homebrew tap / formula.
-- `consoleNoBiometric = "dialog" | "password"`: native terminal password for
-  consoles with no biometric and no watch, instead of the GUI password
-  dialog (designed in
-  [docs/design-console-password-fallback.md](docs/design-console-password-fallback.md)).
 - Optional: a small `sudowhat status` CLI for users to inspect install state.
 
 ## Disclaimer

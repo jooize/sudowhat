@@ -1,10 +1,16 @@
 # Design note: console password fallback (consoleNoBiometric)
 
-**Status: designed, not implemented.** Decided 2026-08-28. Adds one module
-option; no mechanism is new — every moving part below already exists for the
-non-console path (`design-nonconsole-sudo.md`) and is reused, not rebuilt.
+**Status: rejected (2026-08-28); kept as the record.** Designed the same
+day, then declined on implementation risk: the decision point is
+`pam_sudowhat`, and probing LocalAuthentication from PAM context carries the
+hazards under "Implementation risk" below — a coreauthd hang there hangs
+every sudo on the machine — for a UX preference the GUI password dialog
+already serves more defensibly (see "Why the default stays `dialog`"). The
+dialog-timeout extension for case 4 was rejected separately, in its own
+section. Nothing in this note ships: a biometric-less console keeps today's
+behavior, the system password dialog.
 
-## Decision
+## The rejected design
 
 Add `services.sudowhat.consoleNoBiometric = "dialog" | "password"` (default
 `"dialog"`). It chooses what the **local console user** gets when biometric
