@@ -26,8 +26,8 @@ sudowhat: execute:    /bin/echo hello
         │  /bin/echo hello                   │   │  authenticate    │
         │                                    │   │                  │
         │  Verify Code: Z96E                 │   │  Double-click    │
-        │                                    │   │  to approve      │
-        │  Code must match your terminal.    │   │                  │
+        │                                    │   │  side button     │
+        │  Code must match your terminal.    │   │  to approve      │
         │                                    │   └──────────────────┘
         │  Touch ID or enter your password   │
         │  to allow this.                    │
