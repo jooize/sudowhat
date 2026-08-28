@@ -16,7 +16,7 @@ in v0.13.0 as the pair now labelled `input:` / `execute:`; see
 `docs/design-resolved-exec.md`.
 Still future: the **no-biometric terminal password for a console user** (open
 decision #1 — dropping the console-gate + approval step-aside). Original design
-captured 2026-07-20; sibling to `docs/design-noncon-sudo.md` (non-console + policy
+captured 2026-07-20; sibling to `docs/design-nonconsole-sudo.md` (non-console + policy
 deference, shipped).
 
 ## Goal
@@ -362,7 +362,7 @@ adopting `colored_command_line` there is part of finishing Phase 2, not of (a).
    yet know if biometric will be used. Either it displays always (redundant with
    the dialog on the biometric path — extra tty lines) or it re-derives the
    session/biometric decision itself (two places making one decision -> the
-   split-brain risk from `docs/design-noncon-sudo.md`; collapse to one source of
+   split-brain risk from `docs/design-nonconsole-sudo.md`; collapse to one source of
    truth if so).
 3. **Third signed bundle.** The audit plugin is a display trust surface — if it
    can be suppressed or spoofed, the command can be hidden — so on macOS it must
@@ -392,4 +392,4 @@ v0.9.0 (policy deference) is orthogonal and complete; the audit plugin is purely
 additive. Ship v0.9.0 after its spike, then build this as v0.10.0 — macOS first,
 with the display component structured to be the Linux model too. Relates to
 [[project-terminal-mode-audit-plugin]], [[project-policy-deference-plan]],
-[[project-design-noncon-sudo]].
+[[project-design-nonconsole-sudo]].

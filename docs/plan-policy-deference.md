@@ -20,13 +20,13 @@
 >   audit plugin under `auditDisplay` / `echoColor`, still tty-only. See
 >   `docs/design-terminal-mode.md`.)**
 > The headline — mode 3 (NOPASSWD → zero prompts) via the PAM marker — shipped as
-> designed. See the "Policy deference" section of `docs/design-noncon-sudo.md` for
+> designed. See the "Policy deference" section of `docs/design-nonconsole-sudo.md` for
 > the authoritative as-built record.
 
 Status: approved design, ready to implement. Written 2026-07-20 for execution by a
 Claude (Opus) session. Read this whole file before editing anything, then read:
 
-- `docs/design-noncon-sudo.md` — the non-console design this plan extends.
+- `docs/design-nonconsole-sudo.md` — the non-console design this plan extends.
 - `docs/design-nopasswd-console-allowlist.md` — the design this plan RETIRES.
 - `plugin/sudowhat_approval.m`, `pam/pam_sudowhat.m`, `plugin/PromptFormatter.{h,m}`,
   `shared/Constants.h`, `Makefile`, `nix/module.nix`, `tests/`.
@@ -69,13 +69,13 @@ never invoked at all.
      sudo rebuilds the command env anyway, scrub defensively).
   2. Marker **present** → sudoers demanded auth → mode 1 or 2 (below).
   3. Marker **absent** → run the fail-closed gate before skipping:
-     verify `/etc/pam.d/sudo` (and the sudo_local variant per the noncon design)
+     verify `/etc/pam.d/sudo` (and the sudo_local variant per the nonconsole design)
      actually contains the pam_sudowhat auth line AND that the module file on
      disk passes the existing `SignatureVerifier` check. If the chain does not
      contain a verifiable pam_sudowhat auth entry, treat the absent marker as
      untrustworthy: fall back to prompting (mode 1/2), never silently skip.
      Reuse/extend `pam/SudoConfChecker` and the chain-shape verification
-     specified in `docs/design-noncon-sudo.md` — do not write a second parser.
+     specified in `docs/design-nonconsole-sudo.md` — do not write a second parser.
   4. Chain intact + marker absent → mode 3: no prompt, optional context echo,
      return accept.
 
@@ -155,12 +155,12 @@ Today the context block is `/dev/tty`-or-nothing. New rule:
    Unit-test the gate's parsing/decision table exhaustively, including:
    marker present/absent × chain intact/missing/unsigned × deference on/off.
 5. **Mode wiring** in `check()`: implement the 3-mode decision tree; mode 2
-   (accept + native PAM password) per `docs/design-noncon-sudo.md`'s
+   (accept + native PAM password) per `docs/design-nonconsole-sudo.md`'s
    chain-verification requirements — this plan does not relax any of that doc's
    gating for non-console sessions.
 6. **Knobs** in Makefile + `nix/module.nix` (+ `nix/package.nix` passthrough if
    needed), README table row per existing knob docs.
-7. **Docs:** update `docs/design-noncon-sudo.md` with the marker mechanism and
+7. **Docs:** update `docs/design-nonconsole-sudo.md` with the marker mechanism and
    the four marker-absent cases; mark `design-nopasswd-console-allowlist.md`
    superseded at the top (keep the file, one-line pointer here); README
    behavior matrix (mode 1/2/3). Em-dashes fine in prose; ASCII in code.

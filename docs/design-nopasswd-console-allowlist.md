@@ -4,14 +4,14 @@
 > The console NOPASSWD skip shipped via a different, better mechanism: a
 > PAM auth-phase **marker** that inherits sudoers' own authentication decision,
 > with no command list to maintain in two places and no drift. See the
-> "Policy deference" section of `docs/design-noncon-sudo.md`. This allowlist
+> "Policy deference" section of `docs/design-nonconsole-sudo.md`. This allowlist
 > note is kept only for the historical record and the problem framing below;
 > its "baked allowlist" recommendation was rejected in favor of the marker.
 
 **Original status: proposed, not yet implemented.** Captures the reasoning from a
 design discussion so it does not have to be re-derived. The recommendation is an
 opt-in, exact-command, signature-covered console allowlist (see "The design"
-below). Sibling to `docs/design-noncon-sudo.md`, which covers the *non-console*
+below). Sibling to `docs/design-nonconsole-sudo.md`, which covers the *non-console*
 NOPASSWD path (already shipped in v0.5.0).
 
 ## The problem
@@ -40,11 +40,11 @@ command. It is structurally distinct from the **auth phase**:
   hits and on NOPASSWD alike. So `timestamp_timeout` has no effect on whether
   the plugin prompts. (sudowhat already defaults `timestamp_timeout` to `0`, and
   the console user is still prompted on NOPASSWD — empirical proof the timeout is
-  not the lever.) See `docs/design-noncon-sudo.md:329-334`: the "re-prompt every
+  not the lever.) See `docs/design-nonconsole-sudo.md:329-334`: the "re-prompt every
   command" guarantee comes from the approval plugin, **not** from `timeout=0`.
 - **sudo gives no signal to distinguish NOPASSWD from anything else.**
   `command_info[]` has no `nopasswd`, `authenticated`, or `timestamp` key
-  (`sudo_plugin(8)`; see `docs/design-noncon-sudo.md:154-162`). A fresh password,
+  (`sudo_plugin(8)`; see `docs/design-nonconsole-sudo.md:154-162`). A fresh password,
   a cached timestamp, and a NOPASSWD rule are identical at `check()` time. The
   same wall exists at the PAM layer — sudo has no way to tell PAM a NOPASSWD
   command is running (sudo-project issue #415).
@@ -137,7 +137,7 @@ more ergonomic for fast-changing local scripts.
 
 ## References
 
-- `docs/design-noncon-sudo.md` — non-console NOPASSWD path (shipped v0.5.0);
+- `docs/design-nonconsole-sudo.md` — non-console NOPASSWD path (shipped v0.5.0);
   `command_info` has no auth signal (`:154-162`); console re-prompt comes from
   the approval plugin not `timeout=0` (`:329-334`).
 - `sudo_plugin(8)` — approval plugin API; `command_info` keys.

@@ -4,7 +4,7 @@ The full security rationale for sudowhat: the trust chain, the caller
 classification, the policy-deference decision, the terminal ceremony, and the
 limits of each. The [README](../README.md) summarizes; this document is the
 argument. Individual decisions have their own design docs under `docs/`
-(non-console handling in `design-noncon-sudo.md`, the resolved `execute:` line
+(non-console handling in `design-nonconsole-sudo.md`, the resolved `execute:` line
 in `design-resolved-exec.md`, the Linux port in `design-linux-port.md`);
 this file is the connected overview.
 

@@ -88,7 +88,7 @@
  * inherited environment, but that only FORCES a prompt (marker present ->
  * prompt), the fail-safe direction — it can never clear the marker once
  * pam_sudowhat has run. One definition, two readers (pam sets it, the plugin
- * reads it). See docs/design-noncon-sudo.md ("policy deference"). */
+ * reads it). See docs/design-nonconsole-sudo.md ("policy deference"). */
 #define SUDOWHAT_AUTH_MARKER_ENV "SUDOWHAT_AUTH_RAN"
 
 #endif

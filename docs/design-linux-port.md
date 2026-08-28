@@ -8,7 +8,7 @@ same display on **Linux**, where there is no biometric: a user runs `sudo <cmd>`
 sees `user / directory / command` on the terminal, then gives their password to
 sudo's **native `pam_unix`**. No verify code (no GUI dialog to channel-bind), no
 approval plugin, no PAM module. Sibling to `docs/design-terminal-mode.md`
-(the cross-platform display-layer design) and `docs/design-noncon-sudo.md`.
+(the cross-platform display-layer design) and `docs/design-nonconsole-sudo.md`.
 
 ## What ships
 
