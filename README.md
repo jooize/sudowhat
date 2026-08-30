@@ -519,9 +519,6 @@ sudo -k && sudo sudo /bin/echo nested-root      # inner sudo (caller=root) exemp
 sudo make uninstall                              # stock sudo behavior restored
 ```
 
-See `project_trusted_sudo_prompt.md` for the original design notes and full
-test matrix.
-
 ## Roadmap
 
 - Apple Developer ID release build with notarization.
