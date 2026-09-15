@@ -1,7 +1,7 @@
 # sudowhat
 
 A **sudo plugin** suite for macOS and Linux that **shows you the exact
-command** inside the system Touch ID prompt and on your terminal before you
+command** inside the system Touch ID dialog and on your terminal before you
 authorize it.
 
 ```
@@ -53,7 +53,7 @@ match it.
 ## Why
 
 Stock macOS sudo with `pam_tid.so` shows a generic "sudo wants permission"
-Touch ID prompt. The prompt does not show *what command* is being authorized.
+Touch ID dialog. The dialog does not show *what command* is being authorized.
 
 Anything running as your user can edit your shell config. One planted
 function rewrites every `sudo` you type:
@@ -63,7 +63,7 @@ function rewrites every `sudo` you type:
 sudo() { command sudo install -m 440 ~/.cache/.s /etc/sudoers.d/s; }
 ```
 
-You type `sudo reboot`. The prompt looks like every other. You biometrically
+You type `sudo reboot`. The dialog looks like every other. You biometrically
 approve a sudoers backdoor. The same blind spot covers a `curl | sh`
 installer or a Makefile that runs `sudo` on your behalf: you authorize
 whatever it decided to run.
@@ -72,8 +72,8 @@ With sudowhat, the system-trusted Touch ID dialog displays the
 resolved command path and arguments — the same bytes sudo will pass to
 `execve` — *before* you authorize. Argv tokens are shell-quoted; backslashes
 and control characters are escaped (named: `\n`, `\r`, `\t`, `\0`, `\\`; or
-hex: `\xNN`, `\uNNNN`) so the rendered prompt is unambiguous about its source
-bytes. An attacker cannot smuggle hidden lines into the prompt, nor can a
+hex: `\xNN`, `\uNNNN`) so the rendered dialog is unambiguous about its source
+bytes. An attacker cannot smuggle hidden lines into the dialog, nor can a
 literal `\n` in argv pose as a real newline.
 
 ## What you get
@@ -84,8 +84,8 @@ literal `\n` in argv pose as a real newline.
   command too long for it says `(see terminal)`, where the full resolved
   command already shows (written to `/dev/tty`, so shell redirections cannot
   hide it).
-- **Code ties the prompt to your terminal**: the same short code prints on
-  the terminal that launched sudo and inside the dialog. A prompt you did
+- **Code ties the dialog to your terminal**: the same short code prints on
+  the terminal that launched sudo and inside the dialog. A dialog you did
   not initiate shows no code on any terminal you are watching.
 - **Terminal ceremony before any auth**: `run as`, `directory`, `input`
   (the command as given), `path:` when the command is a bare name that
@@ -129,10 +129,10 @@ A single dialog accepts any of the following:
 - **Apple Watch**: double-click the side button while wearing an unlocked,
   paired watch.
 - **Password fallback**: clicking "Use Password" opens an Authorization
-  Services prompt (the classic lock-icon dialog) with the same command shown,
+  Services dialog (the classic lock-icon one) with the same command shown,
   accepting your account password.
 
-The prompt binds to *your* user account, not "System Administrator", so your
+The dialog binds to *your* user account, not "System Administrator", so your
 password works in the fallback. (sudo runs as root by the time the plugin
 executes; sudowhat drops EUID to your user around the auth call so biometric
 and password both resolve against your enrollment.)
@@ -147,7 +147,7 @@ cannot read your terminal cannot show it.
 
 ## Install
 
-Requires macOS 15 or later (the prompt uses a LocalAuthentication policy added
+Requires macOS 15 or later (the dialog uses a LocalAuthentication policy added
 in macOS 15) and the Xcode Command Line Tools.
 
 > [!WARNING]
@@ -228,7 +228,7 @@ runtime configuration to tamper with. The module options
 | `auditDisplay` | `"on"` \| `"off"` (`"on"`) | The pre-auth `run as / directory / input` (+ `path:`) terminal block. |
 | `execDisplay` | `"on"` \| `"off"` (`"on"`) | The resolved `execute:` terminal line. |
 | `echoColor` | `"on"` \| `"off"` (`"on"`) | Role-highlighting of the `input:` / `execute:` values. `NO_COLOR` / `TERM=dumb` still force plain at runtime. |
-| `policyDeference` | `"on"` \| `"off"` (`"on"`) | Skip the console prompt when sudoers itself waived authentication (`NOPASSWD`, `!authenticate`, cached credential). |
+| `policyDeference` | `"on"` \| `"off"` (`"on"`) | Skip the console dialog when sudoers itself waived authentication (`NOPASSWD`, `!authenticate`, cached credential). |
 | `execConfirm` | `"on"` \| `"off"` (`"off"`) | On the terminal-password path, ask one `run? [y/N]` after authentication with the resolved `execute:` line visible. |
 
 ### Other configuration managers
@@ -337,10 +337,10 @@ to `pam_tid.so`-style permissive defaults; that is the behavior being fixed.
 
 **Policy deference.** The plugins run on every sudo, but the *decision* to
 authenticate stays with your sudoers policy: when sudoers waived it
-(`NOPASSWD`, `Defaults !authenticate`, a cached credential), the console prompt
+(`NOPASSWD`, `Defaults !authenticate`, a cached credential), the console dialog
 is skipped and the command just runs, already disclosed on the terminal by the
 audit plugin. Fail-safe in every uncertain direction: a caller can only ever
-*force* a prompt, never suppress one.
+*force* authentication, never suppress it.
 
 **Root callers are exempt, and logged.** A uid-0 caller is not escalating, and
 a plugin cannot constrain root anyway; gating it would only break root-context
@@ -358,9 +358,9 @@ non-console.
 
 | Caller | `nonConsole = "password"` (default) | `nonConsole = "deny"` |
 |---|---|---|
-| Local console (GUI) user | Touch ID prompt showing the command¹ | Touch ID prompt showing the command¹ |
-| Interactive remote session (e.g. SSH) | Password / smartcard on the caller's own terminal; no prompt on the console | Denied without a prompt |
-| Unattended job (launchd / cron, no GUI) | Runs if a sudoers rule authorizes it (e.g. `NOPASSWD`); no prompt on the console | Denied without a prompt |
+| Local console (GUI) user | Touch ID dialog showing the command¹ | Touch ID dialog showing the command¹ |
+| Interactive remote session (e.g. SSH) | Password / smartcard on the caller's own terminal; no dialog on the console | Denied without a dialog |
+| Unattended job (launchd / cron, no GUI) | Runs if a sudoers rule authorizes it (e.g. `NOPASSWD`); no dialog on the console | Denied without a dialog |
 | Root (uid 0) | Allowed, logged to the auth log | Allowed, logged to the auth log |
 
 ¹ Skipped when sudoers waived authentication for the command (policy
@@ -497,11 +497,11 @@ Documented design trade-offs, not bugs. Each is argued in full in
 [docs/security-design.md](docs/security-design.md#limitations); the short
 form:
 
-- **A background process in your own GUI login can still prompt.** Session
+- **A background process in your own GUI login can still raise a dialog.** Session
   classification keeps SSH and daemons off the console biometric, but cannot
   distinguish you at the keyboard from another process inside the *same* GUI
   login (a LaunchAgent, a compromised app's helper). The defense is the core
-  design: a prompt you did not start shows a command you do not expect and a
+  design: a dialog you did not start shows a command you do not expect and a
   verify code on no terminal you can see.
 - **The verify code goes to the controlling terminal, or nowhere.** Shell
   redirections cannot hide it (`/dev/tty`, not stderr), but a process with no
@@ -518,11 +518,11 @@ form:
   launched but cannot constrain what happens inside it.
 - **GUI session detached.** Fast-user-switched-out sessions fail the biometric
   call; the plugin denies, fail-closed.
-- **Generic icon in the prompt.** macOS takes the dialog icon from the calling
+- **Generic icon in the dialog.** macOS takes the dialog icon from the calling
   process (`sudo`, no app bundle), and `LAContext` has no override API. Fixing
   it would need a helper `.app` and IPC, the agent design this project
   rejected.
-- **Prompt budget verified in English only.** The dialog text stays under a
+- **Dialog budget verified in English only.** The dialog text stays under a
   conservative 480-char budget (LA truncates silently around ~510), measured
   with the English system prefix. Overflow is replaced whole by
   `(see terminal)`, never clipped mid-value, and the full command is already
@@ -536,9 +536,9 @@ After install, smoke-test the security properties:
 sudo -k && sudo /bin/echo hello                  # happy path
 sudo -k && sudo /bin/echo hello                  # cancel; expect "sudowhat: authorization denied"
 sudo -k && sudo /bin/echo $'hidden\nsudoers'    # control chars escape literally
-sudo /bin/echo first; sudo /bin/echo second      # no auth caching; two prompts
+sudo /bin/echo first; sudo /bin/echo second      # no auth caching; two dialogs
 ssh localhost 'sudo -n /bin/echo from-ssh' 2>&1 # SSH attacker guard
-sudo -k && sudo sudo /bin/echo nested-root      # inner sudo (caller=root) exempt: one prompt, then logged bypass
+sudo -k && sudo sudo /bin/echo nested-root      # inner sudo (caller=root) exempt: one dialog, then logged bypass
 sudo make uninstall                              # stock sudo behavior restored
 ```
 
