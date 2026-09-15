@@ -8,9 +8,9 @@
  *                                    parameters.
  *   - sw_audit_row()               : the label gutter every row shares.
  *   - sw_audit_color_dir/user()    : the frame values that carry emphasis,
- *   - sw_audit_color_path_list()   : and the path: value in colour.
- *   - sw_audit_is_bare_name()      : the condition gating the path: row.
- *   - sw_audit_path_row_value()    : the caller's PATH as the path: row shows
+ *   - sw_audit_color_path_list()   : and the PATH: value in colour.
+ *   - sw_audit_is_bare_name()      : the condition gating the PATH: row.
+ *   - sw_audit_path_row_value()    : the caller's PATH as the PATH: row shows
  *                                    it, or nil when the row must not print.
  *
  * A SEPARATE binary from test_plugin_internals: that one #includes
@@ -180,14 +180,14 @@ static void test_frame_gutter(void) {
     EQ(sw_audit_row(@"input:", @"id", NO),
        @"sudowhat: input:      id\n", "input: padded to the gutter");
 
-    EQ(sw_audit_row(@"path:", @"/usr/bin", NO),
-       @"sudowhat: path:       /usr/bin\n",
-       "path: padded to the gutter (5-char label, 7 spaces of gap)");
+    EQ(sw_audit_row(@"PATH:", @"/usr/bin", NO),
+       @"sudowhat: PATH:       /usr/bin\n",
+       "PATH: padded to the gutter (5-char label, 7 spaces of gap)");
 
     /* Every value lands in the same column -- the whole point of the gutter,
      * and the reason the approval plugin's verify: and execute: lines can join the
      * same table from a different bundle. */
-    NSArray<NSString *> *labels = @[ @"run as:", @"directory:", @"input:", @"path:" ];
+    NSArray<NSString *> *labels = @[ @"run as:", @"directory:", @"input:", @"PATH:" ];
     for (NSString *l in labels) {
         NSRange v = [sw_audit_row(l, @"VALUE", NO) rangeOfString:@"VALUE"];
         OK(v.location == 22, "value column is identical across rows");
@@ -239,7 +239,7 @@ static void test_frame_value_colour(void) {
     }
 }
 
-/* The path: value in colour: each entry's first segment bold cyan, the rest
+/* The PATH: value in colour: each entry's first segment bold cyan, the rest
  * plain, the colons bold blue. It only adds SGR around the escaped string, so
  * stripping it returns the plain row, and an entry that is not absolute (".",
  * or empty, both meaning the current directory) stays plain: the row
@@ -265,10 +265,10 @@ static void test_path_list_colour(void) {
     EQ(stripSGR(sw_audit_color_path_list(hostile)), hostile,
        "the coloured value strips back to the escaped plain value");
     NSArray<NSString *> *reserved = @[ @"\033[1;31m", @"\033[1;35m", @"\033[100m" ];
-    NSString *row = sw_audit_row(@"path:", sw_audit_color_path_list(hostile), YES);
+    NSString *row = sw_audit_row(@"PATH:", sw_audit_color_path_list(hostile), YES);
     for (NSString *r in reserved) {
         OK([row rangeOfString:r].location == NSNotFound,
-           "path: row uses no reserved anomaly colour");
+           "PATH: row uses no reserved anomaly colour");
     }
 }
 
@@ -326,7 +326,7 @@ static void test_fail_soft_fallback(void) {
        "both renderers failing -> nil");
 }
 
-/* The path: row's gating condition. Only a BARE NAME is resolved through PATH;
+/* The PATH: row's gating condition. Only a BARE NAME is resolved through PATH;
  * anything carrying a '/' -- absolute or relative -- is used as given, so the
  * caller's PATH decides nothing there and the row would be noise. */
 static void test_is_bare_name(void) {
@@ -338,7 +338,7 @@ static void test_is_bare_name(void) {
     OK(!sw_audit_is_bare_name(NULL), "NULL is not");
 }
 
-/* The path: row's value: the caller's PATH exactly as handed to sudo, escaped
+/* The PATH: row's value: the caller's PATH exactly as handed to sudo, escaped
  * through the same core as run as: and directory:, and nil in every case where
  * the row must not print. The row NEVER resolves anything -- it shows the
  * string, it does not walk it -- so there is nothing here that could claim
@@ -356,7 +356,7 @@ static void test_path_row_value(void) {
      * reader sees is the env string. */
     OK([sw_audit_path_row_value(bare, 1, env)
           rangeOfString:@"\033"].location == NSNotFound,
-       "the path: value carries no escape byte");
+       "the PATH: value carries no escape byte");
 
     /* Hostile bytes in PATH reach the terminal as TEXT, never as bytes: a
      * newline cannot forge a second sudowhat row, and a bidi override cannot
@@ -410,6 +410,6 @@ int main(void) {
         test_path_row_value();
         test_path_list_colour();
         SW_SUMMARY("audit plugin internals (colour gate, frame, command line, "
-                   "fail-soft, path: row)");
+                   "fail-soft, PATH: row)");
     }
 }

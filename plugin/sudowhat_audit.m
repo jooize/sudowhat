@@ -14,7 +14,7 @@
  * DISPLAY OWNERSHIP CARVE-OUT (docs/design-resolved-exec.md, section 3). This
  * plugin owns everything that exists BEFORE resolution: run as:, directory:,
  * input: -- the command as the user typed it, which is all sudo has produced at
- * this point -- and path:, the caller's PATH as handed to sudo, shown only when
+ * this point -- and PATH:, the caller's PATH as handed to sudo, shown only when
  * the typed command is a bare name (the surface that steers how that name will
  * resolve; NOT a claim about the final resolution PATH, which sudoers
  * secure_path may override). The approval plugin (plugin/sudowhat_approval.m) owns
@@ -244,14 +244,14 @@ static NSString *sw_audit_command_line(char * const submit_argv[], int optind,
  * all. Only a bare name is looked up through PATH. An absolute path
  * (/bin/systemctl) and any relative path carrying a slash (./x, a/b) are used
  * as given and never consult PATH, so for those the caller's PATH decides
- * nothing and the path: row would be noise on the block. NULL or empty -> NO:
+ * nothing and the PATH: row would be noise on the block. NULL or empty -> NO:
  * there is nothing to classify, and every doubt means no row. */
 static BOOL sw_audit_is_bare_name(const char *cmd) {
     if (cmd == NULL || cmd[0] == '\0') return NO;
     return strchr(cmd, '/') == NULL;
 }
 
-/* The path: row's value, or nil when the row must not print.
+/* The PATH: row's value, or nil when the row must not print.
  *
  * What the row discloses is the PATH ENVIRONMENT sudo was handed by the caller
  * -- the attacker-influenceable surface that decides how a bare command name
@@ -349,7 +349,7 @@ static BOOL sw_audit_color_allowed(char * const envp[]) {
  * lands in the middle of somebody else's output, so each line has to carry its
  * own provenance. The approval plugin's verify: and execute: lines
  * (SW_VERIFY_PREFIX, SW_EXEC_PREFIX) are further fields in the same gutter, so
- * six labels across two bundles -- run as:, directory:, input:, path: here,
+ * six labels across two bundles -- run as:, directory:, input:, PATH: here,
  * verify: and execute: there -- share this one width; keep them in step. */
 #define SW_AUDIT_GUTTER 12
 
@@ -370,7 +370,7 @@ static NSString *sw_audit_row(NSString *label, NSString *value, BOOL color) {
     return [NSString stringWithFormat:@"sudowhat: %@%@%@\n", label, gap, value];
 }
 
-/* Every path in the frame is drawn one way (the directory: and path: rows
+/* Every path in the frame is drawn one way (the directory: and PATH: rows
  * here, and the program on the execute: line through escape_core): its first
  * segment bold cyan, the rest plain. The first segment is where a path says
  * where it lives -- /run, /nix and /usr against /Users -- which is where a
@@ -411,7 +411,7 @@ static NSString *sw_audit_color_dir(NSString *dir) {
                                       middle, sw_audit_sgr(@"1", last)];
 }
 
-/* The path: value: each entry's first segment bold cyan, the rest plain, and
+/* The PATH: value: each entry's first segment bold cyan, the rest plain, and
  * the colons between entries bold blue, so the list reads as entries at a
  * glance (user choice, 2026-09-16). An entry that is not absolute ("." or
  * empty, both of which mean the current directory) has no head and stays
@@ -567,7 +567,7 @@ static int sudowhat_audit_open(unsigned int version,
         }
         [block appendString:sw_audit_row(@"input:", commandLine, color)];
 
-        /* path: sits directly after input: because it QUALIFIES that row: it is
+        /* PATH: sits directly after input: because it QUALIFIES that row: it is
          * the environment that decides how the bare name just shown will
          * resolve. The value is coloured per entry (sw_audit_color_path_list),
          * which only splits the one string on its colons: it is never a token
@@ -590,7 +590,7 @@ static int sudowhat_audit_open(unsigned int version,
                                                       submit_envp);
         if (pathValue != nil) {
             if (color) pathValue = sw_audit_color_path_list(pathValue);
-            [block appendString:sw_audit_row(@"path:", pathValue, color)];
+            [block appendString:sw_audit_row(@"PATH:", pathValue, color)];
         }
 
         sw_audit_write_tty("/dev/tty", block);

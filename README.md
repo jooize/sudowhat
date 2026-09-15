@@ -9,7 +9,7 @@ $ sudo echo hello
 sudowhat: run as:     root
 sudowhat: directory:  /Users/you
 sudowhat: input:      echo hello
-sudowhat: path:       /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+sudowhat: PATH:       /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
 sudowhat: verify:     Z96  (compare with the dialog)
 sudowhat: execute:    /bin/echo hello
 
@@ -88,7 +88,7 @@ literal `\n` in argv pose as a real newline.
   the terminal that launched sudo and inside the dialog. A dialog you did
   not initiate shows no code on any terminal you are watching.
 - **Terminal ceremony before any auth**: `run as`, `directory`, `input`
-  (the command as given), `path:` when the command is a bare name that
+  (the command as given), `PATH:` when the command is a bare name that
   `PATH` will resolve, and `execute:` (what sudo resolved). If an attacker's
   binary sits earlier in `PATH` than the real one, the hijack shows up as
   `input:` and `execute:` simply disagreeing.
@@ -225,7 +225,7 @@ runtime configuration to tamper with. The module options
 | `package` | the flake's package | Which sudowhat build to install. |
 | `nonConsole` | `"password"` \| `"deny"` (`"password"`) | What SSH / headless callers get: sudo's native password on their own terminal, or refusal. See [the table below](#console-vs-non-console-callers). |
 | `authCacheMinutes` | minutes \| `"defer"` (`0`) | sudo's credential cache. `0` = every command re-prompts; `"defer"` = leave your sudoers' own `timestamp_timeout` in place (writes no file). Never sets `timestamp_type=global`. |
-| `auditDisplay` | `"on"` \| `"off"` (`"on"`) | The pre-auth `run as / directory / input` (+ `path:`) terminal block. |
+| `auditDisplay` | `"on"` \| `"off"` (`"on"`) | The pre-auth `run as / directory / input` (+ `PATH:`) terminal block. |
 | `execDisplay` | `"on"` \| `"off"` (`"on"`) | The resolved `execute:` terminal line. |
 | `echoColor` | `"on"` \| `"off"` (`"on"`) | Role-highlighting of the `input:` / `execute:` values. `NO_COLOR` / `TERM=dumb` still force plain at runtime. |
 | `policyDeference` | `"on"` \| `"off"` (`"on"`) | Skip the console dialog when sudoers itself waived authentication (`NOPASSWD`, `!authenticate`, cached credential). |
@@ -270,7 +270,7 @@ flowchart TD
 In order, within one `sudo` invocation:
 
 1. **Audit plugin** (`sudowhat_audit.so`) runs before any auth and prints the
-   `run as / directory / input` block (plus `path:` for a bare command name)
+   `run as / directory / input` block (plus `PATH:` for a bare command name)
    to `/dev/tty` on every path, biometric or password, with all escaping done
    in the memory-safe Rust `escape_core`.
 2. **PAM module** (`pam_sudowhat.so`, wired into `/etc/pam.d/sudo_local`)
@@ -302,7 +302,7 @@ lives (`/run`, `/nix` and `/usr` against `/Users`).
 | `run as:` | `root` plain, any other user yellow |
 | `directory:` | first segment bold cyan, the middle plain, the last segment bold |
 | `input:` | dim, with the program's name bold dim |
-| `path:` | each entry's first segment bold cyan and the rest plain; the colons bold blue |
+| `PATH:` | each entry's first segment bold cyan and the rest plain; the colons bold blue |
 | `verify:` | the code bold magenta, the note dim |
 | `execute:` | the program's first segment bold cyan, the rest of its directory plain, its name bold blue; flags bold blue; everything else plain |
 
@@ -434,7 +434,7 @@ sudowhat: input: systemctl restart nginx
 ```
 
 **Display-only, by design.** No verify code (no GUI dialog to bind one to), no
-approval plugin or `execute:` line, no `path:` row (macOS-only for now), no PAM
+approval plugin or `execute:` line, no `PATH:` row (macOS-only for now), no PAM
 module: sudo's own authentication is untouched. The trust model: sudo
 perm-checks `/etc/sudo.conf` only. A config not owned by root, or writable by
 group or other, is ignored, fail-closed (`sudo.conf(5)`). sudo does **not**

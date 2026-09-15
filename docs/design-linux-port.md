@@ -131,7 +131,7 @@ sudowhat: directory: <invoking cwd>        (omitted when cwd is absent)
 sudowhat: input: <command as typed>
 ```
 
-*[2026-08-27 — the macOS block gained a fourth row, `path:` (the caller's PATH,
+*[2026-08-27 — the macOS block gained a fourth row, `PATH:` (the caller's PATH,
 shown only for a bare command name; D8, `docs/design-resolved-exec.md`). It is
 **macOS-only for now** and deliberately not part of this port's scope; the
 Linux roadmap decides that separately. The block above is current for Linux.]*

@@ -79,7 +79,7 @@ in {
 
         - `on` (the default): the audit plugin prints `user:`, `directory:` (the
           working directory), `input:` (the command as typed) and — when the
-          typed command is a bare name — `path:` to the controlling terminal on
+          typed command is a bare name — `PATH:` to the controlling terminal on
           EVERY path — the local console (before the Touch ID dialog and its
           verify code) and non-console / SSH sessions (before sudo's native
           password prompt). This closes the gap where a non-console sudo used to
@@ -91,7 +91,7 @@ in {
         the user asked for. The resolved absolute path is shown separately, by
         the approval plugin, on the `execute:` line.
 
-        The `path:` row is shown only for a bare command name — an absolute or
+        The `PATH:` row is shown only for a bare command name — an absolute or
         relative path never consults `PATH`, so there would be nothing to
         qualify. It shows the caller's `PATH` exactly as handed to sudo: the
         attacker-influenceable surface that steers how a bare name resolves. It
@@ -196,7 +196,7 @@ in {
           palettes, not two renderers — so they can never disagree on a token.
 
         What it does NOT govern: the frame around those values — the label
-        gutter, the bold labels, the `run as:`, `directory:` and `path:`
+        gutter, the bold labels, the `run as:`, `directory:` and `PATH:`
         lines, the `verify:` code emphasis (fixed bold magenta, with no
         option of its own). Those are sudowhat's own fixed chrome rather than a
         rendering of untrusted argv, so they follow the runtime gates alone —

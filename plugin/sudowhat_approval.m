@@ -298,7 +298,7 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * unit, so the width is duplicated rather than shared; if one moves, move both.
  *
  * The gutter family is now six labels across the two bundles: run as:, directory:,
- * input: and path: from the audit plugin, then verify: and execute: from this
+ * input: and PATH: from the audit plugin, then verify: and execute: from this
  * one.
  * Every value starts at column 22 (10 bytes of "sudowhat: " plus the 12-wide
  * gutter), so the whole ceremony reads as one table however it is split between
@@ -457,7 +457,7 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  *
  * DISPLAY OWNERSHIP (docs/design-resolved-exec.md, section 3). The audit plugin
  * (plugin/sudowhat_audit.m) owns the PRE-AUTH block -- run as:, directory:,
- * input:, and path: (the caller's PATH, shown only for a bare command name;
+ * input:, and PATH: (the caller's PATH, shown only for a bare command name;
  * not a claim about the final resolution PATH, which sudoers secure_path may
  * override) -- everything that exists before sudo has resolved the command. This
  * plugin owns DECISION-ADJACENT display -- verify:, the LAContext sheet, and

@@ -221,7 +221,7 @@ aside silently, showing a bare `Password:` with no command. It prints
 exactly as you typed it), each shell-quoted and control-character escaped by
 the memory-safe Rust `escape_core`, so no raw control byte reaches the
 terminal. When the command you typed is a **bare name**, one more row follows
-it: `path:`, the `PATH` your shell handed sudo. That list is the
+it: `PATH:`, the `PATH` your shell handed sudo. That list is the
 attacker-influenceable surface that steers how a bare name resolves. It is not
 a claim about the *final* resolution `PATH` (a sudoers `secure_path` can
 override it) and sudowhat never walks the list or says which entry would win;
@@ -295,7 +295,7 @@ routine content is dim, so the quotes there no longer stand out from what they
 wrap; quote attribution stays legible on the `execute:` line, which renders
 the same tokens through the same walk. Every path in the frame is drawn one way,
 its first segment bold cyan: the `directory:` value (the middle plain, the
-last segment bold) and each `path:` entry (the rest plain, bold blue colons
+last segment bold) and each `PATH:` entry (the rest plain, bold blue colons
 between entries), which is only a split on the colons, never a token walk.
 The `run as:` value turns yellow when the target is not `root`.
 

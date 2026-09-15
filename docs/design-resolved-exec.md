@@ -159,7 +159,7 @@ terminal carries the full resolved line in both modes.
     sudowhat: run as:     root
     sudowhat: directory:  /Users/jooize/Projects/claude-code-hardening
     sudowhat: input:      pinned deploy
-    sudowhat: path:       /run/current-system/sw/bin:/usr/bin:/bin
+    sudowhat: PATH:       /run/current-system/sw/bin:/usr/bin:/bin
     sudowhat: verify:     JL6  (compare with the dialog)
     <auth>
     sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
@@ -238,14 +238,14 @@ command display. This round adds a stated carve-out rather than an exception
 by accident:
 
 - **audit plugin** owns the PRE-AUTH block (`run as:`/`directory:`/`input:`/
-  `path:`/`verify:`) -- everything that exists before resolution.
+  `PATH:`/`verify:`) -- everything that exists before resolution.
 - **approval plugin** owns DECISION-ADJACENT display -- the dialog and the
   `execute:` line -- everything that exists only after resolution.
 
 Both render command lines through the shared escape core, so the split cannot
 produce two spellings of one command. The seam is commented on both sides.
 
-**Delta (2026-08-27): `path:`, a pre-gate row for bare names (D8).** The audit
+**Delta (2026-08-27): `PATH:`, a pre-gate row for bare names (D8).** The audit
 block gains a fourth row, printed directly after `input:` because it qualifies
 it. macOS only for now — the Linux port's roadmap is separate.
 
@@ -285,7 +285,7 @@ is occasionally missing from the one path that needs it, and the alternative
 would be a guess dressed as a mode. Recorded in a comment at the row's build
 site in `plugin/sudowhat_audit.m`.
 
-*Rendering.* Label `path:` (5 chars) in the existing 12-column gutter, bold
+*Rendering.* Label `PATH:` (5 chars) in the existing 12-column gutter, bold
 under colour like every other label; the value escaped through the one shared
 core (`sw_escape_control`, the same call `run as:` and `directory:` take) and
 rendered **plain** — no role colour, no dim. It is one opaque string, not a

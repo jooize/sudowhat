@@ -51,13 +51,13 @@ $ sudo systemctl restart nginx
 sudowhat: run as:     root              <- audit plugin open(), BEFORE auth
 sudowhat: directory:  /etc/nginx        <- the invoking cwd (user_info["cwd"])
 sudowhat: input:      systemctl restart nginx  <- as typed (see "resolved path" below)
-sudowhat: path:       /usr/local/bin:/usr/bin:/bin  <- caller's PATH; bare names only
+sudowhat: PATH:       /usr/local/bin:/usr/bin:/bin  <- caller's PATH; bare names only
 Password: ****                          <- sudo's native PAM, on the terminal
 sudowhat: execute:    /run/.../systemctl restart nginx   <- resolved last-look (shipped v0.13.0)
 <runs>
 ```
 
-*[2026-08-27 — the `path:` row (D8). Added directly after `input:` because it
+*[2026-08-27 — the `PATH:` row (D8). Added directly after `input:` because it
 qualifies it: for a bare command name it discloses the caller's PATH, the
 surface that steers how that name resolves, on the one path where `execute:`
 cannot precede the gate. Not a claim about the final resolution PATH — sudoers
@@ -190,7 +190,7 @@ no attacker byte can become an escape sequence.
 **Role palette** (`sw_full_command_line_colored`, `shared/escape_core`). Until
 2026-09-16 the program path was `pinned`'s `prog_disp` treatment (directory
 plain cyan, basename bold cyan); it is now sudowhat's own, shared with the
-`directory:` and `path:` rows so every path in the frame reads one way:
+`directory:` and `PATH:` rows so every path in the frame reads one way:
 
 | role | SGR | note |
 |---|---|---|
@@ -321,7 +321,7 @@ reinstall ceremony, and these touch every caller.
   in the plugin, not by routing the cwd through `sw_full_command_line_colored`, which
   would also shell-quote it and make the coloured and plain blocks differ in
   bytes). The `run as:` value is plain for `root` — the expected target earns no
-  emphasis — and plain yellow for any other target. The `path:` value gives
+  emphasis — and plain yellow for any other target. The `PATH:` value gives
   each entry the same bold cyan head and bold blue colons between entries. The
   frame stays clear of `escape_core`'s anomaly palette (`1;31`, `1;35`, `100`);
   bold cyan (`1;36`) is shared with the shell-metacharacter mark, which the
