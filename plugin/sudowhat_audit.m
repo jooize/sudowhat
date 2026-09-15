@@ -75,20 +75,21 @@ enum { sw_audit_display_mode = SW_AD_SEL(SW_AUDIT_DISPLAY) };
  * nix module / Makefile).
  *
  *   on  - (default) highlight the command line. The input: value renders its
- *         ROUTINE tokens - program, flags, values alike - dim, with the
- *         escaped/anomalous spans (deceptive Unicode, control bytes, shell
- *         metacharacters, notable whitespace) at full strength on top: the
- *         pre-resolution line reads quiet under the resolved execute: line,
- *         and the anomalies are the only coloured thing on it. The approval
- *         bundle's execute: line keeps the full role palette (program dirname
- *         plain cyan, basename bold cyan, flags bold blue, values plain), so
- *         what sudo will actually run is the loud line.
+ *         ROUTINE tokens - program directory, flags, values alike - dim and
+ *         the program's basename bold dim, with the escaped/anomalous spans
+ *         (deceptive Unicode, control bytes, shell metacharacters, notable
+ *         whitespace) at full strength on top: the pre-resolution line reads
+ *         quiet under the resolved execute: line, and the anomalies are the
+ *         only coloured thing on it. The approval bundle's execute: line keeps
+ *         the full role palette (the program directory's first segment bold
+ *         cyan and the rest plain, basename bold blue, flags bold blue, values
+ *         plain), so what sudo will actually run is the loud line.
  *   off - the command line renders plain.
  *
  * This knob governs the COMMAND VALUE only. The frame around it (the label
- * gutter, the bold labels, the directory and target-user emphasis) is governed
- * by the NO_COLOR / TERM / isatty gates alone, because it is our own fixed
- * chrome rather than a rendering of untrusted argv.
+ * gutter, the bold labels, the directory, path and target-user emphasis) is
+ * governed by the NO_COLOR / TERM / isatty gates alone, because it is our own
+ * fixed chrome rather than a rendering of untrusted argv.
  *
  * The SAME token governs the approval bundle's execute: value, which is why
  * -DSW_ECHO_COLOR sits in the Makefile's global CFLAGS rather than in this
@@ -228,10 +229,10 @@ static NSString *sw_audit_command_line_with(sw_cmdline_fn colored,
 }
 
 /* The input: line takes the DIM variant of the shared renderer: routine tokens
- * quiet, anomaly spans at full strength. The approval bundle's execute: line
- * takes the role-coloured variant of the same walk, so the resolved command is
- * the loud one and this pre-resolution line sits under it. The plain renderer
- * is the fallback for both. */
+ * quiet, the program's basename bold dim, anomaly spans at full strength. The
+ * approval bundle's execute: line takes the role-coloured variant of the same
+ * walk, so the resolved command is the loud one and this pre-resolution line
+ * sits under it. The plain renderer is the fallback for both. */
 static NSString *sw_audit_command_line(char * const submit_argv[], int optind,
                                        BOOL color) {
     return sw_audit_command_line_with(sw_full_command_line_colored_dim,
@@ -369,33 +370,71 @@ static NSString *sw_audit_row(NSString *label, NSString *value, BOOL color) {
     return [NSString stringWithFormat:@"sudowhat: %@%@%@\n", label, gap, value];
 }
 
-/* The cwd, coloured the way escape_core renders a program path: the directory
- * part plain cyan, the last component bold cyan -- the one word the reader is
- * actually checking. Done here rather than by routing the cwd through
- * sw_full_command_line_colored, which would give the same split for free but
- * would also SHELL-QUOTE the token: a directory with a space in it would then
- * gain quotes the uncoloured row does not have, and the block would stop being
- * the same bytes with and without colour. It would also drag the anomaly
- * palette onto a value the frame is supposed to keep to bold/plain/yellow plus
- * this one cyan pair.
+/* Every path in the frame is drawn one way (the directory: and path: rows
+ * here, and the program on the execute: line through escape_core): its first
+ * segment bold cyan, the rest plain. The first segment is where a path says
+ * where it lives -- /run, /nix and /usr against /Users -- which is where a
+ * user-writable directory or a shadowed program shows.
  *
- * The input is already escape_control-escaped, so it holds no control byte and
- * a '/' can only be a literal '/'. A trailing slash (or no slash at all) leaves
- * one half empty; that half is simply not emitted, so no empty SGR span is
- * ever written. */
+ * These helpers take values that are already escape_control-escaped, so they
+ * hold no control byte and a '/' or ':' can only be the literal character.
+ * They add SGR around the bytes and never add or change a byte, so a coloured
+ * row strips back to the plain one. No empty SGR span is ever written. */
+static NSString *sw_audit_sgr(NSString *sgr, NSString *text) {
+    if (text.length == 0) return @"";
+    return [NSString stringWithFormat:@"\033[%@m%@\033[0m", sgr, text];
+}
+
+/* The cwd: first segment bold cyan, the middle plain, the last component bold
+ * -- the one word the reader is actually checking. Split like escape_core's
+ * program path: the head comes from the directory part only, so "/" alone and
+ * a relative value have none ("/Users" is a plain "/" and a bold "Users").
+ * Done here rather than through sw_full_command_line_colored, which would also
+ * SHELL-QUOTE the value: a directory with a space in it would gain quotes the
+ * uncoloured row does not have. */
 static NSString *sw_audit_color_dir(NSString *dir) {
     NSRange slash = [dir rangeOfString:@"/" options:NSBackwardsSearch];
-    if (slash.location == NSNotFound) {
-        return [NSString stringWithFormat:@"\033[1;36m%@\033[0m", dir];
+    if (slash.location == NSNotFound) return sw_audit_sgr(@"1", dir);
+    NSUInteger cut = NSMaxRange(slash);
+    NSString *parent = [dir substringToIndex:cut];   /* ends in '/' */
+    NSString *last = [dir substringFromIndex:cut];
+    NSString *head = @"";
+    NSString *middle = parent;
+    if ([parent hasPrefix:@"/"] && parent.length > 1) {
+        /* parent ends in '/', so a second '/' always exists past index 0 */
+        NSRange next = [parent rangeOfString:@"/" options:0
+                                       range:NSMakeRange(1, parent.length - 1)];
+        head = [parent substringToIndex:next.location];
+        middle = [parent substringFromIndex:next.location];
     }
-    NSUInteger cut = slash.location + slash.length;
-    NSString *head = [dir substringToIndex:cut];
-    NSString *base = [dir substringFromIndex:cut];
-    if (base.length == 0) {
-        return [NSString stringWithFormat:@"\033[36m%@\033[0m", head];
+    return [NSString stringWithFormat:@"%@%@%@", sw_audit_sgr(@"1;36", head),
+                                      middle, sw_audit_sgr(@"1", last)];
+}
+
+/* The path: value: each entry's first segment bold cyan, the rest plain, and
+ * the colons between entries bold blue, so the list reads as entries at a
+ * glance (user choice, 2026-09-16). An entry that is not absolute ("." or
+ * empty, both of which mean the current directory) has no head and stays
+ * plain: this row discloses the PATH, it does not judge it. */
+static NSString *sw_audit_color_path_list(NSString *escaped) {
+    NSMutableString *out = [NSMutableString string];
+    NSArray<NSString *> *entries = [escaped componentsSeparatedByString:@":"];
+    for (NSUInteger i = 0; i < entries.count; i++) {
+        NSString *entry = entries[i];
+        if (i > 0) [out appendString:sw_audit_sgr(@"1;34", @":")];
+        NSString *head = @"";
+        if ([entry hasPrefix:@"/"]) {
+            NSRange next = (entry.length > 1)
+                ? [entry rangeOfString:@"/" options:0
+                                 range:NSMakeRange(1, entry.length - 1)]
+                : NSMakeRange(NSNotFound, 0);
+            head = (next.location == NSNotFound)
+                ? entry : [entry substringToIndex:next.location];
+        }
+        [out appendString:sw_audit_sgr(@"1;36", head)];
+        [out appendString:[entry substringFromIndex:head.length]];
     }
-    return [NSString stringWithFormat:@"\033[36m%@\033[0m\033[1;36m%@\033[0m",
-                                      head, base];
+    return out;
 }
 
 /* Attention colour on an unexpected target. root is what `sudo` means with no
@@ -510,10 +549,10 @@ static int sudowhat_audit_open(unsigned int version,
          * bolded purely for readability (our own fixed bytes, never user input
          * -- the values are escape_core-escaped), and the values carry the
          * emphasis their meaning earns: the target user yellow when it is not
-         * root, the cwd split dirname/basename like a program path, and the
-         * caller's PATH plain. Same env gate as the approval plugin's verify code
-         * (resolved above), so a redirect or a non-tty renders the identical
-         * block with no SGR at all.
+         * root, and the cwd and the caller's PATH in the frame's path style
+         * (see sw_audit_sgr). Same env gate as the approval plugin's verify
+         * code (resolved above), so a redirect or a non-tty renders the
+         * identical block with no SGR at all.
          *
          * No leading blank line. The block lands mid-stream in output sudowhat
          * does not own either side of, and it cannot know what preceded it;
@@ -530,10 +569,9 @@ static int sudowhat_audit_open(unsigned int version,
 
         /* path: sits directly after input: because it QUALIFIES that row: it is
          * the environment that decides how the bare name just shown will
-         * resolve. Value plain -- the same treatment run as: and directory: get by
-         * default -- because it earns no role colour: it is one opaque string,
-         * not a token walk, and the yellow/cyan the frame spends elsewhere
-         * already mean specific things.
+         * resolve. The value is coloured per entry (sw_audit_color_path_list),
+         * which only splits the one string on its colons: it is never a token
+         * walk, and it resolves nothing.
          *
          * MODE SCOPING, and why there is none. Ideally this row would print
          * only where execute: cannot appear before the gate -- the password
@@ -551,6 +589,7 @@ static int sudowhat_audit_open(unsigned int version,
                                                       submit_optind,
                                                       submit_envp);
         if (pathValue != nil) {
+            if (color) pathValue = sw_audit_color_path_list(pathValue);
             [block appendString:sw_audit_row(@"path:", pathValue, color)];
         }
 

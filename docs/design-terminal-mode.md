@@ -187,13 +187,16 @@ emphasis is not a trust signal (the anchor stays the verify code matching the
 system-rendered dialog), and the input is already free of raw control bytes, so
 no attacker byte can become an escape sequence.
 
-**Role palette** (`sw_full_command_line_colored`, `shared/escape_core`), one
-house palette shared with `pinned`'s `prog_disp`:
+**Role palette** (`sw_full_command_line_colored`, `shared/escape_core`). Until
+2026-09-16 the program path was `pinned`'s `prog_disp` treatment (directory
+plain cyan, basename bold cyan); it is now sudowhat's own, shared with the
+`directory:` and `path:` rows so every path in the frame reads one way:
 
 | role | SGR | note |
 |---|---|---|
-| program path, directory part | `36` (plain cyan) | |
-| program path, basename | `1;36` (bold cyan) | the token worth reading |
+| program path, first segment of the directory | `1;36` (bold cyan) | where the path lives |
+| program path, rest of the directory | none | |
+| program path, basename | `1;34` (bold blue) | the token worth reading; `1;2` (bold dim) on `input:` |
 | every other token (flag or value alike) | none | see below |
 | a single quote *we* added | `2` (dim) | our own chrome |
 | deceptive Unicode escape `\uNNNN` | `1;31` | anomaly palette, |
@@ -313,13 +316,16 @@ reinstall ceremony, and these touch every caller.
   measured after the `sudowhat: ` prefix. That prefix stays on every row rather
   than being hoisted into a header — the block lands in the middle of somebody
   else's output, so each line has to carry its own provenance.
-- **Colour on the frame rows.** The `directory:` value takes the same
-  dirname-plain-cyan / basename-bold-cyan split as the program path (done in the
-  plugin, not by routing the cwd through `sw_full_command_line_colored`, which
+- **Colour on the frame rows.** The `directory:` value takes the frame's path
+  style: first segment bold cyan, the middle plain, the last segment bold (done
+  in the plugin, not by routing the cwd through `sw_full_command_line_colored`, which
   would also shell-quote it and make the coloured and plain blocks differ in
   bytes). The `run as:` value is plain for `root` — the expected target earns no
-  emphasis — and plain yellow for any other target. The frame stays clear of
-  `escape_core`'s anomaly palette (`1;31`, `1;35`, `1;36`, `100`).
+  emphasis — and plain yellow for any other target. The `path:` value gives
+  each entry the same bold cyan head and bold blue colons between entries. The
+  frame stays clear of `escape_core`'s anomaly palette (`1;31`, `1;35`, `100`);
+  bold cyan (`1;36`) is shared with the shell-metacharacter mark, which the
+  frame rows never carry, since only the command lines are token walks.
 - **The seam: flush, no leading blank.** Reversed from the first draft. The
   courtesy-blank exception assumes a program owns both sides of the seam;
   sudowhat owns neither and cannot know what preceded it. Generalization test:
@@ -327,7 +333,7 @@ reinstall ceremony, and these touch every caller.
   holes. Spacing belongs to the caller — `pinned` or `claude-update-nix` may
   print their own blank before invoking sudo.
 - **The verify-code line** became a fourth field in the same gutter:
-  `sudowhat: verify:     Z96E  (compare with the prompt)` — label bold like the
+  `sudowhat: verify:     Z96  (compare with the prompt)` — label bold like the
   other rows, code carrying the build-time `verifyStyle` emphasis, the trailing
   instruction dim. No attention colour: yellow already means "the target user is
   not root", and spending it here would say something the reader knows and give

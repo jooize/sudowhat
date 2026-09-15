@@ -306,19 +306,20 @@ static void test_colored_preserves_bytes(void) {
        "coloured command with escapes strips back to the plain line");
 }
 
-/* Role assignment on the execute: variant, pinned to exact bytes: the program's
- * directory part plain cyan, its basename bold cyan, option flags bold blue,
+/* Role assignment on the execute: variant, pinned to exact bytes: the first
+ * segment of the program's directory bold cyan, the rest of it plain, the
+ * basename bold blue, option flags bold blue,
  * every other token unstyled. The flag mark is openly lexical -- it colours
  * every flag alike rather than guessing which one matters, and a token that
  * needed quoting renders '...' and so never borrows the look. */
 static void test_colored_roles(void) {
     EQ(rustColoredCmd(@"/bin/echo", @[@"echo"]),
-       @"\033[36m/bin/\033[0m\033[1;36mecho\033[0m",
-       "program dirname plain cyan, basename bold cyan");
-    EQ(rustColoredCmd(@"id", @[@"id"]), @"\033[1;36mid\033[0m",
+       @"\033[1;36m/bin\033[0m/\033[1;34mecho\033[0m",
+       "first segment bold cyan, the rest plain, basename bold blue");
+    EQ(rustColoredCmd(@"id", @[@"id"]), @"\033[1;34mid\033[0m",
        "a bare command word is all basename");
     EQ(rustColoredCmd(@"/bin/git", @[@"git", @"--file", @"x"]),
-       @"\033[36m/bin/\033[0m\033[1;36mgit\033[0m \033[1;34m--file\033[0m x",
+       @"\033[1;36m/bin\033[0m/\033[1;34mgit\033[0m \033[1;34m--file\033[0m x",
        "flags bold blue, values plain, separators untouched");
     OK([rustColoredCmd(@"/bin/rm", @[@"rm", @"-rf", @"/"]) rangeOfString:@"\033[2m"].location
        == NSNotFound,
@@ -327,9 +328,10 @@ static void test_colored_roles(void) {
        != NSNotFound,
        "a flag is bold blue (lexical: starts with a dash)");
     /* A hostile token that needed quoting renders '...' (leading quote, not
-     * dash) -- it must NOT borrow the flag colour. */
-    OK([rustColoredCmd(@"/bin/echo", @[@"echo", @"-rf x"]) rangeOfString:@"\033[1;34m"].location
-       == NSNotFound,
+     * dash) -- it must NOT borrow the flag colour. Pinned whole: the only bold
+     * blue on the line is the program's basename. */
+    EQ(rustColoredCmd(@"/bin/echo", @[@"echo", @"-rf x"]),
+       @"\033[1;36m/bin\033[0m/\033[1;34mecho\033[0m \033[2m'\033[0m-rf x\033[2m'\033[0m",
        "a quoted token is never flag-coloured");
 }
 
@@ -342,7 +344,7 @@ static void test_colored_roles(void) {
 static void test_colored_quote_attribution(void) {
     /* a'b -> 'a'\''b' : ours, ours, a plain backslash, the DATA's, ours, ours. */
     EQ(rustColoredCmd(@"p", @[@"p", @"a'b"]),
-       @"\033[1;36mp\033[0m \033[2m'\033[0ma\033[2m'\033[0m\\\033[1;36m'\033[0m"
+       @"\033[1;34mp\033[0m \033[2m'\033[0ma\033[2m'\033[0m\\\033[1;36m'\033[0m"
        @"\033[2m'\033[0mb\033[2m'\033[0m",
        "our quotes dim, the argument's own quote lit");
 
@@ -356,7 +358,7 @@ static void test_colored_quote_attribution(void) {
 
     /* An empty token is entirely chrome: both quotes ours. */
     EQ(rustColoredCmd(@"p", @[@"p", @""]),
-       @"\033[1;36mp\033[0m \033[2m'\033[0m\033[2m'\033[0m",
+       @"\033[1;34mp\033[0m \033[2m'\033[0m\033[2m'\033[0m",
        "the empty token is all chrome, both quotes dim");
 }
 
@@ -395,15 +397,16 @@ static void test_colored_hostile_and_anomalies(void) {
 }
 
 /* The dim variant, which the audit bundle's input: line uses: the routine roles
- * collapse to one dim base, the anomaly palette above it does not move. The
+ * collapse to one dim base with the basename bold dim, and the anomaly palette
+ * above it does not move. The
  * exhaustive per-role table lives in the Rust test module; this is the
  * cross-language sighting that the exported dim entry point is the same walk. */
 static void test_colored_dim_variant(void) {
     EQ(rustColoredDimCmd(@"/bin/echo", @[@"echo", @"hello"]),
-       @"\033[2m/bin/\033[0m\033[2mecho\033[0m \033[2mhello\033[0m",
-       "input: renders program and value on one dim base");
+       @"\033[2m/bin/\033[0m\033[1;2mecho\033[0m \033[2mhello\033[0m",
+       "input: renders the directory and value dim, the basename bold dim");
     EQ(rustColoredDimCmd(@"/bin/git", @[@"git", @"--file", @"x"]),
-       @"\033[2m/bin/\033[0m\033[2mgit\033[0m \033[2m--file\033[0m \033[2mx\033[0m",
+       @"\033[2m/bin/\033[0m\033[1;2mgit\033[0m \033[2m--file\033[0m \033[2mx\033[0m",
        "flags take the dim base too, not their bold blue");
 
     NSString *nl = rustColoredDimCmd(@"/bin/echo", @[@"echo", cat(cat(@"a", uni(0x0a)), @"b")]);

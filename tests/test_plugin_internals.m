@@ -83,7 +83,7 @@ static void test_nonce_alphabet_and_length(void) {
      * exactly outsz-1, and the buffer is NUL-terminated. Also check every
      * alphabet symbol shows up at least once (no off-by-one truncating the
      * arc4random_uniform range). */
-    enum { N = 200000, LEN = 4 };
+    enum { N = 200000, LEN = SW_VERIFY_CODE_LEN };   /* the production length */
     int seen[256] = {0};
     int bad = 0, badlen = 0, notterm = 0, forbidden = 0;
     for (int i = 0; i < N; i++) {

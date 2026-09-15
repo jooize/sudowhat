@@ -171,9 +171,10 @@ in {
         display.
 
         - `off` renders both command lines plain.
-        - `on` (the default) highlights `execute:` by role — the program's
-          directory part in plain cyan and its basename in bold cyan, option
-          flags bold blue, every other token plain — and wraps anomaly spans in
+        - `on` (the default) highlights `execute:` by role — the first
+          segment of the program's directory in bold cyan and the rest plain,
+          its basename bold blue, option flags bold blue, every other token
+          plain — and wraps anomaly spans in
           a fixed, reviewed palette on top:
           deceptive Unicode escapes (`\uNNNN` — bidi, zero-width, homoglyphs)
           in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
@@ -186,19 +187,21 @@ in {
           bytes render escaped and quoted either way.
 
           The `input:` value takes the same anomaly palette over a QUIET base:
-          its routine tokens — program, flags and values alike — all render
-          dim, so the pre-resolution line reads under the resolved one and an
-          anomaly span is the only coloured thing on that row. `input:` quiet,
+          its routine tokens — program directory, flags and values alike —
+          render dim and the program's basename bold dim, so the
+          pre-resolution line reads under the resolved one and an anomaly
+          span is the only coloured thing on that row. `input:` quiet,
           `execute:` loud, anomalies at full strength on both. Both lines come
           out of one shared walk over one token list — the weights are two base
           palettes, not two renderers — so they can never disagree on a token.
 
         What it does NOT govern: the frame around those values — the label
-        gutter, the bold labels, the `user:` and `directory:` lines, the
-        `verify:` code emphasis (fixed bold magenta, with no option of its own).
-        Those are sudowhat's own fixed chrome rather than a rendering of
-        untrusted argv, so they follow the runtime gates alone — NO_COLOR,
-        TERM absent/empty/`dumb`, or a non-tty target — and stay put at `off`.
+        gutter, the bold labels, the `run as:`, `directory:` and `path:`
+        lines, the `verify:` code emphasis (fixed bold magenta, with no
+        option of its own). Those are sudowhat's own fixed chrome rather than a
+        rendering of untrusted argv, so they follow the runtime gates alone —
+        NO_COLOR, TERM absent/empty/`dumb`, or a non-tty target — and stay put
+        at `off`.
 
         The command stays one logical line: the colour goes around tokens that
         are already escaped and quoted, so it never splits, elides or reorders

@@ -264,8 +264,8 @@ deliberately outside it: a root-initiated sudo gets no `input:` block (uid 0 is
 exempt from the audit display) and no verify code, so its lone `execute:` line
 drops the padding rather than aligning against a column of one. The `execute:`
 value is **highlighted by role** so the token worth reading is not buried in
-the wrap: the program's directory part in plain cyan and its basename in bold
-cyan, option flags bold blue, every other token plain, the quotes sudowhat
+the wrap: the first segment of the program's directory in bold cyan, the rest
+of it plain, its basename bold blue, option flags bold blue, every other token plain, the quotes sudowhat
 itself added dim. Anomalous spans take the palette above them: deceptive
 Unicode escapes red, control-byte escapes magenta, shell metacharacters cyan,
 and notable whitespace runs (leading, trailing, or doubled spaces) on a grey
@@ -275,8 +275,9 @@ outcome; on argument tokens it was drowning the line: a script passed as one
 argument (`sh -c '…'`) turned every escaped newline's indentation into a grey
 block. Those bytes still render escaped and quoted with or without it. The
 `input:` value goes through the same renderer with one difference: its
-**routine tokens all render dim** (program, flags and values alike), and only
-the anomalous spans keep full strength. `input:` quiet, `execute:` loud,
+**routine tokens all render dim** (program directory, flags and values alike),
+the program's basename bold dim so it is still read first, and only the
+anomalous spans keep full strength. `input:` quiet, `execute:` loud,
 anomalies at full strength on both: the resolved line is the one that says
 what actually happens as root, the pre-resolution line sits under it, and
 against that flat dim base an anomaly is the only colored thing on the row. A
@@ -292,11 +293,11 @@ leading quote, not dash. On the `execute:` line dim still means exactly one
 thing: *these bytes are sudowhat's, not the command's*. On `input:` the whole
 routine content is dim, so the quotes there no longer stand out from what they
 wrap; quote attribution stays legible on the `execute:` line, which renders
-the same tokens through the same walk. The `directory:` value takes the same
-dirname/basename split as the program path, and the `run as:` value turns
-yellow when the target is not `root`. The `path:` value renders plain: it is
-one opaque string rather than a token walk, and the colors the frame spends
-elsewhere already mean specific things.
+the same tokens through the same walk. Every path in the frame is drawn one way,
+its first segment bold cyan: the `directory:` value (the middle plain, the
+last segment bold) and each `path:` entry (the rest plain, bold blue colons
+between entries), which is only a split on the colons, never a token walk.
+The `run as:` value turns yellow when the target is not `root`.
 
 The highlight is **layout, never content**. It stays one logical line, which
 your terminal soft-wraps: nothing is split into per-option lines, nothing is

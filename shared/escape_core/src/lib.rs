@@ -229,9 +229,12 @@ pub fn full_command_line(path: &str, argv: &[&str], out: &mut String) {
 /// Fixed SGR palette. Kept in one reviewed place so the only escape bytes that
 /// can reach the terminal are this closed set -- the classifier below is their
 /// sole producer. The anomaly colours are the ones
-/// `+[SudoWhatPromptFormatter colorizeEscaped:]` already ships; the program-path
-/// pair is pinned's `prog_disp` treatment (dirname plain cyan, basename bold
-/// cyan), so one house palette spans both tools.
+/// `+[SudoWhatPromptFormatter colorizeEscaped:]` already ships. The program
+/// path is sudowhat's own (user choice, 2026-09-16), shared with the frame's
+/// directory: and path: rows so every path in the frame reads one way: its
+/// first segment bold cyan, the rest of the directory plain, the basename bold
+/// blue. The first segment is where a path says where it lives (/run, /nix,
+/// /usr against /Users), which is where a shadowed program shows.
 ///
 /// Colour asserts only what sudowhat KNOWS, which is exactly three kinds of
 /// thing: a structural fact (token[0] is the program, because sudo will execve
@@ -261,10 +264,13 @@ const SGR_META: &str = "\x1b[1;36m";
 /// is identical on BOTH base variants: inside the program token the mark stays a
 /// full-strength anomaly span, dim base or role base alike.
 const SGR_SPACE: &str = "\x1b[100m";
-/// program path, directory part
-const SGR_PROG_DIR: &str = "\x1b[36m";
-/// program path, basename -- the one token worth reading at the head of the line
-const SGR_PROG_BASE: &str = "\x1b[1;36m";
+/// program path, first segment of the directory (the leading '/' and the name
+/// up to the next '/'); the rest of the directory is plain
+const SGR_PROG_HEAD: &str = "\x1b[1;36m";
+/// program path, basename -- the one token worth reading at the head of the
+/// line. Same bytes as `SGR_FLAG`: against a plain directory it is the loudest
+/// word on the line, and it sits first, so it never reads as one of the flags.
+const SGR_PROG_BASE: &str = "\x1b[1;34m";
 /// our own chrome: the single quotes `quote_token` added, which were never bytes
 /// of an argument. Nothing reaching sudo contains a quote -- sudo hands the
 /// plugin an argv ARRAY -- so every quote on screen is one we invented while
@@ -273,19 +279,24 @@ const SGR_PROG_BASE: &str = "\x1b[1;36m";
 /// can be represented.
 const SGR_OURS: &str = "\x1b[2m";
 /// option flags: a rendered token that starts with '-'. Bold blue -- distinct
-/// from the program's bold cyan and the frame's yellow, readable where plain
-/// blue is not. This is a deliberately LEXICAL mark (by user choice: colour any
-/// flag, no judgement): "starts with a dash" is not a claim about which flag is
-/// dangerous -- sudowhat cannot know that (-rf looks like a flag, if=/dev/zero
-/// does not), and a token that needed quoting renders as '...' (leading quote,
-/// not dash) so hostile input still reads as data, never borrows the flag look.
+/// from the frame's yellow, readable where plain blue is not, and shared with
+/// the program's basename (see `SGR_PROG_BASE`). This is a deliberately LEXICAL
+/// mark (by user choice: colour any flag, no judgement): "starts with a dash"
+/// is not a claim about which flag is dangerous -- sudowhat cannot know that
+/// (-rf looks like a flag, if=/dev/zero does not), and a token that needed
+/// quoting renders as '...' (leading quote, not dash) so hostile input still
+/// reads as data, never borrows the flag look.
 const SGR_FLAG: &str = "\x1b[1;34m";
-/// the quiet base of the DIM variant: every routine token (program, flags,
-/// values alike) instead of its role colour. Same bytes as `SGR_OURS` on
+/// the quiet base of the DIM variant: every routine token (program directory,
+/// flags, values alike) instead of its role colour. Same bytes as `SGR_OURS` on
 /// purpose -- on that variant the chrome quotes stop standing out from the
 /// content they wrap, which costs nothing, because the line those quotes are
 /// attributed on is the loud one right underneath (see `RoleBase`).
 const SGR_QUIET: &str = "\x1b[2m";
+/// the program's basename on the DIM variant: bold AND dim, so the program is
+/// the first word read on a quiet line without taking a hue. Terminals that
+/// cannot combine the two show one of them, which still reads as quiet.
+const SGR_QUIET_PROG: &str = "\x1b[1;2m";
 
 /// Which base colours the ONE token walk lays under the routine roles. Both
 /// variants run the same `command_tokens` / `quote_token` / `colorize_escaped`
@@ -306,10 +317,18 @@ enum RoleBase {
 }
 
 impl RoleBase {
-    /// Base for the program path's directory part.
-    fn prog_dir(self) -> &'static str {
+    /// Base for the first segment of the program path's directory part.
+    fn prog_head(self) -> &'static str {
         match self {
-            RoleBase::Roles => SGR_PROG_DIR,
+            RoleBase::Roles => SGR_PROG_HEAD,
+            RoleBase::Dim => SGR_QUIET,
+        }
+    }
+    /// Base for the rest of the program path's directory part. Plain in the
+    /// role variant, so the head and the basename stand out against it.
+    fn prog_middle(self) -> &'static str {
+        match self {
+            RoleBase::Roles => "",
             RoleBase::Dim => SGR_QUIET,
         }
     }
@@ -317,7 +336,7 @@ impl RoleBase {
     fn prog_base(self) -> &'static str {
         match self {
             RoleBase::Roles => SGR_PROG_BASE,
-            RoleBase::Dim => SGR_QUIET,
+            RoleBase::Dim => SGR_QUIET_PROG,
         }
     }
     /// Base for an option flag (a rendered token starting with '-').
@@ -433,16 +452,17 @@ fn colorize_escaped(s: &str, base: &str, mark_spaces: bool, out: &mut String) {
             continue;
         }
 
-        // Whitespace runs, IN THE PROGRAM TOKEN ONLY (`mark_spaces`). Mark a run
-        // of spaces that is >=2 long or touches the start/end of the span -- the
-        // invisible-padding cases (a trailing space on a path, a hidden double
-        // space). A single interior space is a normal separator and stays plain,
-        // so ordinary commands are unmarked. Note the span, not the line, bounds
-        // "start/end" here: the only extra boundary a per-span walk introduces is
-        // the program's dirname/basename seam, and a space there gets MARKED
+        // Whitespace runs, IN THE PROGRAM TOKEN ONLY (`mark_spaces`). Mark a
+        // run of spaces that is >=2 long or touches the start/end of the span
+        // -- the invisible-padding cases (a trailing space on a path, a hidden
+        // double space). A single interior space is a normal separator and
+        // stays plain, so ordinary commands are unmarked. Note the span, not
+        // the line, bounds "start/end" here: the only extra boundaries a
+        // per-span walk introduces are the program's seams (after its first
+        // segment, and before its basename), and a space at one gets MARKED
         // where a token-level walk would leave it plain -- more emphasis on
-        // invisible padding, never less. That seam nuance still applies, now
-        // scoped to the one token that has a seam.
+        // invisible padding, never less. That nuance applies only to the
+        // program, the one token with seams.
         //
         // With `mark_spaces` false (flags, values) a space is a routine char and
         // falls through to `push_plain` like any other: the base colour applies
@@ -476,13 +496,13 @@ fn colorize_escaped(s: &str, base: &str, mark_spaces: bool, out: &mut String) {
 }
 
 /// The full command line as [`full_command_line`] builds it, with SGR colour
-/// layered on by role: the program's directory part plain cyan and its basename
-/// bold cyan, option flags bold blue, every other token plain, our own quotes
-/// dim, and anomalous spans (deceptive Unicode, control-byte escapes, shell
-/// metacharacters, and notable whitespace runs inside the program token) in the
-/// anomaly palette on top. One logical line -- nothing is wrapped, elided or
-/// reordered, and the bytes between the SGR sequences are exactly the plain
-/// line's bytes.
+/// layered on by role: the first segment of the program's directory bold cyan,
+/// the rest of the directory plain, the basename bold blue, option flags bold
+/// blue, every other token plain, our own quotes dim, and anomalous spans
+/// (deceptive Unicode, control-byte escapes, shell metacharacters, and notable
+/// whitespace runs inside the program token) in the anomaly palette on top. One
+/// logical line -- nothing is wrapped, elided or reordered, and the bytes
+/// between the SGR sequences are exactly the plain line's bytes.
 ///
 /// Option flags (a rendered token starting with '-') are coloured by user
 /// choice: colour any flag, no judgement. This is a LEXICAL mark, not a claim
@@ -502,10 +522,10 @@ pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
 }
 
 /// The same line as [`colored_command_line`], rendered through the SAME walk
-/// with a flat dim base: every routine token -- program dirname, program
-/// basename, flags, values -- takes dim instead of its role colour, while the
-/// anomaly spans keep the full-strength palette exactly as they have it on the
-/// other variant.
+/// with a flat dim base: every routine token -- program dirname, flags, values
+/// -- takes dim instead of its role colour, and the program's basename takes
+/// bold dim, so the program is still the first word read. The anomaly spans
+/// keep the full-strength palette exactly as they have it on the other variant.
 ///
 /// This is the audit plugin's `input:` line. The pre-resolution line reads
 /// quiet under the resolved `execute:` line, which keeps the full role palette:
@@ -521,6 +541,25 @@ pub fn colored_command_line(path: &str, argv: &[&str], out: &mut String) {
 /// strip the SGR and these are [`full_command_line`]'s bytes exactly.
 pub fn colored_command_line_dim(path: &str, argv: &[&str], out: &mut String) {
     render_command_line(path, argv, RoleBase::Dim, out);
+}
+
+/// A rendered program directory (ending in '/') split into its first segment
+/// and the rest: "/run/current-system/sw/bin/" -> ("/run", "/current-system/
+/// sw/bin/"). The head is the leading '/' and the name up to the next '/'. A
+/// token that needed quoting starts with our chrome quote, which rides along
+/// with the head ('/a  b/ -> "'/a  b", "/"), and `colorize_escaped` still
+/// renders it as chrome. A relative directory, or "/" alone, has no head: the
+/// whole directory is the rest. Both split points sit on an ASCII '/', so both
+/// halves stay on char boundaries.
+fn split_head(dir: &str) -> (&str, &str) {
+    let start = if dir.starts_with("'/") { 1 } else { 0 };
+    if !dir[start..].starts_with('/') {
+        return ("", dir);
+    }
+    match dir[start + 1..].find('/') {
+        Some(p) => dir.split_at(start + 1 + p),
+        None => ("", dir),
+    }
 }
 
 /// The one token walk both public renderers use. Sharing it is the property
@@ -542,15 +581,23 @@ fn render_command_line(path: &str, argv: &[&str], base: RoleBase, out: &mut Stri
             // Split at the last '/' of the RENDERED token: escape_control emits
             // '/' for nothing but a literal '/', so this is the same separator
             // last_path_component would find, and slicing after it stays on a
-            // char boundary. No '/' -> the whole token is the basename. On the
-            // dim variant both halves take the same base, so the split costs one
-            // redundant span and changes no byte the terminal shows.
+            // char boundary. No '/' -> the whole token is the basename. The
+            // directory part splits again into its first segment and the rest
+            // (`split_head`), unless both take the same base (the dim variant),
+            // where the split would only add a redundant span.
             //
-            // Both halves pass mark_spaces = true: this is the program, the one
-            // token whose invisible padding changes what executes.
+            // Every part passes mark_spaces = true: this is the program, the
+            // one token whose invisible padding changes what executes.
             match rendered.rfind('/') {
                 Some(idx) => {
-                    colorize_escaped(&rendered[..=idx], base.prog_dir(), true, out);
+                    let dir = &rendered[..=idx];
+                    if base.prog_head() == base.prog_middle() {
+                        colorize_escaped(dir, base.prog_head(), true, out);
+                    } else {
+                        let (head, middle) = split_head(dir);
+                        colorize_escaped(head, base.prog_head(), true, out);
+                        colorize_escaped(middle, base.prog_middle(), true, out);
+                    }
                     colorize_escaped(&rendered[idx + 1..], base.prog_base(), true, out);
                 }
                 None => colorize_escaped(&rendered, base.prog_base(), true, out),
@@ -993,13 +1040,39 @@ mod tests {
 
     #[test]
     fn colored_program_roles() {
-        // dirname plain cyan, basename bold cyan, each closed by a reset.
+        // first segment bold cyan, the rest of the directory plain, basename
+        // bold blue, each styled span closed by a reset.
         assert_eq!(
             colored("/bin/echo", &["echo"]),
-            "\x1b[36m/bin/\x1b[0m\x1b[1;36mecho\x1b[0m"
+            "\x1b[1;36m/bin\x1b[0m/\x1b[1;34mecho\x1b[0m"
         );
         // no '/' at all -> the whole program token is the basename.
-        assert_eq!(colored("id", &["id"]), "\x1b[1;36mid\x1b[0m");
+        assert_eq!(colored("id", &["id"]), "\x1b[1;34mid\x1b[0m");
+    }
+
+    #[test]
+    fn colored_program_head_split() {
+        // A deep path: only the first segment carries the head colour.
+        assert_eq!(
+            colored("/run/current-system/sw/bin/locked", &["locked"]),
+            "\x1b[1;36m/run\x1b[0m/current-system/sw/bin/\x1b[1;34mlocked\x1b[0m"
+        );
+        // A program at the root: "/" alone has no head.
+        assert_eq!(colored("/ls", &["ls"]), "/\x1b[1;34mls\x1b[0m");
+        // A relative directory has no head either.
+        assert_eq!(colored("bin/tool", &["tool"]), "bin/\x1b[1;34mtool\x1b[0m");
+        // A program that needed quoting: our opening quote rides with the head
+        // and still renders as chrome, and the head colour starts after it.
+        assert_eq!(
+            colored("/a b/t", &["t"]),
+            "\x1b[2m'\x1b[0m\x1b[1;36m/a b\x1b[0m/\x1b[1;34mt\x1b[0m\x1b[2m'\x1b[0m"
+        );
+        // The dim variant keeps the directory as one quiet span and the
+        // basename bold dim.
+        assert_eq!(
+            colored_dim("./bin/foo", &["foo"]),
+            "\x1b[2m./bin/\x1b[0m\x1b[1;2mfoo\x1b[0m"
+        );
     }
 
     #[test]
@@ -1009,11 +1082,11 @@ mod tests {
         // continues to mean exactly one thing: our own quotes.
         assert_eq!(
             colored("/bin/git", &["git", "--file", "x"]),
-            "\x1b[36m/bin/\x1b[0m\x1b[1;36mgit\x1b[0m \x1b[1;34m--file\x1b[0m x"
+            "\x1b[1;36m/bin\x1b[0m/\x1b[1;34mgit\x1b[0m \x1b[1;34m--file\x1b[0m x"
         );
         // a bare "-" / "--" is lexically a flag too -- the mark is lexical, not a
         // judgement about what the token means.
-        assert_eq!(colored("p", &["p", "--"]), "\x1b[1;36mp\x1b[0m \x1b[1;34m--\x1b[0m");
+        assert_eq!(colored("p", &["p", "--"]), "\x1b[1;34mp\x1b[0m \x1b[1;34m--\x1b[0m");
         // dim still appears only where our quoting does, never on a flag.
         assert!(!colored("/bin/git", &["git", "-rf", "x"]).contains("\x1b[2m"));
     }
@@ -1146,13 +1219,13 @@ mod tests {
 
     #[test]
     fn dim_routine_tokens_take_the_quiet_base() {
-        // Program dirname, basename and value alike: all dim, no role colour.
-        // Pinned to exact bytes, including the redundant span at the
-        // dirname/basename seam that sharing the walk costs.
+        // Program dirname and value dim, the basename bold dim, no role colour.
+        // Pinned to exact bytes: one span for the whole directory, since the
+        // head and the rest share the quiet base here.
         let d = colored_dim("/bin/echo", &["echo", "hello"]);
         assert_eq!(
             d,
-            "\x1b[2m/bin/\x1b[0m\x1b[2mecho\x1b[0m \x1b[2mhello\x1b[0m"
+            "\x1b[2m/bin/\x1b[0m\x1b[1;2mecho\x1b[0m \x1b[2mhello\x1b[0m"
         );
         // No cyan anywhere on a clean line. Checked on a case with no anomaly
         // span, because SGR_META is 1;36 too and legitimately appears on a
@@ -1160,7 +1233,7 @@ mod tests {
         assert!(!d.contains("\x1b[36m"), "role cyan on the dim variant: {d:?}");
         assert!(!d.contains("\x1b[1;36m"), "bold role cyan on the dim variant: {d:?}");
         // A bare command word is all basename, and still dim.
-        assert_eq!(colored_dim("id", &["id"]), "\x1b[2mid\x1b[0m");
+        assert_eq!(colored_dim("id", &["id"]), "\x1b[1;2mid\x1b[0m");
     }
 
     #[test]
@@ -1168,7 +1241,7 @@ mod tests {
         let d = colored_dim("/bin/git", &["git", "--file", "x"]);
         assert_eq!(
             d,
-            "\x1b[2m/bin/\x1b[0m\x1b[2mgit\x1b[0m \x1b[2m--file\x1b[0m \x1b[2mx\x1b[0m"
+            "\x1b[2m/bin/\x1b[0m\x1b[1;2mgit\x1b[0m \x1b[2m--file\x1b[0m \x1b[2mx\x1b[0m"
         );
         assert!(!d.contains("\x1b[1;34m"), "flag blue on the dim variant: {d:?}");
         // and the role variant still has it, so this is a variant difference
@@ -1227,7 +1300,7 @@ mod tests {
         assert_eq!(buf[got], 0);
         assert_eq!(
             std::str::from_utf8(&buf[..got]).unwrap(),
-            "\x1b[2m/bin/\x1b[0m\x1b[2mecho\x1b[0m"
+            "\x1b[2m/bin/\x1b[0m\x1b[1;2mecho\x1b[0m"
         );
     }
 
@@ -1380,7 +1453,7 @@ mod tests {
         assert_eq!(buf[got], 0);
         assert_eq!(
             std::str::from_utf8(&buf[..got]).unwrap(),
-            "\x1b[36m/bin/\x1b[0m\x1b[1;36mecho\x1b[0m"
+            "\x1b[1;36m/bin\x1b[0m/\x1b[1;34mecho\x1b[0m"
         );
     }
 
@@ -1404,7 +1477,7 @@ mod tests {
         assert_eq!(rc, SW_ESCAPE_OK);
         assert_eq!(
             std::str::from_utf8(&buf[..got]).unwrap(),
-            "\x1b[36m/bin/\x1b[0m\x1b[1;36mls\x1b[0m"
+            "\x1b[1;36m/bin\x1b[0m/\x1b[1;34mls\x1b[0m"
         );
 
         // an invalid UTF-8 byte in a token becomes U+FFFD, never a panic, and

@@ -10,7 +10,7 @@ sudowhat: run as:     root
 sudowhat: directory:  /Users/you
 sudowhat: input:      echo hello
 sudowhat: path:       /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
-sudowhat: verify:     Z96E  (compare with the prompt)
+sudowhat: verify:     Z96  (compare with the prompt)
 sudowhat: execute:    /bin/echo hello
 
         ┌────────────────────────────────────┐
@@ -25,7 +25,7 @@ sudowhat: execute:    /bin/echo hello
         │  EXECUTE                           │      │  authenticate        │
         │  /bin/echo hello                   │      │                      │
         │                                    │      │  Double-click        │
-        │  Verify Code: Z96E                 │      │  side button        »│
+        │  Verify Code: Z96                  │      │  side button        »│
         │                                    │      │  to approve          │
         │  Code must match your terminal.    │      └──────────────────────┘
         │                                    │
@@ -288,6 +288,29 @@ In order, within one `sudo` invocation:
 The full pipeline is in [docs/security-design.md](docs/security-design.md):
 the exact PAM chain, the `SessionGetInfo` classification, and the rationale
 for every decision.
+
+### Terminal colors
+
+Each row of the terminal block has its own colors, so you can find the part
+you're checking at a glance. Every path in the block is drawn the same way:
+its first segment in bold cyan, because that segment says where the path
+lives (`/run`, `/nix` and `/usr` against `/Users`).
+
+| Row | Colors |
+|---|---|
+| labels | bold |
+| `run as:` | `root` plain, any other user yellow |
+| `directory:` | first segment bold cyan, the middle plain, the last segment bold |
+| `input:` | dim, with the program's name bold dim |
+| `path:` | each entry's first segment bold cyan and the rest plain; the colons bold blue |
+| `verify:` | the code bold magenta, the note dim |
+| `execute:` | the program's first segment bold cyan, the rest of its directory plain, its name bold blue; flags bold blue; everything else plain |
+
+On `input:` and `execute:`, escapes for suspicious bytes stand out in their own
+colors: deceptive Unicode red, control bytes magenta, shell metacharacters bold
+cyan, and odd spacing in the program path on a grey background. Quotes that
+sudowhat added are dim. Color never changes a byte: without it, every row reads
+the same. `NO_COLOR`, `TERM=dumb`, or output that isn't a terminal turn it off.
 
 ## Security model
 

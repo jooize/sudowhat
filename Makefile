@@ -26,24 +26,24 @@ ifeq ($(filter $(SUDOWHAT_AUDIT_DISPLAY),$(SUDOWHAT_VALID_AUDIT_DISPLAY)),)
   override SUDOWHAT_AUDIT_DISPLAY := on
 endif
 
-# Build-time policy for colouring the terminal command display: "on"
-# (default) or "off". The nix module exposes the same names via
+# Build-time policy for colouring the terminal command display: "on" (default)
+# or "off". The nix module exposes the same names via
 # services.sudowhat.echoColor. Passed as a bare token to -DSW_ECHO_COLOR in the
 # GLOBAL CFLAGS below, because it governs BOTH command values - the audit
-# bundle's `input:` and the approval bundle's `execute:`. They are one display to
-# a reader, so one token settles both; each bundle carries its own copy of the
-# token machinery (separate Mach-O images, no shared translation unit). Under
-# "on" the command line is highlighted by role
-# (program dirname plain cyan, basename bold cyan, option flags bold blue, values
-# plain) with deceptive Unicode / control-byte escapes, shell metacharacters and
-# notable whitespace runs IN THE PROGRAM TOKEN (the path that will execve, where
-# invisible padding changes what runs - argument tokens do not take that mark,
-# or a script argument would fill the line with grey indentation blocks) in a
-# fixed reviewed palette on top - sudowhat's threat
+# bundle's `input:` and the approval bundle's `execute:`. They are one display
+# to a reader, so one token settles both; each bundle carries its own copy of
+# the token machinery (separate Mach-O images, no shared translation unit).
+# Under "on" the command line is highlighted by role (the program directory's
+# first segment bold cyan and the rest plain, basename bold blue, option flags
+# bold blue, values plain) with deceptive Unicode / control-byte escapes, shell
+# metacharacters and notable whitespace runs IN THE PROGRAM TOKEN (the path that
+# will execve, where invisible padding changes what runs - argument tokens do
+# not take that mark, or a script argument would fill the line with grey
+# indentation blocks) in a fixed reviewed palette on top - sudowhat's threat
 # model. It stays ONE line: the SGR goes around the already-escaped tokens, so
 # stripping it returns the plain line byte for byte, and the isatty / NO_COLOR /
-# TERM=dumb gates keep it off non-terminals. An unknown value normalizes to
-# "on" with a warning, rather than failing.
+# TERM=dumb gates keep it off non-terminals. An unknown value normalizes to "on"
+# with a warning, rather than failing.
 SUDOWHAT_ECHO_COLOR ?= on
 SUDOWHAT_VALID_ECHO_COLOR := off on
 ifeq ($(filter $(SUDOWHAT_ECHO_COLOR),$(SUDOWHAT_VALID_ECHO_COLOR)),)

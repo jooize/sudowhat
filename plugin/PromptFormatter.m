@@ -220,7 +220,7 @@
     /* Verify code. The plugin has already echoed the same value to the user's
      * controlling terminal; they compare the two before approving. Capped
      * (plain cut, no marker) purely so the budget holds against a malformed
-     * code — the production nonce is 4 chars. */
+     * code — the production nonce is 3 chars. */
     NSString *verifyLine;
     if (verifyCode.length > 0) {
         NSString *v = [self escapeControlChars:verifyCode];

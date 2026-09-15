@@ -7,7 +7,8 @@
  *                                    reachable here through its renderer
  *                                    parameters.
  *   - sw_audit_row()               : the label gutter every row shares.
- *   - sw_audit_color_dir/user()    : the two frame values that carry emphasis.
+ *   - sw_audit_color_dir/user()    : the frame values that carry emphasis,
+ *   - sw_audit_color_path_list()   : and the path: value in colour.
  *   - sw_audit_is_bare_name()      : the condition gating the path: row.
  *   - sw_audit_path_row_value()    : the caller's PATH as the path: row shows
  *                                    it, or nil when the row must not print.
@@ -93,10 +94,10 @@ static void test_command_line_plain(void) {
 }
 
 /* The input: value takes escape_core's DIM variant: every routine token --
- * program dirname, basename, flags, values alike -- renders dim, and only the
- * anomaly spans keep full strength. The resolved execute: line the approval
- * bundle prints keeps the full role palette, so the pre-resolution line reads
- * quiet under the authoritative one. Both come out of one shared walk, so the
+ * program dirname, flags, values alike -- renders dim, the program's basename
+ * bold dim, and only the anomaly spans keep full strength. The resolved
+ * execute: line the approval bundle prints keeps the full role palette, so the
+ * pre-resolution line reads quiet under the authoritative one. Both come out of one shared walk, so the
  * round-trip invariant is asserted here exactly as before. */
 static void test_command_line_colored(void) {
     char *argv[] = { (char *)"sudo", (char *)"/bin/echo", (char *)"--flag",
@@ -105,9 +106,9 @@ static void test_command_line_colored(void) {
     NSString *color = sw_audit_command_line(argv, 1, YES);
 
     EQ(plain, @"/bin/echo --flag value", "plain line");
-    EQ(color, @"\033[2m/bin/\033[0m\033[2mecho\033[0m \033[2m--flag\033[0m"
+    EQ(color, @"\033[2m/bin/\033[0m\033[1;2mecho\033[0m \033[2m--flag\033[0m"
               @" \033[2mvalue\033[0m",
-       "input: line renders its routine tokens dim, program and flag included");
+       "input: line renders its routine tokens dim and the program bold dim");
     EQ(stripSGR(color), plain, "stripping the SGR returns the plain line exactly");
 
     /* No ROLE colour survives on this line: not the program's cyan pair, not
@@ -208,14 +209,22 @@ static void test_frame_value_colour(void) {
     EQ(sw_audit_color_user(@"postgres"), @"\033[33mpostgres\033[0m",
        "a non-root target is attention-yellow");
 
-    /* The cwd takes the program-path split: dirname plain cyan, last component
-     * bold cyan. No quoting is added, so the bytes match the plain row. */
+    /* The cwd takes the frame's path style: first segment bold cyan, the
+     * middle plain, the last component bold. No quoting is added, so the
+     * bytes match the plain row. */
+    EQ(sw_audit_color_dir(@"/Users/alice/Projects/locked"),
+       @"\033[1;36m/Users\033[0m/alice/Projects/\033[1mlocked\033[0m",
+       "cwd first segment bold cyan, middle plain, last component bold");
     EQ(sw_audit_color_dir(@"/home/alice"),
-       @"\033[36m/home/\033[0m\033[1;36malice\033[0m",
-       "cwd dirname plain cyan, basename bold cyan");
-    EQ(sw_audit_color_dir(@"relative"), @"\033[1;36mrelative\033[0m",
+       @"\033[1;36m/home\033[0m/\033[1malice\033[0m",
+       "two segments: the head, a plain slash, the last component");
+    EQ(sw_audit_color_dir(@"/Users"), @"/\033[1mUsers\033[0m",
+       "one segment is the last component; \"/\" alone has no head");
+    EQ(sw_audit_color_dir(@"relative"), @"\033[1mrelative\033[0m",
        "no slash at all -> the whole value is the last component");
-    EQ(sw_audit_color_dir(@"/"), @"\033[36m/\033[0m",
+    EQ(sw_audit_color_dir(@"/"), @"/",
+       "the root has neither a head nor a last component, and no empty span");
+    EQ(sw_audit_color_dir(@"/a/b/"), @"\033[1;36m/a\033[0m/b/",
        "a trailing slash leaves no last component, and no empty span");
     EQ(stripSGR(sw_audit_color_dir(@"/a b/c d")), @"/a b/c d",
        "a spacey cwd gains no quotes: colour is layout, never content");
@@ -227,6 +236,39 @@ static void test_frame_value_colour(void) {
     for (NSString *r in reserved) {
         OK([row rangeOfString:r].location == NSNotFound,
            "frame row uses no reserved anomaly colour");
+    }
+}
+
+/* The path: value in colour: each entry's first segment bold cyan, the rest
+ * plain, the colons bold blue. It only adds SGR around the escaped string, so
+ * stripping it returns the plain row, and an entry that is not absolute (".",
+ * or empty, both meaning the current directory) stays plain: the row
+ * discloses the PATH, it does not judge it. */
+static void test_path_list_colour(void) {
+    EQ(sw_audit_color_path_list(@"/usr/bin:/bin"),
+       @"\033[1;36m/usr\033[0m/bin\033[1;34m:\033[0m\033[1;36m/bin\033[0m",
+       "entries: head bold cyan, rest plain; colon bold blue");
+    EQ(sw_audit_color_path_list(@"/run/current-system/sw/bin"),
+       @"\033[1;36m/run\033[0m/current-system/sw/bin",
+       "a single entry gets no colon");
+    EQ(sw_audit_color_path_list(@".:/opt/x"),
+       @".\033[1;34m:\033[0m\033[1;36m/opt\033[0m/x",
+       "a relative entry has no head");
+    EQ(sw_audit_color_path_list(@"::"),
+       @"\033[1;34m:\033[0m\033[1;34m:\033[0m",
+       "empty entries write nothing, only their colons");
+    EQ(sw_audit_color_path_list(@"/"), @"\033[1;36m/\033[0m",
+       "the root as an entry is all head");
+
+    /* Escaped hostile bytes stay text, and colour never changes a byte. */
+    NSString *hostile = @"/a\\n/b:/c\\u202ed";
+    EQ(stripSGR(sw_audit_color_path_list(hostile)), hostile,
+       "the coloured value strips back to the escaped plain value");
+    NSArray<NSString *> *reserved = @[ @"\033[1;31m", @"\033[1;35m", @"\033[100m" ];
+    NSString *row = sw_audit_row(@"path:", sw_audit_color_path_list(hostile), YES);
+    for (NSString *r in reserved) {
+        OK([row rangeOfString:r].location == NSNotFound,
+           "path: row uses no reserved anomaly colour");
     }
 }
 
@@ -309,8 +351,9 @@ static void test_path_row_value(void) {
     EQ(sw_audit_path_row_value(bare, 1, env), @"/usr/bin:/bin",
        "a bare name with PATH present -> the caller's PATH");
 
-    /* The row is plain text, not a rendered token walk: no quoting is added and
-     * no role colour is spent, so what the reader sees is the env string. */
+    /* The value is plain text, not a rendered token walk: no quoting is added,
+     * and colour is laid on separately (sw_audit_color_path_list), so what the
+     * reader sees is the env string. */
     OK([sw_audit_path_row_value(bare, 1, env)
           rangeOfString:@"\033"].location == NSNotFound,
        "the path: value carries no escape byte");
@@ -365,6 +408,7 @@ int main(void) {
         test_fail_soft_fallback();
         test_is_bare_name();
         test_path_row_value();
+        test_path_list_colour();
         SW_SUMMARY("audit plugin internals (colour gate, frame, command line, "
                    "fail-soft, path: row)");
     }

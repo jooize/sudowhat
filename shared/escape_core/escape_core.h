@@ -51,16 +51,16 @@ int sw_full_command_line(const uint8_t *path, size_t path_len,
                          uint8_t *out, size_t out_cap, size_t *needed);
 
 /* The same line as sw_full_command_line, with SGR colour layered on by role:
- * the program's directory part plain cyan and its basename bold cyan, option
- * flags bold blue, every other token plain, the quotes the renderer itself
- * added dim, and anomalous spans (deceptive Unicode, control-byte escapes,
- * shell metacharacters, notable whitespace runs) in the fixed anomaly palette
- * on top. The flag mark is openly lexical (a rendered token starting with '-'),
- * so it colours every flag alike rather than guessing which one matters, and a
- * token that needed quoting renders '...' and never borrows the look.
- * Still ONE logical line - nothing is wrapped, elided or
- * reordered - and the colour is purely additive: strip the SGR and the bytes are
- * exactly sw_full_command_line's.
+ * the first segment of the program's directory bold cyan, the rest of the
+ * directory plain, its basename bold blue, option flags bold blue, every other
+ * token plain, the quotes the renderer itself added dim, and anomalous spans
+ * (deceptive Unicode, control-byte escapes, shell metacharacters, notable
+ * whitespace runs) in the fixed anomaly palette on top. The flag mark is openly
+ * lexical (a rendered token starting with '-'), so it colours every flag alike
+ * rather than guessing which one matters, and a token that needed quoting
+ * renders '...' and never borrows the look. Still ONE logical line - nothing is
+ * wrapped, elided or reordered - and the colour is purely additive: strip the
+ * SGR and the bytes are exactly sw_full_command_line's.
  *
  * This is the approval plugin's execute: line, the resolved command.
  *
@@ -74,10 +74,11 @@ int sw_full_command_line_colored(const uint8_t *path, size_t path_len,
                                  uint8_t *out, size_t out_cap, size_t *needed);
 
 /* The same line again, rendered by the same walk with a flat dim base: every
- * routine token - program dirname, program basename, flags, values - takes dim
- * instead of its role colour, while the anomaly spans keep the full-strength
- * palette above. Identical parameters and buffer contract, and the same
- * round-trip invariant: strip the SGR and the bytes are sw_full_command_line's.
+ * routine token - program dirname, flags, values - takes dim instead of its
+ * role colour, the program basename takes bold dim, and the anomaly spans keep
+ * the full-strength palette above. Identical parameters and buffer contract,
+ * and the same round-trip invariant: strip the SGR and the bytes are
+ * sw_full_command_line's.
  *
  * The audit plugin's input: line uses this one, so the pre-resolution line
  * reads quiet under the resolved execute: line and its anomaly spans pop

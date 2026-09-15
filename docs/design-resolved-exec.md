@@ -160,7 +160,7 @@ terminal carries the full resolved line in both modes.
     sudowhat: directory:  /Users/jooize/Projects/claude-code-hardening
     sudowhat: input:      pinned deploy
     sudowhat: path:       /run/current-system/sw/bin:/usr/bin:/bin
-    sudowhat: verify:     JL6E  (compare with the prompt)
+    sudowhat: verify:     JL6  (compare with the prompt)
     <auth>
     sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
 
@@ -221,7 +221,7 @@ Sheet field order (v0.14.0):
     EXECUTE
     /run/current-system/sw/bin/pinned deploy
 
-    Verify Code: JL6E
+    Verify Code: JL6
 
     Code must match your terminal
 
@@ -290,6 +290,9 @@ under colour like every other label; the value escaped through the one shared
 core (`sw_escape_control`, the same call `run as:` and `directory:` take) and
 rendered **plain** — no role colour, no dim. It is one opaque string, not a
 token walk, and yellow and cyan already mean specific things in this block.
+(Superseded 2026-09-16: each entry now takes the frame's path style, its
+first segment bold cyan and bold blue colons between entries. Still a split on
+the colons, never a token walk.)
 One logical line; the terminal soft-wraps; nothing truncated. Fail-soft like
 the rest of the bundle: any doubt means no row, never a broken block.
 

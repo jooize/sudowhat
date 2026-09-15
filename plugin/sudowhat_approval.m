@@ -136,9 +136,16 @@ static NSString *sw_denial_reason(NSError *err) {
  *     dropping one side: drop 2 B G S, keep Z 5 6 8. Dropping one side ends
  *     the confusion; dropping both would only shrink the keyspace (easier to
  *     guess) for no added clarity.
- * Net 27 symbols, no internal look-alike pair. 27^4 = 531441 ~= 19.0 bits,
- * ample for one-shot human comparison. arc4random_uniform is cryptographically
+ * Net 27 symbols, no internal look-alike pair. SW_VERIFY_CODE_LEN is 3: 27^3 =
+ * 19683 codes, ~14.3 bits. The code is compared once and never guessed at
+ * leisure -- a sheet the user did not start has to show the right code on its
+ * first try, and every miss puts a mismatched code in front of them -- so one
+ * chance in 19683 is ample. Three characters also get compared in full, where
+ * four tend to be checked by their first two (user choice, 2026-09-16; four
+ * before). arc4random_uniform is cryptographically
  * strong and avoids modulo bias. */
+#define SW_VERIFY_CODE_LEN 3
+
 static void generate_verify_nonce(char *out, size_t outsz) {
     static const char alphabet[] = "3456789ACDEFHJKLMNPQRTVWXYZ";
     if (outsz == 0) return;
@@ -294,7 +301,7 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * gutter), so the whole ceremony reads as one table however it is split between
  * bundles.
  *
- *   sudowhat: verify:     Z96E  (compare with the prompt)
+ *   sudowhat: verify:     Z96  (compare with the prompt)
  *
  * Styling is deliberately thin: the label bold like the other rows, the code
  * carrying a fixed bold magenta, the trailing instruction dim because it is our
@@ -392,9 +399,10 @@ static BOOL write_verify_code_to_tty(const char *ttyPath, const char *code,
 
     BOOL colorize = colorAllowed && isatty(fd);
 
-    /* Sized for the widest line the styled branch can produce (the gutter field,
-     * a 4-char code, the tail, and five SGR sequences -- about 81 bytes) with
-     * room to spare, because truncation here fails the whole write: the user
+    /* Sized for the widest line the styled branch can produce (the gutter
+     * field, a SW_VERIFY_CODE_LEN-char code, the tail, and five SGR sequences
+     * -- about 80 bytes) with room to spare, because truncation here fails the
+     * whole write: the user
      * would get NO code on the terminal, which is exactly the cue to distrust. */
     char line[128];
     int n = format_verify_line(line, sizeof(line), code, colorize);
@@ -472,11 +480,11 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  * (services.sudowhat.echoColor in the nix module; SUDOWHAT_ECHO_COLOR in the
  * Makefile).
  *
- *   on  - (default) the resolved command line is highlighted by role: the
- *         program's directory part plain cyan and its basename bold cyan,
- *         option flags bold blue, every other token plain, the quotes the
- *         escape core itself added dim, and escaped/anomalous spans in the
- *         fixed anomaly palette on top.
+ *   on  - (default) the resolved command line is highlighted by role: the first
+ *         segment of the program's directory bold cyan, the rest of it plain,
+ *         its basename bold blue, option flags bold blue, every other token
+ *         plain, the quotes the escape core itself added dim, and
+ *         escaped/anomalous spans in the fixed anomaly palette on top.
  *   off - the resolved command line renders plain.
  *
  * ONE token governs BOTH command lines, input: and execute:, because a reader
@@ -487,11 +495,11 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  *
  * The two lines render at different WEIGHTS under `on`. execute: keeps the full
  * role palette above; the audit bundle's input: line renders its routine tokens
- * dim (sw_full_command_line_colored_dim) with the anomaly spans still at full
- * strength, so the resolved command reads as the authoritative one and the
- * pre-resolution line sits quiet beneath it. Both come out of ONE walk in
- * escape_core over one token list -- the base palette is the only difference --
- * so the two can still never disagree on a token.
+ * dim and the basename bold dim (sw_full_command_line_colored_dim) with the
+ * anomaly spans still at full strength, so the resolved command reads as the
+ * authoritative one and the pre-resolution line sits quiet beneath it. Both
+ * come out of ONE walk in escape_core over one token list -- the base palette
+ * is the only difference -- so the two can still never disagree on a token.
  *
  * It governs the command VALUE only. The frame around it -- the provenance
  * prefix, the bold label, the gutter -- follows the runtime NO_COLOR / TERM /
@@ -715,7 +723,7 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
 
     /* The value is unbounded (a command line can be arbitrarily long), so the
      * line is assembled as an NSString and written as bytes rather than through
-     * a fixed stack buffer the way the 4-char verify code is. Nothing is
+     * a fixed stack buffer the way the short verify code is. Nothing is
      * truncated: an elided execute: line would be worse than none, because the
      * reader would trust an incomplete command. */
     NSString *line = sw_format_exec_line(path, run_argv, layout,
@@ -1568,7 +1576,7 @@ static int sudowhat_check(char * const command_info[],
          * defense against post-compromise, but a defense against absent-minded
          * approval. emit_verify_code targets /dev/tty (see there) so no
          * redirect of the command's stdout or stderr can hide the code. */
-        char nonceBuf[5];
+        char nonceBuf[SW_VERIFY_CODE_LEN + 1];
         generate_verify_nonce(nonceBuf, sizeof(nonceBuf));
         NSString *verifyCode = [NSString stringWithUTF8String:nonceBuf];
 
