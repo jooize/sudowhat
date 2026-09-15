@@ -10,7 +10,7 @@ sudowhat: run as:     root
 sudowhat: directory:  /Users/you
 sudowhat: input:      echo hello
 sudowhat: path:       /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
-sudowhat: verify:     Z96  (compare with the prompt)
+sudowhat: verify:     Z96  (compare with the dialog)
 sudowhat: execute:    /bin/echo hello
 
         ┌────────────────────────────────────┐

@@ -160,7 +160,7 @@ terminal carries the full resolved line in both modes.
     sudowhat: directory:  /Users/jooize/Projects/claude-code-hardening
     sudowhat: input:      pinned deploy
     sudowhat: path:       /run/current-system/sw/bin:/usr/bin:/bin
-    sudowhat: verify:     JL6  (compare with the prompt)
+    sudowhat: verify:     JL6  (compare with the dialog)
     <auth>
     sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
 

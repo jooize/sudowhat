@@ -333,7 +333,7 @@ reinstall ceremony, and these touch every caller.
   holes. Spacing belongs to the caller — `pinned` or `claude-update-nix` may
   print their own blank before invoking sudo.
 - **The verify-code line** became a fourth field in the same gutter:
-  `sudowhat: verify:     Z96  (compare with the prompt)` — label bold like the
+  `sudowhat: verify:     Z96  (compare with the dialog)` — label bold like the
   other rows, code carrying the build-time `verifyStyle` emphasis, the trailing
   instruction dim. No attention colour: yellow already means "the target user is
   not root", and spending it here would say something the reader knows and give

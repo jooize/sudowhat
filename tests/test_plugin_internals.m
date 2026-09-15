@@ -72,13 +72,13 @@ static void test_find_kv_value_with_equals(void) {
 }
 
 static int in_alphabet(char c) {
-    static const char *A = "3456789ACDEFHJKLMNPQRTVWXYZ";
+    static const char *A = "3456789ACDEFHJKLMNPQRTVXZ";
     return strchr(A, c) != NULL;
 }
 
 static void test_nonce_alphabet_and_length(void) {
     /* Harsh: hammer it and assert every produced char is in the intended
-     * alphabet, the forbidden look-alikes (0 1 2 B G I O S U) never appear
+     * alphabet, the forbidden look-alikes (0 1 2 B G I O S U W Y) never appear
      * (note L is now allowed — uppercase-only — while 1 is dropped), length is
      * exactly outsz-1, and the buffer is NUL-terminated. Also check every
      * alphabet symbol shows up at least once (no off-by-one truncating the
@@ -97,14 +97,15 @@ static void test_nonce_alphabet_and_length(void) {
             seen[c] = 1;
             if (!in_alphabet((char)c)) bad++;
             if (c=='0'||c=='1'||c=='2'||c=='B'||c=='G'||
-                c=='I'||c=='O'||c=='S'||c=='U') forbidden++;
+                c=='I'||c=='O'||c=='S'||c=='U'||
+                c=='W'||c=='Y') forbidden++;
         }
     }
     OK(bad == 0, "all nonce chars in alphabet");
-    OK(forbidden == 0, "no forbidden look-alike chars (0 1 2 B G I O S U)");
+    OK(forbidden == 0, "no forbidden look-alike chars (0 1 2 B G I O S U W Y)");
     OK(badlen == 0, "nonce length always outsz-1");
     OK(notterm == 0, "nonce always NUL-terminated");
-    const char *A = "3456789ACDEFHJKLMNPQRTVWXYZ";
+    const char *A = "3456789ACDEFHJKLMNPQRTVXZ";
     int allseen = 1;
     for (const char *p = A; *p; p++) if (!seen[(unsigned char)*p]) allseen = 0;
     OK(allseen, "every alphabet symbol appears across 200k draws");
@@ -198,14 +199,14 @@ static void test_verify_code_to_tty(void) {
 
     /* colorAllowed=YES, yet a regular file is not a tty -> isatty() gate keeps
      * the bytes plain, so no escape sequence can ever corrupt a captured log. */
-    OK(write_verify_code_to_tty(path, "3SNJ", YES),
+    OK(write_verify_code_to_tty(path, "3NJ", YES),
        "write_verify_code_to_tty succeeds on a writable path");
-    EQ(sw_read_utf8(path), @"sudowhat: verify:     3SNJ  (compare with the prompt)\n",
+    EQ(sw_read_utf8(path), @"sudowhat: verify:     3NJ  (compare with the dialog)\n",
        "a non-tty stays plain even when color is allowed");
     unlink(path);
 
     /* Unopenable path -> NO (this is what drives the stderr fallback). */
-    OK(!write_verify_code_to_tty("/no/such/dir/sw_tty", "3SNJ", YES),
+    OK(!write_verify_code_to_tty("/no/such/dir/sw_tty", "3NJ", YES),
        "write_verify_code_to_tty fails closed on an unopenable path");
 }
 
@@ -217,15 +218,15 @@ static void test_emit_verify_code_tty_only(void) {
     OK(fd >= 0, "mkstemp created a temp file for the emit test");
     if (fd >= 0) close(fd);
 
-    emit_verify_code(path, "3SNJ", YES);
-    EQ(sw_read_utf8(path), @"sudowhat: verify:     3SNJ  (compare with the prompt)\n",
+    emit_verify_code(path, "3NJ", YES);
+    EQ(sw_read_utf8(path), @"sudowhat: verify:     3NJ  (compare with the dialog)\n",
        "emit_verify_code wrote the line to the tty path");
     unlink(path);
 
     /* (b) Unopenable path (no controlling terminal) -> silent no-op. There is
      * no stderr fallback, and no printf parameter that could carry one, so
      * nothing is emitted anywhere; the call must simply return without a crash. */
-    emit_verify_code("/no/such/dir/sw_tty", "3SNJ", YES);
+    emit_verify_code("/no/such/dir/sw_tty", "3NJ", YES);
     OK(1, "no controlling terminal -> silent (no fallback), no crash");
 }
 
@@ -240,21 +241,21 @@ static void test_emit_verify_code_tty_only(void) {
 static void test_verify_line_format_and_color(void) {
     char buf[128];
 
-    int n = format_verify_line(buf, sizeof buf, "3SNJ", NO);
-    OK(n > 0 && strcmp(buf, "sudowhat: verify:     3SNJ  (compare with the prompt)\n") == 0,
+    int n = format_verify_line(buf, sizeof buf, "3NJ", NO);
+    OK(n > 0 && strcmp(buf, "sudowhat: verify:     3NJ  (compare with the dialog)\n") == 0,
        "plain rendering carries no escape bytes");
 
-    n = format_verify_line(buf, sizeof buf, "3SNJ", YES);
+    n = format_verify_line(buf, sizeof buf, "3NJ", YES);
     OK(n > 0 && strcmp(buf,
-       "sudowhat: \033[1mverify:\033[0m     \033[1;35m3SNJ\033[0m"
-       "  \033[2m(compare with the prompt)\033[0m\n") == 0,
+       "sudowhat: \033[1mverify:\033[0m     \033[1;35m3NJ\033[0m"
+       "  \033[2m(compare with the dialog)\033[0m\n") == 0,
        "styled rendering: bold label, bold magenta code, dim tail, same gutter");
 
     /* Layout is identical either way: strip every SGR sequence from the styled
      * line and the plain line comes back, byte for byte. */
     char plain[128], styled[128];
-    format_verify_line(plain, sizeof plain, "3SNJ", NO);
-    format_verify_line(styled, sizeof styled, "3SNJ", YES);
+    format_verify_line(plain, sizeof plain, "3NJ", NO);
+    format_verify_line(styled, sizeof styled, "3NJ", YES);
     char stripped[128];
     size_t si = 0;
     for (size_t i = 0; styled[i] != '\0' && si + 1 < sizeof stripped; i++) {

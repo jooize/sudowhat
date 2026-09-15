@@ -136,18 +136,21 @@ static NSString *sw_denial_reason(NSError *err) {
  *     dropping one side: drop 2 B G S, keep Z 5 6 8. Dropping one side ends
  *     the confusion; dropping both would only shrink the keyspace (easier to
  *     guess) for no added clarity.
- * Net 27 symbols, no internal look-alike pair. SW_VERIFY_CODE_LEN is 3: 27^3 =
- * 19683 codes, ~14.3 bits. The code is compared once and never guessed at
+ *   - keep 'V', drop 'W' and 'Y': the three are one wedge family -- W reads as
+ *     two V's, Y as a V on a stem -- so the same drop-one-side rule applies to
+ *     a family of three (user choice, 2026-09-16; all three before).
+ * Net 25 symbols, no internal look-alike pair. SW_VERIFY_CODE_LEN is 3: 25^3 =
+ * 15625 codes, ~13.9 bits. The code is compared once and never guessed at
  * leisure -- a sheet the user did not start has to show the right code on its
  * first try, and every miss puts a mismatched code in front of them -- so one
- * chance in 19683 is ample. Three characters also get compared in full, where
+ * chance in 15625 is ample. Three characters also get compared in full, where
  * four tend to be checked by their first two (user choice, 2026-09-16; four
  * before). arc4random_uniform is cryptographically
  * strong and avoids modulo bias. */
 #define SW_VERIFY_CODE_LEN 3
 
 static void generate_verify_nonce(char *out, size_t outsz) {
-    static const char alphabet[] = "3456789ACDEFHJKLMNPQRTVWXYZ";
+    static const char alphabet[] = "3456789ACDEFHJKLMNPQRTVXZ";
     if (outsz == 0) return;
     size_t n = outsz - 1;
     for (size_t i = 0; i < n; i++) {
@@ -301,7 +304,7 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * gutter), so the whole ceremony reads as one table however it is split between
  * bundles.
  *
- *   sudowhat: verify:     Z96  (compare with the prompt)
+ *   sudowhat: verify:     Z96  (compare with the dialog)
  *
  * Styling is deliberately thin: the label bold like the other rows, the code
  * carrying a fixed bold magenta, the trailing instruction dim because it is our
@@ -320,7 +323,7 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * stop at, so the collision is accepted rather than designed around. */
 #define SW_VERIFY_LABEL  "verify:"
 #define SW_VERIFY_GAP    "     "     /* pads "verify:" (7) out to the 12-col gutter */
-#define SW_VERIFY_TAIL   "(compare with the prompt)"
+#define SW_VERIFY_TAIL   "(compare with the dialog)"
 
 #define SW_VERIFY_PREFIX "sudowhat: " SW_VERIFY_LABEL SW_VERIFY_GAP
 #define SW_VERIFY_SUFFIX "  " SW_VERIFY_TAIL "\n"
