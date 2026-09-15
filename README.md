@@ -485,7 +485,7 @@ unit-test vectors.
 
 | | |
 |---|---|
-| Latest release | `v0.15.0` |
+| Latest release | `v0.17.0` |
 | Tested on | macOS Tahoe (Darwin 25.4–25.5) |
 | Architecture | Apple silicon (arm64) |
 | Linux | Audit-plugin display, native PAM password, no tamper-evidence; validated on Debian 12 / sudo 1.9.13p3 / aarch64+x86_64 (`docs/design-linux-port.md`) |
