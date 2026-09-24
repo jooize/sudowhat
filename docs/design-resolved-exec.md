@@ -74,6 +74,18 @@ vestigial there rather than wrong. Choosing per emit site keeps the decision
 compile-time and provable instead of guessing at another bundle's
 configuration.
 
+**Delta (2026-09-24): a table ends with a blank line; a lone line does not.**
+The padded line is always the last row of a table (the audit block, and
+`verify:` on the biometric path), so it now closes that block with one blank
+line, and the command's own output starts below it. The terminal-password
+path chooses its frame from the pam_sudowhat auth marker: when sudo ran
+authentication, its prompt (`Password:`) sits between the audit block and the
+line, so the line is solo (unpadded, no blank line); when nothing was asked
+(NOPASSWD, a live timestamp cache), the line lands directly under the block and
+is its padded last row. Accepted edge: a factor that prints nothing on the
+terminal (Touch ID through pam_tid) also sets the marker, so that line is solo
+though it sits under the table; the plugin cannot see what PAM printed.
+
 **Delta (2026-08-27): `echoColor` governs the `execute:` value too.** The
 build-time colour token was originally passed to the audit bundle alone, so
 `echoColor = "off"` silenced `input:`'s role colouring while `execute:` kept

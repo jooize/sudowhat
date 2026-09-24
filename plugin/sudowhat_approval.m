@@ -543,25 +543,35 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
 
 /* Which of those two frames an emit site asks for.
  *
- * GROUPED (every site but one): the label is padded out to the shared 12-col
- * gutter so the value lands in the same column as the audit block's run as: /
- * directory: / input: rows and the verify: line. That column is the entire
- * reason the two bundles duplicate the width rather than share it.
+ * GROUPED: the line is the LAST ROW of a table -- the audit block's run as: /
+ * directory: / input: / PATH: rows, and verify: on the biometric path, sit
+ * directly above it. The label is padded out to the shared 12-col gutter so the
+ * value lands in the same column as those rows (the entire reason the two
+ * bundles duplicate the width rather than share it), and one blank line follows
+ * it: the table is a block, and whatever comes next -- the command's own output,
+ * or a confirm question -- starts a new one. The blank is this line's because
+ * it is always the table's last row; no other line knows the table has ended.
  *
- * SOLO (the root-bypass site only): the gutter is dropped. That site is
- * PROVABLY alone on the terminal -- the audit plugin exempts uid 0, so no
- * input: block precedes it, and verify: is raised only on the console biometric
- * path, which the root bypass returns before reaching. A column aligns
- * siblings; with no siblings, a label floating four spaces from its value
- * reads as a rendering bug rather than as alignment. Same unpadded shape the
- * Linux port prints for a lone line.
+ * SOLO: the line stands alone. The gutter is dropped and no blank line follows.
+ * Two kinds of site:
+ *   - the root bypass: PROVABLY alone -- the audit plugin exempts uid 0, so no
+ *     input: block precedes it, and verify: is raised only on the console
+ *     biometric path, which the root bypass returns before reaching;
+ *   - the terminal-password step-aside when sudo ran authentication for this
+ *     invocation (the pam_sudowhat marker is present): sudo's own prompt sits
+ *     between the audit block and this line, so it no longer belongs to that
+ *     table (see sw_step_aside_layout).
+ * A column aligns siblings; with no siblings, a label floating four spaces from
+ * its value reads as a rendering bug rather than as alignment, and a blank line
+ * after a single line splits nothing. Same unpadded shape the Linux port prints
+ * for a lone line.
  *
  * One accepted edge: a NON-root run on a build with auditDisplay=off is alone
- * too, and still gets the grouped form. This bundle cannot see the audit
- * bundle's build token (separate images, separate -D), and that admin
- * explicitly chose to strip the block, so the alignment is vestigial there
- * rather than wrong. Deciding per emit site keeps the choice compile-time and
- * provable instead of guessing at another bundle's configuration. */
+ * too, and still gets the grouped form and its blank line. This bundle cannot
+ * see the audit bundle's build token (separate images, separate -D), and that
+ * admin explicitly chose to strip the block, so the alignment is vestigial
+ * there rather than wrong. Deciding per emit site keeps the choice compile-time
+ * and provable instead of guessing at another bundle's configuration. */
 typedef enum {
     SW_EXEC_GROUPED = 0,
     SW_EXEC_SOLO    = 1,
@@ -688,7 +698,9 @@ static NSString *sw_format_exec_line(const char *path,
     } else {
         prefix = frameColor ? SW_EXEC_PREFIX_STYLED : SW_EXEC_PREFIX;
     }
-    return [NSString stringWithFormat:@"%s%@\n", prefix, value];
+    /* The grouped line ends its table: one blank line closes the block. */
+    return [NSString stringWithFormat:@"%s%@\n%s", prefix, value,
+            layout == SW_EXEC_GROUPED ? "\n" : ""];
 }
 
 /* Write the execute: line straight to the controlling terminal -- and ONLY there,
@@ -823,8 +835,9 @@ enum { sw_exec_display_mode = SW_ED_SEL(SW_EXEC_DISPLAY) };
  * asking a human to approve a command it cannot show them would be theatre.
  *
  * layout is the caller's, not a guess: only the emit site knows whether its
- * line has siblings on the terminal (see sw_exec_layout). Every site here
- * passes SW_EXEC_GROUPED except the root bypass, which is provably alone. */
+ * line has siblings on the terminal (see sw_exec_layout). The biometric and
+ * deference sites pass SW_EXEC_GROUPED, the root bypass SW_EXEC_SOLO, and the
+ * terminal-password step-aside asks sw_step_aside_layout. */
 static void emit_exec_line(const char *ttyPath, const char *path,
                            char * const run_argv[], sw_exec_layout layout,
                            BOOL colorAllowed) {
@@ -1074,6 +1087,23 @@ static BOOL sw_ask_run_confirm(void) {
  * pre-prompt open()+fstat and post-auth re-stat. The pin is taken BEFORE the
  * human is asked anything, so what they approve is the file that was there when
  * the question was posed. */
+/* The frame for the terminal-password step-aside's execute: line. Pure, so the
+ * choice is unit-testable.
+ *
+ * markerPresent means sudo ran its authentication stack for this invocation,
+ * and a factor collected on the terminal leaves its prompt ("Password:")
+ * between the audit block and this line: the line stands alone -> SOLO. With
+ * the marker absent (NOPASSWD, a live timestamp cache), nothing was asked, so
+ * the line lands directly under the audit block as its last row -> GROUPED.
+ *
+ * Accepted edge: a factor that prints nothing on the terminal (Touch ID through
+ * pam_tid) also sets the marker, so that line is SOLO though it sits under the
+ * table. The plugin cannot see what PAM printed, and a lone-looking line under
+ * a table misreads less than a table row after a prompt. */
+static sw_exec_layout sw_step_aside_layout(BOOL markerPresent) {
+    return markerPresent ? SW_EXEC_SOLO : SW_EXEC_GROUPED;
+}
+
 static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
                                BOOL markerPresent, const char **errstr) {
     BOOL confirmOn = (sw_exec_confirm_mode == SW_EC_on);
@@ -1084,8 +1114,8 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
 
     if (!sw_confirm_decision(confirmOn, haveTty, markerPresent,
                              integrityInstalled)) {
-        emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
-                       sw_color_allowed());
+        emit_exec_line("/dev/tty", commandC, run_argv,
+                       sw_step_aside_layout(markerPresent), sw_color_allowed());
         return 1;
     }
 
@@ -1119,7 +1149,8 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
      * gate (see there): this line is not narration, it is the subject of the
      * question asked two statements down. execDisplay = off silences the four
      * informational echoes; it must not turn this one into a blind y/N. */
-    write_exec_line_to_tty("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
+    write_exec_line_to_tty("/dev/tty", commandC, run_argv,
+                           sw_step_aside_layout(markerPresent),
                            sw_color_allowed());
 
     /* Decline, an empty answer, or a conversation that could not run at all:
