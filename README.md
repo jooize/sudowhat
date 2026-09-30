@@ -91,7 +91,9 @@ literal `\n` in argv pose as a real newline.
   (the command as given), `PATH:` when the command is a bare name that
   `PATH` will resolve, and `execute:` (what sudo resolved). If an attacker's
   binary sits earlier in `PATH` than the real one, the hijack shows up as
-  `input:` and `execute:` simply disagreeing.
+  `input:` and `execute:` simply disagreeing. Where `execute:` stands alone
+  (root called sudo, or sudo's password prompt came between), it names the
+  target user itself: `execute as jooize:`.
 - **Console-only biometric**: an SSH or headless caller is never shown a
   dialog on your screen. It gets sudo's native password on its own terminal,
   or is denied.

@@ -541,6 +541,10 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
 #define SW_EXEC_PREFIX_SOLO_STYLED \
     "sudowhat: \033[1m" SW_EXEC_LABEL "\033[0m "
 
+/* The solo frame's label when it names the target user: "execute as <user>:"
+ * (see sw_format_exec_line). */
+#define SW_EXEC_AS_LABEL "execute as"
+
 /* Which of those two frames an emit site asks for.
  *
  * GROUPED: the line is the LAST ROW of a table -- the audit block's run as: /
@@ -664,6 +668,41 @@ static NSString *sw_exec_command_line(const char *path,
                                      path, run_argv, color);
 }
 
+/* Control-character escape one value through escape_core, the same way the
+ * audit bundle escapes its run as: row (sw_audit_escape there; duplicated for
+ * the reason given above sw_cmdline_fn). Returns nil on allocation failure. */
+static NSString *sw_exec_escape(const char *input) {
+    if (input == NULL) return @"";
+    size_t inlen = strlen(input);
+    size_t needed = 0;
+    sw_escape_control((const uint8_t *)input, inlen, NULL, 0, &needed);
+    size_t cap = needed + 1;
+    uint8_t *buf = malloc(cap);
+    if (buf == NULL) return nil;
+    size_t got = 0;
+    NSString *s = nil;
+    if (sw_escape_control((const uint8_t *)input, inlen, buf, cap, &got)
+        == SW_ESCAPE_OK) {
+        s = [[NSString alloc] initWithBytes:buf length:got
+                                   encoding:NSUTF8StringEncoding];
+    }
+    free(buf);
+    return s;
+}
+
+/* The target user's name, as sudo resolved it: command_info["runas_user"], the
+ * authoritative name for the target uid (uid 0's entry may be named something
+ * other than "root"). Without it the default target is uid 0, looked up here. */
+static NSString *sw_runas_name(char * const command_info[]) {
+    const char *runasU = find_kv(command_info, "runas_user");
+    if (runasU && runasU[0] != '\0') {
+        return [NSString stringWithUTF8String:runasU];
+    }
+    struct passwd *pw = getpwuid(0);
+    return (pw && pw->pw_name) ? [NSString stringWithUTF8String:pw->pw_name]
+                               : @"root";
+}
+
 /* Render the whole execute: line -- frame plus value -- as one string.
  *
  * Pure and deterministic, so the exact bytes are unit-testable without a
@@ -682,16 +721,38 @@ static NSString *sw_exec_command_line(const char *path,
  * Within one layout both frame branches lay out the SAME field widths, so the
  * plain line is the styled one with every escape sequence removed.
  *
+ * runas names the target user, and only the solo frame shows it: a solo line
+ * has no run as: row above it (none at all for a root caller, whom the audit
+ * bundle exempts; a password prompt between for the step-aside), so it says
+ * whose rights the command runs with itself -- "execute as jooize:". The name
+ * is escaped like the run as: row and styled like its value: plain for root,
+ * yellow otherwise, outside the label's bold. A grouped line ignores it, and a
+ * solo line without one keeps the bare "execute:" label.
+ *
  * Returns nil when there is no path or the renderers produced nothing, which
  * makes "show nothing" a plain nil check at the write site rather than a
  * half-built line reaching a terminal. */
 static NSString *sw_format_exec_line(const char *path,
                                      char * const run_argv[],
                                      sw_exec_layout layout,
+                                     NSString *runas,
                                      BOOL frameColor, BOOL valueColor) {
     if (path == NULL) return nil;
     NSString *value = sw_exec_command_line(path, run_argv, valueColor);
     if (value.length == 0) return nil;
+    if (layout == SW_EXEC_SOLO && runas.length > 0) {
+        NSString *user = sw_exec_escape(runas.UTF8String);
+        if (user == nil) return nil;
+        if (frameColor && ![user isEqualToString:@"root"]) {
+            user = [NSString stringWithFormat:@"\033[33m%@\033[0m", user];
+        }
+        return [NSString stringWithFormat:@"%@%@%@%@\n",
+                frameColor ? @"sudowhat: \033[1m" SW_EXEC_AS_LABEL "\033[0m "
+                           : @"sudowhat: " SW_EXEC_AS_LABEL " ",
+                user,
+                frameColor ? @"\033[1m:\033[0m " : @": ",
+                value];
+    }
     const char *prefix;
     if (layout == SW_EXEC_SOLO) {
         prefix = frameColor ? SW_EXEC_PREFIX_SOLO_STYLED : SW_EXEC_PREFIX_SOLO;
@@ -722,7 +783,8 @@ static NSString *sw_format_exec_line(const char *path,
  * and read the bytes back. Returns YES iff the whole line was written. */
 static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
                                    char * const run_argv[],
-                                   sw_exec_layout layout, BOOL colorAllowed) {
+                                   sw_exec_layout layout, NSString *runas,
+                                   BOOL colorAllowed) {
     if (path == NULL) return NO;
 
     int fd = open(ttyPath, O_WRONLY | O_NOCTTY | O_CLOEXEC);
@@ -741,7 +803,7 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
      * a fixed stack buffer the way the short verify code is. Nothing is
      * truncated: an elided execute: line would be worse than none, because the
      * reader would trust an incomplete command. */
-    NSString *line = sw_format_exec_line(path, run_argv, layout,
+    NSString *line = sw_format_exec_line(path, run_argv, layout, runas,
                                          frameColor, valueColor);
     if (line == nil) { close(fd); return NO; }
 
@@ -840,10 +902,10 @@ enum { sw_exec_display_mode = SW_ED_SEL(SW_EXEC_DISPLAY) };
  * terminal-password step-aside asks sw_step_aside_layout. */
 static void emit_exec_line(const char *ttyPath, const char *path,
                            char * const run_argv[], sw_exec_layout layout,
-                           BOOL colorAllowed) {
+                           NSString *runas, BOOL colorAllowed) {
     if (sw_exec_display_mode != SW_ED_on) return;
     if (path == NULL) return;
-    write_exec_line_to_tty(ttyPath, path, run_argv, layout, colorAllowed);
+    write_exec_line_to_tty(ttyPath, path, run_argv, layout, runas, colorAllowed);
 }
 
 /* Build-time master switch for POLICY DEFERENCE, chosen by -DSW_POLICY_DEFERENCE
@@ -1105,7 +1167,8 @@ static sw_exec_layout sw_step_aside_layout(BOOL markerPresent) {
 }
 
 static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
-                               BOOL markerPresent, const char **errstr) {
+                               NSString *runas, BOOL markerPresent,
+                               const char **errstr) {
     BOOL confirmOn = (sw_exec_confirm_mode == SW_EC_on);
     BOOL haveTty = confirmOn ? sw_have_controlling_tty("/dev/tty") : NO;
     BOOL integrityInstalled =
@@ -1115,7 +1178,8 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
     if (!sw_confirm_decision(confirmOn, haveTty, markerPresent,
                              integrityInstalled)) {
         emit_exec_line("/dev/tty", commandC, run_argv,
-                       sw_step_aside_layout(markerPresent), sw_color_allowed());
+                       sw_step_aside_layout(markerPresent), runas,
+                       sw_color_allowed());
         return 1;
     }
 
@@ -1151,7 +1215,7 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
      * informational echoes; it must not turn this one into a blind y/N. */
     write_exec_line_to_tty("/dev/tty", commandC, run_argv,
                            sw_step_aside_layout(markerPresent),
-                           sw_color_allowed());
+                           runas, sw_color_allowed());
 
     /* Decline, an empty answer, or a conversation that could not run at all:
      * quiet abort. Terse on purpose -- nothing is wedged, nothing is cached,
@@ -1423,7 +1487,7 @@ static int sudowhat_check(char * const command_info[],
              * nothing to align with and the label keeps a single space. This is
              * the ONE site where that holds -- see sw_exec_layout. */
             emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_SOLO,
-                           sw_color_allowed());
+                           sw_runas_name(command_info), sw_color_allowed());
             return 1;
         }
 
@@ -1468,6 +1532,7 @@ static int sudowhat_check(char * const command_info[],
                  * tells it.
                  * See sw_step_aside_allow. */
                 int verdict = sw_step_aside_allow(commandC, run_argv,
+                                                  sw_runas_name(command_info),
                                                   markerPresent, errstr);
                 if (verdict != 1) return verdict;
                 syslog(LOG_AUTHPRIV | LOG_NOTICE,
@@ -1493,20 +1558,7 @@ static int sudowhat_check(char * const command_info[],
         }
         NSString *commandPath = [NSString stringWithUTF8String:commandC];
 
-        /* Prefer sudo's already-resolved runas_user (it's the authoritative
-         * name for the target uid, including the case where uid 0's
-         * passwd entry is named something other than "root"). Fall back
-         * to looking up uid 0 ourselves if sudo didn't supply a name. */
-        const char *runasU = find_kv(command_info, "runas_user");
-        NSString *runasUser;
-        if (runasU && runasU[0] != '\0') {
-            runasUser = [NSString stringWithUTF8String:runasU];
-        } else {
-            struct passwd *pw = getpwuid(0);
-            runasUser = (pw && pw->pw_name)
-                ? [NSString stringWithUTF8String:pw->pw_name]
-                : @"root";
-        }
+        NSString *runasUser = sw_runas_name(command_info);
 
         NSMutableArray<NSString *> *argv = [NSMutableArray array];
         if (run_argv) {
@@ -1574,7 +1626,7 @@ static int sudowhat_check(char * const command_info[],
              * deliberately does not reach this path. Record the skip and
              * allow. */
             emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
-                           sw_color_allowed());
+                           nil, sw_color_allowed());
             syslog(LOG_AUTHPRIV | LOG_NOTICE,
                    "sudowhat: prompt skipped, sudoers waived authentication "
                    "(invoking uid %u)", g_inv.uid);
@@ -1657,7 +1709,7 @@ static int sudowhat_check(char * const command_info[],
          * before the LAContext call, which blocks until the human answers. */
         emit_verify_code("/dev/tty", nonceBuf, sw_color_allowed());
         emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
-                       sw_color_allowed());
+                       nil, sw_color_allowed());
 
         /* (5) LAContext call.
          *
