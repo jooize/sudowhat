@@ -1,7 +1,7 @@
 /*
  * SessionGuard — decides whether the invoking caller is the LOCAL, physically
  * present console (GUI) user: the only context in which sudowhat raises a
- * biometric / Authorization Services sheet.
+ * Touch ID sheet.
  *
  * It is deliberately NOT a uid comparison. SCDynamicStoreCopyConsoleUser
  * reports who owns the console *system-wide*, so comparing uids alone cannot

@@ -130,9 +130,12 @@ A single dialog accepts any of the following:
 - **Touch ID**: fingerprint sensor on the keyboard or external Magic Keyboard.
 - **Apple Watch**: double-click the side button while wearing an unlocked,
   paired watch.
-- **Password fallback**: clicking "Use Password" opens an Authorization
-  Services dialog (the classic lock-icon one) with the same command shown,
-  accepting your account password.
+- **Password**: "Use Password" switches the same dialog to a password field,
+  with the command and verify code still shown. With an Apple Watch nearby
+  the dialog accepts Touch ID or the Watch, and "Use Password" opens a second
+  dialog with the same text, where "Use Password" again reaches the field.
+  (macOS offers no password in the Watch policy, and no way to open a dialog
+  straight at the password.)
 
 The dialog binds to *your* user account, not "System Administrator", so your
 password works in the fallback. (sudo runs as root by the time the plugin
@@ -369,7 +372,7 @@ non-console.
 deference, on by default), so the command just runs, still disclosed on the
 terminal.
 
-A non-console caller is **never** shown a biometric / Authorization Services
+A non-console caller is **never** shown a Touch ID
 dialog, which would render on the console user's screen; that impossibility is
 structural and not configurable
 ([why](docs/security-design.md#non-console-defense-ssh-automation)).

@@ -59,9 +59,12 @@ sudo /usr/bin/foo bar
         before the dialog in biometric mode; execute: after the password on
         the terminal path
       • seteuid drops to the user
-      • LAContext.evaluatePolicy(.deviceOwnerAuthenticationWithBiometricsOrCompanion)
-      • on fallback: AuthorizationCreate with system.privilege.admin and
-        kAuthorizationEnvironmentPrompt = command string
+      • LAContext.evaluatePolicy: .deviceOwnerAuthentication (Touch ID, or
+        "Use Password" in the same dialog); with a companion nearby,
+        .deviceOwnerAuthenticationWithBiometricsOrCompanion, then on fallback
+        a second .deviceOwnerAuthentication dialog -- every dialog shows the
+        same text, verify code included (Authorization Services is not used:
+        on macOS 27 it replaces an app's prompt text with fixed wording)
       • seteuid restores to root
       • re-stat target binary; deny if (dev,inode) changed during auth
       • returns 1 = allow, 0 = deny, -1 = error
@@ -123,7 +126,7 @@ access (`SessionGetInfo`). A uid comparison alone cannot tell them apart (the
 same user, logged in at the Mac and over SSH, shares one uid), and a same-uid
 SSH session could otherwise render a Touch ID dialog on the console screen.
 
-**A non-console caller is never shown the biometric / Authorization Services
+**A non-console caller is never shown the Touch ID
 dialog. This is structural, not a setting, and deliberately not configurable.**
 A Touch ID dialog raised for a remote or background caller renders on the
 *console* user's screen, and that user reflexively approves a command they

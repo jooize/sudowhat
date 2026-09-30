@@ -12,8 +12,6 @@
 
 #import <Foundation/Foundation.h>
 #import <LocalAuthentication/LocalAuthentication.h>
-#include <Security/Authorization.h>
-#include <Security/AuthorizationTags.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -81,10 +79,9 @@ static const char *utf8_or(NSString *s, const char *fallback) {
  * localized (non-ASCII on a non-English system), sentence-cased with a trailing
  * period, and free to change across macOS releases - none of which belongs in a
  * Unix errstr we emit, prefixed with our own name, next to sudo's own lowercase
- * output. The phrase itself carries the provenance ("password ..." for the AS
- * fallback vs a bare "authentication ..." for the biometric path), so no
- * separate source tag is needed. An unmapped code still degrades to an ASCII
- * "(... N)" - debuggable, still our voice, no locale leak. */
+ * output. Every outcome comes from LocalAuthentication, so no source tag is
+ * needed. An unmapped code still degrades to an ASCII "(... N)" - debuggable,
+ * still our voice, no locale leak. */
 static NSString *sw_denial_reason(NSError *err) {
     if (err == nil) {
         return @"authentication denied";
@@ -108,19 +105,29 @@ static NSString *sw_denial_reason(NSError *err) {
                         (long)err.code];
         }
     }
-    if ([err.domain isEqualToString:NSOSStatusErrorDomain]) {
-        switch (err.code) {
-            case errAuthorizationCanceled:
-                return @"authentication canceled";
-            case errAuthorizationDenied:
-                return @"password authentication failed";
-            default:
-                return [NSString stringWithFormat:@"authentication error (OSStatus %ld)",
-                        (long)err.code];
-        }
-    }
     return [NSString stringWithFormat:@"authentication error (%@ %ld)",
             err.domain, (long)err.code];
+}
+
+/* One LocalAuthentication dialog, waited for: evaluatePolicy replies on its own
+ * queue, and this plugin's check() must return the verdict synchronously. The
+ * wait has no timeout because the dialog is the human's decision; Cancel, a
+ * lock of the screen or the framework's own limits end it. */
+static BOOL sw_la_evaluate(LAContext *ctx, LAPolicy policy, NSString *reason,
+                           NSError **outErr) {
+    __block BOOL allowed = NO;
+    __block NSError *replyErr = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [ctx evaluatePolicy:policy
+        localizedReason:reason
+                  reply:^(BOOL success, NSError *err) {
+        allowed = success;
+        replyErr = err;
+        dispatch_semaphore_signal(sem);
+    }];
+    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    if (outErr) *outErr = replyErr;
+    return allowed;
 }
 
 /* Channel-binding nonce, uppercase only. Built from Crockford base32 (which
@@ -1523,8 +1530,8 @@ static int sudowhat_check(char * const command_info[],
              * CONSOLE user's screen, so we STEP ASIDE and allow.
              *
              * TRIPWIRE FOR MAINTAINERS: do NOT move this below the
-             * seteuid(g_inv.uid)+LAContext/AS block, and never raise a
-             * biometric/Authorization Services sheet for a non-console uid.
+             * seteuid(g_inv.uid)+LAContext block, and never raise a
+             * Touch ID sheet for a non-console uid.
              * BiometricsOrCompanion is a same-session SEP confirmation of a
              * locally rendered sheet, not an out-of-band push — for a
              * non-console caller it renders in the CONSOLE user's session,
@@ -1679,16 +1686,14 @@ static int sudowhat_check(char * const command_info[],
         generate_verify_nonce(nonceBuf, sizeof(nonceBuf));
         NSString *verifyCode = [NSString stringWithUTF8String:nonceBuf];
 
-        /* Two renderings of the same content: LAContext wraps our text in
-         * a system-supplied sentence and appends a period, so we use the
-         * SystemSheet style there -- or SystemHeadline on macOS 27 and later,
-         * whose sheet appends its period even after ours. Authorization Services (password
-         * fallback below) shows our text verbatim, so SelfContained is the
-         * whole message. A "(see terminal)" marker either sheet emits for an
-         * over-long item is backed by the audit plugin's full-command line,
-         * already printed to this terminal before this plugin ran. (Formatting
-         * is pure and precedes the seteuid drop, so doing it before the tty
-         * write is safe.) */
+        /* The sheet's text, for every dialog below. LAContext wraps it in a
+         * system-supplied sentence and appends a period, so it uses the
+         * SystemSheet style -- or SystemHeadline on macOS 27 and later, whose
+         * sheet appends its period even after ours. A "(see terminal)" marker
+         * for an over-long item is backed by the audit plugin's full-command
+         * line, already printed to this terminal before this plugin ran.
+         * (Formatting is pure and precedes the seteuid drop, so doing it
+         * before the tty write is safe.) */
         NSString *promptTextLA =
             [SudoWhatPromptFormatter formatWithCommandPath:commandPath
                                                  runasUser:runasUser
@@ -1696,13 +1701,6 @@ static int sudowhat_check(char * const command_info[],
                                                 verifyCode:verifyCode
                                                       argv:argv
                                                      style:sw_sheet_style()];
-        NSString *promptTextAS =
-            [SudoWhatPromptFormatter formatWithCommandPath:commandPath
-                                                 runasUser:runasUser
-                                                       cwd:cwd
-                                                verifyCode:verifyCode
-                                                      argv:argv
-                                                     style:SWPromptStyleSelfContained];
 
         /* Two lines, in this order, then the sheet.
          *
@@ -1751,24 +1749,28 @@ static int sudowhat_check(char * const command_info[],
         LAContext *ctx = [[LAContext alloc] init];
         ctx.localizedFallbackTitle = @"Use Password";
 
-        /* Tiered policy selection. Prefer
-         * LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion
-         * (renamed from ...WithBiometricsOrWatch in macOS 15) so a
-         * paired Apple Watch's side-button double-click approves
-         * alongside Touch ID. The policy nominally also covers iPhone
-         * proximity unlock since macOS 15 / iOS 18, but that path has
-         * not been observed firing in testing - watch is the verified
-         * companion. That policy has no password fallback, so when the
-         * user has neither biometric nor a usable companion (lid closed
-         * without external Touch ID, watch off-wrist), fall back to
-         * LAPolicyDeviceOwnerAuthentication, which adds password as a
-         * last resort. canEvaluatePolicy reports availability against
-         * the EUID we already dropped to, so the companion/biometric
-         * checks see the user's enrollments. */
+        /* Policy selection. Every dialog below shows promptTextLA -- the user,
+         * directory, command and verify code -- including its password step.
+         *
+         * A nearby paired Apple Watch (or other companion) picks
+         * LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion, so the
+         * Watch's side-button double-click approves alongside Touch ID. That
+         * policy has no password: "Use Password" ends it, and the fallback
+         * below asks again with a password-capable policy.
+         *
+         * Without a companion, LAPolicyDeviceOwnerAuthentication: Touch ID,
+         * and its "Use Password" switches the SAME dialog to a password field
+         * (LAContext.h), so there is one dialog. It also covers a Mac with no
+         * usable sensor, which it asks for the password straight away.
+         *
+         * canEvaluatePolicy reports availability against the EUID we already
+         * dropped to, so these checks see the user's enrollments and pairings. */
         LAPolicy chosen = LAPolicyDeviceOwnerAuthentication;
         NSError *policyErr = nil;
-        if ([ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion
-                             error:&policyErr]) {
+        if ([ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithCompanion
+                             error:NULL] &&
+            [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion
+                             error:NULL]) {
             chosen = LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion;
         } else if (![ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication
                                      error:&policyErr]) {
@@ -1786,81 +1788,32 @@ static int sudowhat_check(char * const command_info[],
             return 0;
         }
 
-        __block BOOL allowed = NO;
-        __block NSError *replyErr = nil;
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        [ctx evaluatePolicy:chosen
-            localizedReason:promptTextLA
-                      reply:^(BOOL success, NSError *err) {
-            allowed = success;
-            replyErr = err;
-            dispatch_semaphore_signal(sem);
-        }];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        NSError *replyErr = nil;
+        BOOL allowed = sw_la_evaluate(ctx, chosen, promptTextLA, &replyErr);
 
-        /* "Use Password" fallback for the BiometricsOrCompanion path.
-         * BiometricsOrCompanion has no password support: clicking the
-         * fallback button or otherwise failing biometric/companion
-         * returns LAErrorUserFallback or LAErrorAuthenticationFailed.
+        /* The password step for the companion path. "Use Password", a failed
+         * biometric or companion attempt, or a biometry lockout ends that
+         * policy; ask once more with LAPolicyDeviceOwnerAuthentication and the
+         * same text. This second dialog opens at Touch ID when a sensor is
+         * available -- LocalAuthentication has no public way to open straight
+         * at the password -- so the password is one more "Use Password" away.
          *
-         * Re-prompting with LAPolicyDeviceOwnerAuthentication is awkward
-         * UX (the second dialog also defaults to biometric when biometric
-         * is available, requiring a second "Use Password" click), so use
-         * Authorization Services here instead: a password-only dialog
-         * that displays our command in the prompt body via
-         * kAuthorizationEnvironmentPrompt. We're already running with
-         * EUID dropped to the invoking user, so AS auths against that
-         * account.
+         * Not Authorization Services: since macOS 27 its dialog replaces our
+         * prompt text with fixed wording, so it would ask for the password
+         * without showing the command or the verify code.
          *
-         * Skip on LAErrorUserCancel so an explicit "Cancel" still
-         * cancels (no second dialog). */
+         * Skip on LAErrorUserCancel so an explicit "Cancel" still cancels. */
         if (!allowed
             && chosen == LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion
             && replyErr != nil
-            && [replyErr.domain isEqualToString:LAErrorDomain]) {
-            NSInteger code = replyErr.code;
-            BOOL shouldRetry = (code == LAErrorUserFallback ||
-                                code == LAErrorAuthenticationFailed ||
-                                code == LAErrorBiometryLockout);
-            if (shouldRetry) {
-                const char *p = promptTextAS.UTF8String;
-                const char *promptUtf8 = p ? p : "";
-                AuthorizationItem rightItem = {
-                    .name = "system.privilege.admin",
-                    .valueLength = 0,
-                    .value = NULL,
-                    .flags = 0,
-                };
-                AuthorizationRights rights = { .count = 1, .items = &rightItem };
-
-                AuthorizationItem envItem = {
-                    .name = kAuthorizationEnvironmentPrompt,
-                    .valueLength = strlen(promptUtf8),
-                    .value = (void *)promptUtf8,
-                    .flags = 0,
-                };
-                AuthorizationEnvironment env = { .count = 1, .items = &envItem };
-
-                AuthorizationFlags flags = kAuthorizationFlagDefaults
-                                         | kAuthorizationFlagInteractionAllowed
-                                         | kAuthorizationFlagExtendRights;
-
-                AuthorizationRef auth = NULL;
-                OSStatus asStatus = AuthorizationCreate(&rights, &env, flags, &auth);
-                if (auth) {
-                    AuthorizationFree(auth, kAuthorizationFlagDefaults);
-                }
-
-                if (asStatus == errAuthorizationSuccess) {
-                    allowed = YES;
-                    replyErr = nil;
-                } else {
-                    /* Carry the OSStatus; sw_denial_reason() phrases it. */
-                    replyErr = [NSError errorWithDomain:NSOSStatusErrorDomain
-                                                   code:asStatus
-                                               userInfo:nil];
-                }
-            }
+            && [replyErr.domain isEqualToString:LAErrorDomain]
+            && (replyErr.code == LAErrorUserFallback ||
+                replyErr.code == LAErrorAuthenticationFailed ||
+                replyErr.code == LAErrorBiometryLockout)) {
+            LAContext *pwCtx = [[LAContext alloc] init];
+            replyErr = nil;
+            allowed = sw_la_evaluate(pwCtx, LAPolicyDeviceOwnerAuthentication,
+                                     promptTextLA, &replyErr);
         }
 
         /* Restore root EUID. If this fails, sudo cannot exec the target,

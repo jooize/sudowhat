@@ -27,7 +27,7 @@ in {
       description = ''
         What a non-console caller — an SSH session, unattended automation, any
         non-GUI-login security session — may do with sudo. A non-console caller
-        is NEVER shown a Touch ID / Authorization Services dialog (that would
+        is NEVER shown a Touch ID dialog (that would
         render on the console user's screen — the reflexive-approval hole this
         tool exists to close); this option only chooses between password and
         denial.

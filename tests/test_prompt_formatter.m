@@ -266,15 +266,6 @@ static void test_format_basic_exact_systemsheet(void) {
     EQ(out, expected, "basic SystemSheet exact layout (lowercase, period at top)");
 }
 
-static void test_format_basic_exact_selfcontained(void) {
-    NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
-                        @[@"echo", @"hello"], SWPromptStyleSelfContained);
-    NSString *expected =
-        @"Run a command.\n\nRUN AS\nroot\n\nEXECUTE\n/bin/echo hello\n\n"
-        @"Verify Code: AB12\n\nCode must match your terminal.";
-    EQ(out, expected, "basic SelfContained exact layout (capital Run, period at top)");
-}
-
 /* macOS 27's sheet appends its period even after ours, so SystemHeadline is
  * SystemSheet with the final stop left off -- and nothing else changed. */
 static void test_format_basic_exact_systemheadline(void) {
@@ -425,7 +416,7 @@ static void test_format_length_invariant(void) {
     /* The hard guarantee: rendered length stays within the LA budget for ANY
      * input size, so nothing is silently clipped past the cap. */
     NSUInteger worstSeen = 0;
-    NSArray *styles = @[@(SWPromptStyleSystemSheet), @(SWPromptStyleSelfContained)];
+    NSArray *styles = @[@(SWPromptStyleSystemSheet), @(SWPromptStyleSystemHeadline)];
     for (NSNumber *st in styles) {
         SWPromptStyle style = (SWPromptStyle)st.integerValue;
         /* one giant single arg */
@@ -532,8 +523,8 @@ static void test_wastruncated_flag(void) {
     for (NSUInteger i = 0; i < 200; i++) [many addObject:rep(@"y", 20)];
     OK(fmt_trunc(@"/bin/echo", many, SWPromptStyleSystemSheet),
        "wasTruncated YES for many args");
-    OK(fmt_trunc(@"/bin/echo", many, SWPromptStyleSelfContained),
-       "wasTruncated YES holds for SelfContained too");
+    OK(fmt_trunc(@"/bin/echo", many, SWPromptStyleSystemHeadline),
+       "wasTruncated YES holds for SystemHeadline too");
     /* The wrapper passes NULL through to the overflow variant; tolerate it. */
     NSString *out = [SudoWhatPromptFormatter formatWithCommandPath:@"/bin/echo"
         runasUser:@"root" cwd:nil verifyCode:@"AB12" argv:@[@"echo", @"hi"]
@@ -624,7 +615,6 @@ int main(void) {
         test_quote_control_chars_get_quoted();
 
         test_format_basic_exact_systemsheet();
-        test_format_basic_exact_selfcontained();
         test_format_basic_exact_systemheadline();
         test_format_path_line();
         test_format_argv0_dedup();

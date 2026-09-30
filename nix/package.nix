@@ -47,8 +47,8 @@ stdenv.mkDerivation (finalAttrs: {
 
   # Modern nixpkgs ships unified apple-sdk packages instead of per-framework
   # derivations. SDK 15 + a 15.0 deployment-target hook are needed for
-  # LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion (the
-  # iPhone-as-companion variant introduced in macOS 15) which the plugin
+  # LAPolicyDeviceOwnerAuthenticationWithCompanion and
+  # ...WithBiometricsOrCompanion (introduced in macOS 15), which the plugin
   # requests by name. Without the hook, nixpkgs's default deployment target
   # is below 15.0 and clang refuses the symbol under -Werror=unguarded-
   # availability-new.

@@ -13,15 +13,11 @@
 
 #import <Foundation/Foundation.h>
 
-/* SWPromptStyle picks between two display modes for the same prompt
- * content:
+/* SWPromptStyle picks the display mode for the prompt content:
  *   SystemSheet    — LAContext Touch ID sheet. macOS prepends
  *                    `"sudo" is trying to ` and appends a terminal
  *                    period, so our opening line is a lowercase
  *                    continuation (`run a command.`).
- *   SelfContained  — Authorization Services password dialog. macOS
- *                    shows our text verbatim with no wrapper, so the
- *                    opening line is capitalized (`Run a command.`).
  *   SystemHeadline — the same sheet on macOS 27 and later, where our text
  *                    is the bold headline and macOS appends its period
  *                    whether or not one is there, so the closing line
@@ -31,7 +27,6 @@
  * before macOS 27, and takes it on 27. */
 typedef NS_ENUM(NSInteger, SWPromptStyle) {
     SWPromptStyleSystemSheet = 0,
-    SWPromptStyleSelfContained,
     SWPromptStyleSystemHeadline,
 };
 

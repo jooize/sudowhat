@@ -7,7 +7,7 @@
  *
  * On success returns PAM_SUCCESS; the requisite + sufficient pair in
  * /etc/pam.d/sudo_local terminates the auth chain — no password fallback
- * at the PAM layer (the LAContext / Authorization Services prompt later
+ * at the PAM layer (the LAContext prompt later
  * is the user-facing auth gate). On any failure returns PAM_AUTH_ERR
  * and sudo aborts.
  */

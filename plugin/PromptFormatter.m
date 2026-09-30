@@ -190,13 +190,10 @@
                                 argv:(NSArray<NSString *> *)argv
                               style:(SWPromptStyle)style
                            overflow:(SWPromptOverflow *)outOverflow {
-    BOOL selfContained = (style == SWPromptStyleSelfContained);
-
     /* LA caps the localizedReason at ~510 chars total — anything past the cap
      * is a hard NSString cut, including newlines and any content meant for a
-     * later line. We render both styles within a conservative 480-char budget
-     * (~30 chars of margin) so the closing reminder is never the thing clipped,
-     * and so Touch ID and the AS password fallback look identical. Every
+     * later line. We render within a conservative 480-char budget (~30 chars
+     * of margin) so the closing reminder is never the thing clipped. Every
      * component below is either a fixed string or a per-item value bounded by a
      * cap, so this total holds structurally for any input.
      *
@@ -212,10 +209,9 @@
     const NSUInteger kMaxVerifyDisplay = 32;
 
     /* Opening line. macOS frames the biometric sheet as `"sudo" is trying to
-     * <this>` and appends a period, so SystemSheet is a lowercase continuation;
-     * the AS dialog shows our text verbatim, so it is capitalized. Either way
-     * the full stop lives here, at the top. */
-    NSString *header = selfContained ? @"Run a command." : @"run a command.";
+     * <this>`, so it is a lowercase continuation, and the full stop lives
+     * here, at the top. */
+    NSString *header = @"run a command.";
 
     /* Verify code. The plugin has already echoed the same value to the user's
      * controlling terminal; they compare the two before approving. Capped
@@ -243,10 +239,9 @@
 
     /* Closing reminder. Bounded either way; reserve the larger for the budget
      * so the fit holds before we know which one we will emit. */
-    /* Both end in a full stop deliberately: the biometric sheet forces one
-     * onto the reason text anyway (Apple's framing), while the AS dialog
-     * shows the text verbatim -- writing it ourselves keeps the two dialogs
-     * rendering the same line. */
+    /* Both end in a full stop. Before macOS 27 the sheet absorbs its own
+     * period after ours; SystemHeadline drops ours below, since macOS 27
+     * appends one regardless. */
     NSString *bottomClean = @"Code must match your terminal.";
     NSString *bottomTrunc = @"⚠️ Long items are shown in your terminal.";
     NSUInteger bottomReserve = (bottomClean.length > bottomTrunc.length)
