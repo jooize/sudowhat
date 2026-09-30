@@ -387,6 +387,17 @@ static void test_exec_line_solo_format(void) {
        "solo and grouped carry the identical value; grouped adds the closing blank line");
 }
 
+/* The Touch ID sheet's style follows the macOS version: 27 made our text the
+ * bold headline and appends its period even after ours. */
+static void test_sheet_style_for(void) {
+    OK(sw_sheet_style_for((NSOperatingSystemVersion){26, 4, 0}) == SWPromptStyleSystemSheet,
+       "macOS 26 keeps the SystemSheet style (our final stop)");
+    OK(sw_sheet_style_for((NSOperatingSystemVersion){27, 0, 0}) == SWPromptStyleSystemHeadline,
+       "macOS 27 takes SystemHeadline (no final stop)");
+    OK(sw_sheet_style_for((NSOperatingSystemVersion){28, 0, 0}) == SWPromptStyleSystemHeadline,
+       "later macOS stays on SystemHeadline");
+}
+
 /* A solo line with the target user names it in the label, since no run as: row
  * sits above it to say whose rights the command runs with. */
 static void test_exec_line_solo_runas(void) {
@@ -768,6 +779,7 @@ int main(void) {
         test_exec_line_format();
         test_exec_line_solo_format();
         test_exec_line_solo_runas();
+        test_sheet_style_for();
         test_step_aside_layout();
         test_exec_line_color_split();
         test_echo_color_default();

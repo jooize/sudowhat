@@ -294,6 +294,11 @@
 
     NSString *bottom = (userOverflow || pathOverflow || cmdOverflow)
         ? bottomTrunc : bottomClean;
+    /* macOS 27's sheet appends its period even after ours ("terminal.."), so
+     * that style ends bare and the system supplies the stop. */
+    if (style == SWPromptStyleSystemHeadline && [bottom hasSuffix:@"."]) {
+        bottom = [bottom substringToIndex:bottom.length - 1];
+    }
 
     /* What makes a label unforgeable is the SHAPE, not the spelling: a real
      * label sits alone on its own line, directly after a blank line, with its

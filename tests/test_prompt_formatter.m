@@ -275,6 +275,25 @@ static void test_format_basic_exact_selfcontained(void) {
     EQ(out, expected, "basic SelfContained exact layout (capital Run, period at top)");
 }
 
+/* macOS 27's sheet appends its period even after ours, so SystemHeadline is
+ * SystemSheet with the final stop left off -- and nothing else changed. */
+static void test_format_basic_exact_systemheadline(void) {
+    NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
+                        @[@"echo", @"hello"], SWPromptStyleSystemHeadline);
+    NSString *expected =
+        @"run a command.\n\nRUN AS\nroot\n\nEXECUTE\n/bin/echo hello\n\n"
+        @"Verify Code: AB12\n\nCode must match your terminal";
+    EQ(out, expected, "basic SystemHeadline exact layout (no final stop)");
+    NSString *sheet = fmt(@"/bin/echo", @"root", nil, @"AB12",
+                          @[@"echo", @"hello"], SWPromptStyleSystemSheet);
+    EQ([out stringByAppendingString:@"."], sheet,
+       "SystemHeadline differs from SystemSheet by the final stop only");
+    NSString *trunc = fmt(@"/bin/echo", @"root", nil, @"AB12",
+                          @[@"echo", rep(@"x", 4000)], SWPromptStyleSystemHeadline);
+    OK([trunc hasSuffix:@"shown in your terminal"],
+       "the truncated closing line ends bare too");
+}
+
 static void test_format_path_line(void) {
     NSString *out = fmt(@"/bin/echo", @"root", @"/tmp", @"AB12",
                         @[@"echo"], SWPromptStyleSystemSheet);
@@ -606,6 +625,7 @@ int main(void) {
 
         test_format_basic_exact_systemsheet();
         test_format_basic_exact_selfcontained();
+        test_format_basic_exact_systemheadline();
         test_format_path_line();
         test_format_argv0_dedup();
         test_format_quoting_in_command();

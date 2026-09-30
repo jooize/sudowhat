@@ -22,11 +22,17 @@
  *   SelfContained  — Authorization Services password dialog. macOS
  *                    shows our text verbatim with no wrapper, so the
  *                    opening line is capitalized (`Run a command.`).
+ *   SystemHeadline — the same sheet on macOS 27 and later, where our text
+ *                    is the bold headline and macOS appends its period
+ *                    whether or not one is there, so the closing line
+ *                    ends without one. Otherwise identical to SystemSheet.
  * The full stop lives at the top (the opening line); the closing line
- * is a short reminder that harmlessly absorbs the sheet's auto-period. */
+ * is a short reminder that harmlessly absorbs the sheet's auto-period
+ * before macOS 27, and takes it on 27. */
 typedef NS_ENUM(NSInteger, SWPromptStyle) {
     SWPromptStyleSystemSheet = 0,
     SWPromptStyleSelfContained,
+    SWPromptStyleSystemHeadline,
 };
 
 /* Per-item overflow report. The prompt shows each of user / path / command

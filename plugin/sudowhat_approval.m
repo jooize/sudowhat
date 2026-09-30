@@ -690,6 +690,19 @@ static NSString *sw_exec_escape(const char *input) {
     return s;
 }
 
+/* The Touch ID sheet's prompt style for a macOS version: from 27 on, our text
+ * is the sheet's bold headline and macOS appends a period even after ours, so
+ * the text ends bare (SWPromptStyleSystemHeadline). Pure, so the cut-over is
+ * testable; sw_sheet_style asks the running system. */
+static SWPromptStyle sw_sheet_style_for(NSOperatingSystemVersion v) {
+    return v.majorVersion >= 27 ? SWPromptStyleSystemHeadline
+                                : SWPromptStyleSystemSheet;
+}
+
+static SWPromptStyle sw_sheet_style(void) {
+    return sw_sheet_style_for([NSProcessInfo processInfo].operatingSystemVersion);
+}
+
 /* The target user's name, as sudo resolved it: command_info["runas_user"], the
  * authoritative name for the target uid (uid 0's entry may be named something
  * other than "root"). Without it the default target is uid 0, looked up here. */
@@ -1668,7 +1681,8 @@ static int sudowhat_check(char * const command_info[],
 
         /* Two renderings of the same content: LAContext wraps our text in
          * a system-supplied sentence and appends a period, so we use the
-         * SystemSheet style there. Authorization Services (password
+         * SystemSheet style there -- or SystemHeadline on macOS 27 and later,
+         * whose sheet appends its period even after ours. Authorization Services (password
          * fallback below) shows our text verbatim, so SelfContained is the
          * whole message. A "(see terminal)" marker either sheet emits for an
          * over-long item is backed by the audit plugin's full-command line,
@@ -1681,7 +1695,7 @@ static int sudowhat_check(char * const command_info[],
                                                        cwd:cwd
                                                 verifyCode:verifyCode
                                                       argv:argv
-                                                     style:SWPromptStyleSystemSheet];
+                                                     style:sw_sheet_style()];
         NSString *promptTextAS =
             [SudoWhatPromptFormatter formatWithCommandPath:commandPath
                                                  runasUser:runasUser
