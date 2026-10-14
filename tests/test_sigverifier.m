@@ -101,11 +101,13 @@ int main(void) {
             }
 
             if (!trustEvalWorks) {
-                fprintf(stderr,
-                        "SKIP trust-evaluation tests: this environment cannot "
-                        "evaluate `anchor apple` for /bin/ls (sandboxed "
-                        "runner without trustd access?). Re-run unsandboxed "
-                        "to exercise them.\n");
+                const char *why = "this environment cannot evaluate "
+                                  "`anchor apple` for /bin/ls (sandboxed "
+                                  "runner without trustd access?), re-run "
+                                  "unsandboxed to exercise it";
+                SKIP("positive control: anchor apple accepts /bin/ls", why);
+                SKIP("our requirement compiles for validation", why);
+                SKIP("our requirement rejects an Apple-signed binary", why);
             } else {
                 OK(YES, "positive control: anchor apple accepts /bin/ls");
                 SecRequirementRef ours = compile_req(text);

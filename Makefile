@@ -154,7 +154,8 @@ PAM_OBJS    = pam/pam_sudowhat.o \
 AUDIT_OBJS  = plugin/sudowhat_audit.o \
               build/audit_SignatureVerifier.o
 
-.PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit clean \
+.PHONY: all sign install install-force install-binaries print-install-binaries uninstall test test-unit \
+        print-test-binaries clean \
         build-linux verify-linux test-linux install-linux uninstall-linux
 
 TEST_CFLAGS = $(CFLAGS) -Itests
@@ -299,16 +300,21 @@ test: install
 
 # test-unit: offline unit tests for the pure helpers (no root, no install).
 # Builds standalone test executables and runs them; non-zero exit on failure.
+# Each binary prints its own TAP 14 stream on stdout (see tests/sw_test.h).
 # test_escape_core is the cross-language guard: it links the Rust staticlib and
 # asserts it escapes byte-identically to the ObjC PromptFormatter.
-test-unit: build/test_prompt_formatter build/test_plugin_internals \
-		build/test_escape_core build/test_audit_internals \
-		build/test_sigverifier
-	@build/test_prompt_formatter
-	@build/test_plugin_internals
-	@build/test_escape_core
-	@build/test_audit_internals
-	@build/test_sigverifier
+TEST_BINARIES = build/test_prompt_formatter build/test_plugin_internals \
+                build/test_escape_core build/test_audit_internals \
+                build/test_sigverifier
+
+test-unit: $(TEST_BINARIES)
+	@for t in $(TEST_BINARIES); do $$t || exit 1; done
+
+# print-test-binaries: print the test-unit binaries, one path per line, without
+# building or running anything. A runner builds them with `make` on the same
+# paths and reads each one's output as its own TAP stream.
+print-test-binaries:
+	@printf '%s\n' $(TEST_BINARIES)
 
 # Guards the release-build code requirement offline (syntax + non-vacuous
 # rejection of an Apple-signed binary); see the test file's header comment.
