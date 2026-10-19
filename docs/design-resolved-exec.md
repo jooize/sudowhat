@@ -86,6 +86,22 @@ is its padded last row. Accepted edge: a factor that prints nothing on the
 terminal (Touch ID through pam_tid) also sets the marker, so that line is solo
 though it sits under the table; the plugin cannot see what PAM printed.
 
+**Delta (2026-10-20): the root bypass names the target user on a row.** The
+root-bypass line has no `run as:` row anywhere on screen, so it prints one
+directly above it, in the shared gutter, and the two-row table closes with a
+blank line:
+
+    sudowhat: run as:     root
+    sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
+
+The 2026-09-30 form, `execute as root: <command>`, put the user name, whose
+length sudowhat does not choose, in front of the command on one line; a value
+like that ends its line (terminal-output). The terminal-password line after
+sudo's own prompt stays the lone, unpadded line: the audit block's `run as:`
+row is still on screen above the prompt, and a row already on screen is not
+printed again. With `execConfirm = "on"`, its question opens with the blank
+line that makes the question a block of its own.
+
 **Delta (2026-08-27): `echoColor` governs the `execute:` value too.** The
 build-time colour token was originally passed to the audit bundle alone, so
 `echoColor = "off"` silenced `input:`'s role colouring while `execute:` kept

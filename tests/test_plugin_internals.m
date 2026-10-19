@@ -453,7 +453,9 @@ static void test_exec_line_solo_runas(void) {
 
 /* The terminal-password step-aside picks its frame from the auth marker: a
  * prompt sudo ran sits between the audit block and the line, so it stands
- * alone; with nothing asked, the line is the table's last row. */
+ * alone; with nothing asked, the line is the table's last row. The step-aside
+ * passes no user either way: the audit block's run as: row is on screen above
+ * it, so the lone line is the bare execute: one (asserted above). */
 static void test_step_aside_layout(void) {
     OK(sw_step_aside_layout(YES) == SW_EXEC_SOLO,
        "marker present (sudo prompted) -> solo, no closing blank line");
@@ -708,7 +710,7 @@ static void test_confirm_question(void) {
 
     sw_t_conv_calls = 0;
     sw_t_conv_answer = "n";
-    OK(!sw_ask_run_confirm(), "an n answer declines");
+    OK(!sw_ask_run_confirm(NO), "an n answer declines");
     OK(sw_t_conv_calls == 1 && sw_t_conv_nmsgs == 1,
        "one conversation call carrying one message: the question");
     OK(sw_t_conv_type == SUDO_CONV_PROMPT_ECHO_ON,
@@ -726,7 +728,14 @@ static void test_confirm_question(void) {
        "the question line holds no path, no labeled value, no second line");
 
     sw_t_conv_answer = "y";
-    OK(sw_ask_run_confirm(), "a y answer to the same question confirms");
+    OK(sw_ask_run_confirm(NO), "a y answer to the same question confirms");
+
+    /* Under a lone execute: line, which ends with no blank of its own, the
+     * question opens with the one blank line that makes it a block. */
+    sw_t_conv_answer = "n";
+    OK(!sw_ask_run_confirm(YES), "under a lone line, an n answer declines too");
+    EQ(@(sw_t_conv_msg), @"\nsudowhat: run this command? [y/N] ",
+       "under a lone line the question opens with its blank line");
 
     g_conversation = saved;
 }

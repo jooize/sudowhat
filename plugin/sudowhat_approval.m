@@ -571,19 +571,22 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
  * SOLO: the line stands apart from the audit block. Two kinds of site:
  *   - the root bypass: PROVABLY alone -- the audit plugin exempts uid 0, so no
  *     input: block precedes it, and verify: is raised only on the console
- *     biometric path, which the root bypass returns before reaching;
+ *     biometric path, which the root bypass returns before reaching. Nothing
+ *     on screen says whose rights the command runs with, so this site passes
+ *     the target user and the line brings a run as: row along: run as: then
+ *     execute:, a two-row table in the shared gutter, closed by one blank line
+ *     like the grouped table;
  *   - the terminal-password step-aside when sudo ran authentication for this
  *     invocation (the pam_sudowhat marker is present): sudo's own prompt sits
  *     between the audit block and this line, so it no longer belongs to that
- *     table (see sw_step_aside_layout).
- * With no run as: row above it, a solo line given the target user brings that
- * row along: run as: then execute:, a two-row table in the shared gutter,
- * closed by one blank line like the grouped table. Given no user, it is a lone
- * line: the gutter is dropped and no blank line follows, since a column aligns
- * siblings, and with none a label floating four spaces from its value reads as
- * a rendering bug rather than as alignment, while a blank line after a single
- * line splits nothing. Same unpadded shape the Linux port prints for a lone
- * line.
+ *     table (see sw_step_aside_layout). The block's run as: row is still on
+ *     screen above the prompt, and a row already on screen is not printed
+ *     again (terminal-output), so this site passes no user.
+ * Given no user, the solo line is a lone line: the gutter is dropped and no
+ * blank line follows, since a column aligns siblings, and with none a label
+ * floating four spaces from its value reads as a rendering bug rather than as
+ * alignment, while a blank line after a single line splits nothing. Same
+ * unpadded shape the Linux port prints for a lone line.
  *
  * One accepted edge: a NON-root run on a build with auditDisplay=off is alone
  * too, and still gets the grouped form and its blank line. This bundle cannot
@@ -749,10 +752,10 @@ static NSString *sw_runas_name(char * const command_info[]) {
  * Within one layout both frame branches lay out the SAME field widths, so the
  * plain line is the styled one with every escape sequence removed.
  *
- * runas names the target user, and only the solo frame shows it: a solo line
- * has no run as: row above it (none at all for a root caller, whom the audit
- * bundle exempts; a password prompt between for the step-aside), so it prints
- * that row itself, directly above execute:. The name gets a row of its own
+ * runas names the target user, and only the solo frame shows it: the root
+ * bypass passes it, as no run as: row is on screen there (the audit bundle
+ * exempts a root caller), so the line prints that row itself, directly above
+ * execute:. The name gets a row of its own
  * because its length is not ours to choose: a value like that ends its line,
  * so nothing (least of all the command) may follow it. It is escaped and
  * styled exactly as the audit block's run as: value: plain for root, yellow
@@ -1130,12 +1133,18 @@ static BOOL sw_have_controlling_tty(const char *ttyPath) {
  * the middle of somebody else's output and has to say who is asking.
  *
  * The question holds no value. Everything it decides about already stands on
- * labeled rows directly above it -- execute: always, with run as: beside it
- * (the audit block's row, or the solo frame's own) -- so it names its object
- * with a noun, "this command", and stays one fixed line however long the
- * command is. The conversation API takes the prompt as one string and sudo
- * prints it as given, so the rows cannot travel in it; they go to /dev/tty
- * first (write_exec_line_to_tty), and this is the short question below them.
+ * labeled rows above it -- execute: directly above, and the audit block's
+ * run as: row -- so it names its object with a noun, "this command", and
+ * stays one fixed line however long the command is. The conversation API
+ * takes the prompt as one string and sudo prints it as given, so the rows
+ * cannot travel in it; they go to /dev/tty first (write_exec_line_to_tty),
+ * and this is the short question below them.
+ *
+ * The question is a block of its own, one blank line under the line it
+ * decides about. A grouped execute: line closes its table with that blank
+ * already; a lone solo line ends with none, so blankFirst asks for it here,
+ * at the head of the prompt string, where it reaches the terminal through
+ * the same channel and in the same write as the question.
  *
  * The conversation contract puts the reply buffer in the caller's hands, so it
  * is freed here. Returns NO on a NULL conversation pointer or a conversation
@@ -1144,13 +1153,13 @@ static BOOL sw_have_controlling_tty(const char *ttyPath) {
  * answered. */
 #define SW_CONFIRM_QUESTION "sudowhat: run this command? [y/N] "
 
-static BOOL sw_ask_run_confirm(void) {
+static BOOL sw_ask_run_confirm(BOOL blankFirst) {
     if (g_conversation == NULL) return NO;
 
     struct sudo_conv_message msg = {
         .msg_type = SUDO_CONV_PROMPT_ECHO_ON,
         .timeout  = 0,
-        .msg      = SW_CONFIRM_QUESTION,
+        .msg      = blankFirst ? "\n" SW_CONFIRM_QUESTION : SW_CONFIRM_QUESTION,
     };
     struct sudo_conv_reply reply = { .reply = NULL };
 
@@ -1194,21 +1203,21 @@ static BOOL sw_ask_run_confirm(void) {
  * markerPresent means sudo ran its authentication stack for this invocation,
  * and a factor collected on the terminal leaves its prompt ("Password:")
  * between the audit block and this line, so it no longer belongs to that table
- * and brings its own run as: row -> SOLO. With the marker absent (NOPASSWD, a
- * live timestamp cache), nothing was asked, so the line lands directly under
- * the audit block as its last row -> GROUPED.
+ * and stands alone -> SOLO, with no run as: row of its own: the block's row is
+ * still on screen above the prompt. With the marker absent (NOPASSWD, a live
+ * timestamp cache), nothing was asked, so the line lands directly under the
+ * audit block as its last row -> GROUPED.
  *
  * Accepted edge: a factor that prints nothing on the terminal (Touch ID through
  * pam_tid) also sets the marker, so that line is SOLO though it sits under the
- * table, repeating run as:. The plugin cannot see what PAM printed, and a
- * repeated row under a table misreads less than a table row after a prompt. */
+ * table. The plugin cannot see what PAM printed, and a lone line under a table
+ * misreads less than a table row after a prompt. */
 static sw_exec_layout sw_step_aside_layout(BOOL markerPresent) {
     return markerPresent ? SW_EXEC_SOLO : SW_EXEC_GROUPED;
 }
 
 static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
-                               NSString *runas, BOOL markerPresent,
-                               const char **errstr) {
+                               BOOL markerPresent, const char **errstr) {
     BOOL confirmOn = (sw_exec_confirm_mode == SW_EC_on);
     BOOL haveTty = confirmOn ? sw_have_controlling_tty("/dev/tty") : NO;
     BOOL integrityInstalled =
@@ -1218,7 +1227,7 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
     if (!sw_confirm_decision(confirmOn, haveTty, markerPresent,
                              integrityInstalled)) {
         emit_exec_line("/dev/tty", commandC, run_argv,
-                       sw_step_aside_layout(markerPresent), runas,
+                       sw_step_aside_layout(markerPresent), nil,
                        sw_color_allowed());
         return 1;
     }
@@ -1253,14 +1262,14 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
      * gate (see there): this line is not narration, it is the subject of the
      * question asked two statements down. execDisplay = off silences the four
      * informational echoes; it must not turn this one into a blind y/N. */
-    write_exec_line_to_tty("/dev/tty", commandC, run_argv,
-                           sw_step_aside_layout(markerPresent),
-                           runas, sw_color_allowed());
+    sw_exec_layout layout = sw_step_aside_layout(markerPresent);
+    write_exec_line_to_tty("/dev/tty", commandC, run_argv, layout, nil,
+                           sw_color_allowed());
 
     /* Decline, an empty answer, or a conversation that could not run at all:
      * quiet abort. Terse on purpose -- nothing is wedged, nothing is cached,
      * and the caller can simply run the command again. */
-    if (!sw_ask_run_confirm()) {
+    if (!sw_ask_run_confirm(layout == SW_EXEC_SOLO)) {
         close(preFd);
         set_errstr(errstr, "sudowhat: run not confirmed");
         return 0;
@@ -1572,7 +1581,6 @@ static int sudowhat_check(char * const command_info[],
                  * tells it.
                  * See sw_step_aside_allow. */
                 int verdict = sw_step_aside_allow(commandC, run_argv,
-                                                  sw_runas_name(command_info),
                                                   markerPresent, errstr);
                 if (verdict != 1) return verdict;
                 syslog(LOG_AUTHPRIV | LOG_NOTICE,
