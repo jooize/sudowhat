@@ -83,17 +83,17 @@ out="${tmp}/dry.out"
 rc=0
 (cd -- "${repo}" && /bin/bash "${DEPLOY}" --dry-run) >"${out}" 2>&1 || rc=$?
 ok "a dry run exits 0" test "${rc}" -eq 0
-target="$(line_of "${out}" 'Target:')"
+target="$(line_of "${out}" 'target:')"
 ok "the target row leads with the rev" ends_with "${target%  v1.2.3}" "${rev:0:10}"
 ok "the target row ends with the tag" ends_with "${target}" "  v1.2.3"
 head_row="$(line_of "${out}" 'HEAD:')"
 ok "the HEAD row names no tag" lacks "${head_row}" "v1.2.3"
 ok "the HEAD row says it sits at the target" ends_with "${head_row}" "(at the target)"
-pinned="$(line_of "${out}" 'Pinned:')"
+pinned="$(line_of "${out}" 'pinned:')"
 ok "the pinned row ends with the ref" ends_with "${pinned}" "  ref=refs/tags/v1.2.2"
 ok "the pinned row leaves the flake path out" lacks "${pinned}" "${flake_dir}"
-flake_row="$(line_of "${out}" 'Flake:')"
-ok "the flake path ends a row of its own" test "${flake_row}" = "Flake:   ${NIX_DARWIN_FLAKE}"
+flake_row="$(line_of "${out}" 'flake:')"
+ok "the flake path ends a row of its own" test "${flake_row}" = "flake:   ${NIX_DARWIN_FLAKE}"
 ok "no label announces the command lines" lacks "$(cat -- "${out}")" "Will run as root"
 
 # --- the question ------------------------------------------------------------

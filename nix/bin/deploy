@@ -98,12 +98,13 @@ tag_version="$(git show "${target_tag}:nix/package.nix" 2>/dev/null \
   | grep -oE 'version *= *"[0-9.]+"' | head -n1 | grep -oE '[0-9]+(\.[0-9]+)*' || true)"
 
 [[ -r "${FLAKE}" ]] || {
-  printf '%serror: cannot read %s -- set NIX_DARWIN_FLAKE.%s\n' "$E_RED" "${FLAKE}" "$E_OFF" >&2
+  printf '%serror: cannot read the flake (set NIX_DARWIN_FLAKE to name another): %s%s\n' \
+    "$E_RED" "${FLAKE}" "$E_OFF" >&2
   exit 1
 }
 pin_line="$(grep -F "${REPO_MATCH}" "${FLAKE}" | head -n1 || true)"
 [[ -n "${pin_line}" ]] || {
-  printf '%serror: no sudowhat input pin found in %s.%s\n' "$E_RED" "${FLAKE}" "$E_OFF" >&2
+  printf '%serror: no sudowhat input pin in the flake: %s%s\n' "$E_RED" "${FLAKE}" "$E_OFF" >&2
   exit 1
 }
 # Match ANY current ref (a release tag OR a branch, e.g. a hardware-test pin),
@@ -111,21 +112,22 @@ pin_line="$(grep -F "${REPO_MATCH}" "${FLAKE}" | head -n1 || true)"
 pin_ref_kv="$(printf '%s\n' "${pin_line}" | grep -oE 'ref=[^&"]+' | head -n1 || true)"
 pinned_rev="$(printf '%s\n' "${pin_line}" | grep -oE 'rev=[0-9a-f]{40}' | head -n1 | cut -d= -f2 || true)"
 [[ -n "${pinned_rev}" ]] || {
-  printf '%serror: no rev= pin for sudowhat found in %s.%s\n' "$E_RED" "${FLAKE}" "$E_OFF" >&2
+  printf '%serror: no rev= pin for sudowhat in the flake: %s%s\n' "$E_RED" "${FLAKE}" "$E_OFF" >&2
   exit 1
 }
 
 # Header. Each row leads with what is fixed-width (the label, a 10-char rev)
 # and ends with the one value whose length git or the flake chooses (a tag, a
 # ref, a path), so nothing follows such a value on its line; the flake path
-# takes a row of its own. Same facts as deploy-plan's header. C_DIM is the dim
-# ATTRIBUTE and does not reset the foreground, so reset with C_OFF before each
-# colour switch or it bleeds.
+# takes a row of its own. Same facts as deploy-plan's header. Field labels are
+# lowercase and bold (HEAD is git's own name for it); the gutter is the longest
+# label plus two spaces. C_DIM is the dim ATTRIBUTE and does not reset the
+# foreground, so reset with C_OFF before each colour switch or it bleeds.
 print_header() {
-  printf '%sTarget:%s  %s%s%s  %s%s%s\n' \
-    "$C_DIM" "$C_OFF" "$C_CYN" "${target_rev:0:10}" "$C_OFF" \
+  printf '%starget:%s  %s%s%s  %s%s%s\n' \
+    "$C_B" "$C_OFF" "$C_CYN" "${target_rev:0:10}" "$C_OFF" \
     "$C_CYN" "${target_tag}" "$C_OFF"
-  printf '%sHEAD:%s    %s%s%s' "$C_DIM" "$C_OFF" "$C_CYN" "${head:0:10}" "$C_OFF"
+  printf '%sHEAD:%s    %s%s%s' "$C_B" "$C_OFF" "$C_CYN" "${head:0:10}" "$C_OFF"
   if [[ "${head}" == "${target_rev}" ]]; then
     printf '  %s(%sat the target%s)%s\n' "$C_DIM" "$C_OFF$C_GRN" "$C_OFF$C_DIM" "$C_OFF"
   else
@@ -134,10 +136,10 @@ print_header() {
     printf '  %s(%s%s commit(s) after the target -- unreleased%s)%s\n' \
       "$C_DIM" "$C_OFF$C_YEL" "${ahead}" "$C_OFF$C_DIM" "$C_OFF"
   fi
-  printf '%sPinned:%s  %s%s%s  %s%s%s\n' \
-    "$C_DIM" "$C_OFF" "$C_CYN" "${pinned_rev:0:10}" "$C_OFF" \
+  printf '%spinned:%s  %s%s%s  %s%s%s\n' \
+    "$C_B" "$C_OFF" "$C_CYN" "${pinned_rev:0:10}" "$C_OFF" \
     "$C_DIM" "${pin_ref_kv:-ref=?}" "$C_OFF"
-  printf '%sFlake:%s   %s%s%s\n' "$C_DIM" "$C_OFF" "$C_CYN" "${FLAKE}" "$C_OFF"
+  printf '%sflake:%s   %s%s%s\n' "$C_B" "$C_OFF" "$C_CYN" "${FLAKE}" "$C_OFF"
   if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
     printf '%sWARNING: nix/package.nix at the target tag declares version %s%s\n' \
       "$C_YEL$C_B" "${tag_version}" "$C_OFF"
@@ -218,7 +220,9 @@ if (( ! YES )); then
   done
 fi
 
+# The verdict leads with the fixed-width rev and ends with the tag, the same
+# order as the target row.
 sudo "${PIN_CMD[@]}"
-printf '%s\xe2\x9c\x93 pin updated to %s (%s)%s\n' "$C_GRN" "${target_tag}" "${target_rev:0:10}" "$C_OFF"
+printf '%s\xe2\x9c\x93 pin updated: %s  %s%s\n' "$C_GRN" "${target_rev:0:10}" "${target_tag}" "$C_OFF"
 sudo "${REBUILD_CMD[@]}"
 printf '%s\xe2\x9c\x93 rebuild complete%s\n' "$C_GRN" "$C_OFF"
