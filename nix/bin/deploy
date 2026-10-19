@@ -38,13 +38,22 @@ for arg in "$@"; do
   esac
 done
 
-# Colour, but only when stdout is a terminal (piping/redirecting stays clean).
-if [[ -t 1 ]]; then
+# Color per stream, each gated on the fd it is written to: C_* for stdout
+# (the header rows, the command lines, the question and its answer lines),
+# E_* for stderr (the refusals). Piping or redirecting one stream keeps it
+# free of escape bytes without stripping the other. NO_COLOR
+# (https://no-color.org) turns both off.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_OFF=$'\033[0m'; C_B=$'\033[1m'; C_DIM=$'\033[2m'
-  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_CYN=$'\033[36m'
+  C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_CYN=$'\033[36m'
   C_BLU=$'\033[1;34m'
 else
-  C_OFF=; C_B=; C_DIM=; C_RED=; C_GRN=; C_YEL=; C_CYN=; C_BLU=
+  C_OFF=; C_B=; C_DIM=; C_GRN=; C_YEL=; C_CYN=; C_BLU=
+fi
+if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+  E_OFF=$'\033[0m'; E_B=$'\033[1m'; E_DIM=$'\033[2m'; E_RED=$'\033[31m'
+else
+  E_OFF=; E_B=; E_DIM=; E_RED=
 fi
 
 # macOS-only project (Touch ID / LAContext sudo plugin): the system flake is
@@ -53,7 +62,7 @@ FLAKE="${NIX_DARWIN_FLAKE:-/etc/nix-darwin/flake.nix}"
 REPO_MATCH='sudowhat?ref='   # identifies this repo's input line in the flake
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-  printf '%serror: not inside a git repository%s\n' "$C_RED" "$C_OFF" >&2
+  printf '%serror: not inside a git repository%s\n' "$E_RED" "$E_OFF" >&2
   exit 1
 }
 cd "${repo_root}" || exit 1
@@ -63,8 +72,8 @@ cd "${repo_root}" || exit 1
 if ! git diff --quiet || ! git diff --cached --quiet; then
   {
     printf '%serror: working tree is dirty -- uncommitted changes are in no release tag.%s\n' \
-      "$C_RED$C_B" "$C_OFF"
-    printf '%s       commit and tag a release, or stash, before deploying:%s\n' "$C_DIM" "$C_OFF"
+      "$E_RED$E_B" "$E_OFF"
+    printf '%s       commit and tag a release, or stash, before deploying:%s\n' "$E_DIM" "$E_OFF"
     # --untracked-files=no: list only what actually tripped the refusal (tracked,
     # staged-or-unstaged modifications). Untracked files do not affect the tagged
     # build, so showing them here would only mislead.
@@ -79,7 +88,7 @@ head="$(git rev-parse HEAD)"
 target_tag="$(git tag --merged HEAD 2>/dev/null | grep -E '^v[0-9]' | sort -V | tail -n1 || true)"
 [[ -n "${target_tag}" ]] || {
   printf '%serror: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first.%s\n' \
-    "$C_RED" "$C_OFF" >&2
+    "$E_RED" "$E_OFF" >&2
   exit 1
 }
 target_rev="$(git rev-list -n1 "${target_tag}")"
@@ -89,12 +98,12 @@ tag_version="$(git show "${target_tag}:nix/package.nix" 2>/dev/null \
   | grep -oE 'version *= *"[0-9.]+"' | head -n1 | grep -oE '[0-9]+(\.[0-9]+)*' || true)"
 
 [[ -r "${FLAKE}" ]] || {
-  printf '%serror: cannot read %s -- set NIX_DARWIN_FLAKE.%s\n' "$C_RED" "${FLAKE}" "$C_OFF" >&2
+  printf '%serror: cannot read %s -- set NIX_DARWIN_FLAKE.%s\n' "$E_RED" "${FLAKE}" "$E_OFF" >&2
   exit 1
 }
 pin_line="$(grep -F "${REPO_MATCH}" "${FLAKE}" | head -n1 || true)"
 [[ -n "${pin_line}" ]] || {
-  printf '%serror: no sudowhat input pin found in %s.%s\n' "$C_RED" "${FLAKE}" "$C_OFF" >&2
+  printf '%serror: no sudowhat input pin found in %s.%s\n' "$E_RED" "${FLAKE}" "$E_OFF" >&2
   exit 1
 }
 # Match ANY current ref (a release tag OR a branch, e.g. a hardware-test pin),
@@ -102,7 +111,7 @@ pin_line="$(grep -F "${REPO_MATCH}" "${FLAKE}" | head -n1 || true)"
 pin_ref_kv="$(printf '%s\n' "${pin_line}" | grep -oE 'ref=[^&"]+' | head -n1 || true)"
 pinned_rev="$(printf '%s\n' "${pin_line}" | grep -oE 'rev=[0-9a-f]{40}' | head -n1 | cut -d= -f2 || true)"
 [[ -n "${pinned_rev}" ]] || {
-  printf '%serror: no rev= pin for sudowhat found in %s.%s\n' "$C_RED" "${FLAKE}" "$C_OFF" >&2
+  printf '%serror: no rev= pin for sudowhat found in %s.%s\n' "$E_RED" "${FLAKE}" "$E_OFF" >&2
   exit 1
 }
 
@@ -161,7 +170,7 @@ fi
 if (( ! YES )); then
   if [[ ! -t 0 ]]; then
     printf '%serror: no tty for confirmation -- pass --yes to proceed non-interactively.%s\n' \
-      "$C_RED" "$C_OFF" >&2
+      "$E_RED" "$E_OFF" >&2
     exit 2
   fi
   # The question holds no value: the commands it decides about stand on the
