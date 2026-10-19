@@ -146,7 +146,7 @@ in {
 
         One exception, and it is deliberate: with `execConfirm = "on"` the
         confirmation ceremony still prints the resolved line before its
-        `run? [y/N]`. A yes/no about a command sudowhat refuses to show would be
+        `run this command? [y/N]`. A yes/no about a command sudowhat refuses to show would be
         an empty ceremony, so the question keeps its subject. Set `execConfirm`
         to `"off"` as well if the terminal should stay silent altogether.
 
@@ -255,8 +255,8 @@ in {
       type = lib.types.enum [ "on" "off" ];
       default = "off";
       description = ''
-        Whether the terminal-password path asks one `run? [y/N]` after showing
-        the resolved `execute:` line.
+        Whether the terminal-password path asks one `run this command? [y/N]`
+        after showing the resolved `execute:` line.
 
         Background: sudo resolves the command inside the same policy step that
         collects the password, and no plugin hook exists between resolution and
@@ -270,8 +270,9 @@ in {
           The one existing decision — the dialog, or sudo's own password — stays
           the only decision.
         - `on`: after sudo's own authentication has succeeded, the approval
-          plugin prints `execute:` and asks one `run? [y/N]` on the terminal via
-          sudo's conversation API. The decision then completes *after* the
+          plugin prints `execute:` and asks one `run this command? [y/N]` on the
+          terminal via sudo's conversation API. The question holds no value:
+          the command stands on the `execute:` row directly above it. The decision then completes *after* the
           resolved path is visible, which is the guarantee biometric mode gives,
           split into authenticate-then-confirm.
 

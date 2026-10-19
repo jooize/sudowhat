@@ -331,11 +331,12 @@ cannot do that (sudo resolves the command inside the same policy step that
 collects the password), so there `execute:` is a last look rather than a
 preview. Setting `services.sudowhat.execConfirm = "on"` closes the asymmetry by
 splitting the decision in two: after sudo has authenticated you, the approval
-plugin prints `execute:` and asks one `sudowhat: run? [y/N] ` on your terminal,
-so the last word is given with the resolved path on screen. No password ever
-touches plugin code: this is a confirmation, not an authentication. The prompt
-is tty-gated: no controlling terminal means no prompt, so piped and unattended
-invocations behave identically with the setting on or off. The name is
+plugin prints `execute:` and asks one `sudowhat: run this command? [y/N] ` on
+your terminal, below the `execute:` row it is about, so the last word is given
+with the resolved path on screen. No password ever touches plugin code: this is
+a confirmation, not an authentication. The prompt is tty-gated: no controlling
+terminal means no prompt, so piped and unattended invocations behave
+identically with the setting on or off. The name is
 literal: the question follows *your* authentication, so it is asked only when
 sudo actually collected a factor for that invocation, detected through the
 same in-process PAM marker policy deference uses (a caller can add the marker

@@ -134,7 +134,8 @@ switches, one per line family) rather than joining the `echo*` family, which
 names colour.
 
 Precedence against `exec_confirm` is the only interaction: with the confirm
-ceremony on, the resolved line is still printed before its `run? [y/N]`, even
+ceremony on, the resolved line is still printed before its
+`run this command? [y/N]`, even
 under `execDisplay = "off"`. Asking a human to approve a command sudowhat
 refuses to show them is the same empty ceremony the missing-`command`-key check
 already fails closed on. Mechanically the gate sits inside `emit_exec_line`,
@@ -320,10 +321,11 @@ hook.
 
 "Before the password" is not the only place a decision can complete, though.
 **`exec_confirm` (config key, DEFAULT OFF):** in terminal-password mode, after
-auth, the approval plugin prints `execute:` and then asks one `run? [y/N]` on
-the tty via sudo's conversation API. The decision then completes AFTER the
-resolved path is visible -- the same guarantee biometric mode gives, split
-into authenticate-then-confirm. No password ever touches plugin code; decline
+auth, the approval plugin prints `execute:` and then asks one
+`run this command? [y/N]` on the tty via sudo's conversation API (the question
+holds no value; the command stands on the `execute:` row above it). The
+decision then completes AFTER the resolved path is visible -- the same
+guarantee biometric mode gives, split into authenticate-then-confirm. No password ever touches plugin code; decline
 is a quiet abort (nothing wedges; re-run at will). Tty-gated: no controlling
 terminal means no prompt, so piped/automated invocations behave identically
 with the key on or off. Off (default) keeps the plain last-look.

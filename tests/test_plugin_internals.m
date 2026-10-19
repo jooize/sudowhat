@@ -7,6 +7,8 @@
  *   - sw_format_exec_line()    : the resolved execute: line, frame and value.
  *   - sw_confirm_*()           : the off-by-default exec_confirm gate and its
  *                                answer classifier.
+ *   - sw_ask_run_confirm()     : the question itself, through a stub
+ *                                conversation.
  *
  * Both are file-static, so we #include the .m directly to reach them without
  * modifying production code. This compiles the whole plugin into the test
@@ -398,36 +400,47 @@ static void test_sheet_style_for(void) {
        "later macOS stays on SystemHeadline");
 }
 
-/* A solo line with the target user names it in the label, since no run as: row
- * sits above it to say whose rights the command runs with. */
+/* A solo line with the target user brings its own run as: row, since none sits
+ * above it to say whose rights the command runs with. The name gets the row to
+ * itself: its length is not ours to choose, so nothing may follow it. */
 static void test_exec_line_solo_runas(void) {
     const char *path = "/bin/cat";
     char *argv[] = { (char *)"cat", (char *)"--", (char *)"/tmp/f", NULL };
 
     EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"jooize", NO, NO),
-       @"sudowhat: execute as jooize: /bin/cat -- /tmp/f\n",
-       "solo line names the target user in the label");
+       @"sudowhat: run as:     jooize\n"
+        "sudowhat: execute:    /bin/cat -- /tmp/f\n\n",
+       "solo line brings a run as: row, both in the shared gutter, then a blank");
     EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"root", NO, NO),
-       @"sudowhat: execute as root: /bin/cat -- /tmp/f\n",
-       "root is named too: the line never leaves the user implied");
+       @"sudowhat: run as:     root\n"
+        "sudowhat: execute:    /bin/cat -- /tmp/f\n\n",
+       "root is named too: the rows never leave the user implied");
 
-    /* Styled: the label bold, the user styled like the run as: value -- plain
-     * for root, yellow otherwise -- and outside the bold. */
+    /* The user ends its row: the line holding it holds nothing after it. */
+    NSArray<NSString *> *rows = [sw_format_exec_line(path, argv, SW_EXEC_SOLO,
+                                                     @"jooize", NO, NO)
+                                    componentsSeparatedByString:@"\n"];
+    OK([rows[0] hasSuffix:@"jooize"] &&
+       [rows[1] rangeOfString:@"jooize"].location == NSNotFound,
+       "the user name ends its own row, and the command row does not hold it");
+
+    /* Styled: the label bold, the user styled like the audit block's run as:
+     * value -- plain for root, yellow otherwise -- and outside the bold. */
     OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"jooize", YES, NO)
-           hasPrefix:@"sudowhat: \033[1mexecute as\033[0m \033[33mjooize\033[0m\033[1m:\033[0m "],
-       "styled: bold label, yellow non-root user");
+           hasPrefix:@"sudowhat: \033[1mrun as:\033[0m     \033[33mjooize\033[0m\n"
+                      "sudowhat: \033[1mexecute:\033[0m    "],
+       "styled: bold labels, yellow non-root user");
     OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"root", YES, NO)
-           hasPrefix:@"sudowhat: \033[1mexecute as\033[0m root\033[1m:\033[0m "],
-       "styled: root stays plain, as in the run as: row");
+           hasPrefix:@"sudowhat: \033[1mrun as:\033[0m     root\n"],
+       "styled: root stays plain, as in the audit block's run as: row");
 
     /* The name is escaped like every other value: a control byte cannot reach
-     * the terminal raw or end the line early. */
+     * the terminal raw or add a row. */
     NSString *hostile = sw_format_exec_line(path, argv, SW_EXEC_SOLO,
                                             @"ev\nil\033[2J", NO, NO);
     OK([hostile rangeOfString:@"\033"].location == NSNotFound &&
-       [[hostile substringToIndex:hostile.length - 1]
-           rangeOfString:@"\n"].location == NSNotFound,
-       "a control byte in the name is escaped, one line, no raw escape");
+       [hostile componentsSeparatedByString:@"\n"].count == 4,
+       "a control byte in the name is escaped: two rows, a blank, no raw escape");
 
     /* Only the solo frame names the user; a grouped line has run as: above. */
     EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, @"jooize", NO, NO),
@@ -665,6 +678,59 @@ static void test_confirm_answer_classifier(void) {
     OK(!sw_confirm_answer_is_yes("1"),     "1 declines");
 }
 
+/* The question sw_ask_run_confirm puts through sudo's conversation API, read
+ * back through a stub conversation. It holds no value: the command and the
+ * target user stand on the execute: and run as: rows written above it, so the
+ * question is one fixed line whatever is pending, and names its object with a
+ * noun. */
+static int sw_t_conv_calls;
+static int sw_t_conv_nmsgs;
+static int sw_t_conv_type;
+static char sw_t_conv_msg[256];
+static const char *sw_t_conv_answer;
+
+static int sw_t_conversation(int num_msgs,
+                             const struct sudo_conv_message msgs[],
+                             struct sudo_conv_reply replies[],
+                             struct sudo_conv_callback *callback) {
+    (void)callback;
+    sw_t_conv_calls++;
+    sw_t_conv_nmsgs = num_msgs;
+    sw_t_conv_type = msgs[0].msg_type;
+    snprintf(sw_t_conv_msg, sizeof sw_t_conv_msg, "%s", msgs[0].msg);
+    replies[0].reply = strdup(sw_t_conv_answer);
+    return 0;
+}
+
+static void test_confirm_question(void) {
+    sudo_conv_t saved = g_conversation;
+    g_conversation = sw_t_conversation;
+
+    sw_t_conv_calls = 0;
+    sw_t_conv_answer = "n";
+    OK(!sw_ask_run_confirm(), "an n answer declines");
+    OK(sw_t_conv_calls == 1 && sw_t_conv_nmsgs == 1,
+       "one conversation call carrying one message: the question");
+    OK(sw_t_conv_type == SUDO_CONV_PROMPT_ECHO_ON,
+       "the answer echoes: a y/N is not a secret");
+    EQ(@(sw_t_conv_msg), @"sudowhat: run this command? [y/N] ",
+       "the question names its object with a noun and holds no value");
+    /* No path, no user, no second label: after the provenance prefix the line
+     * is the fixed sentence, on one line. */
+    NSString *q = [[@(sw_t_conv_msg) substringFromIndex:strlen("sudowhat: ")]
+                      stringByReplacingOccurrencesOfString:@"[y/N]"
+                                                withString:@""];
+    OK([q rangeOfString:@"/"].location == NSNotFound &&
+       [q rangeOfString:@":"].location == NSNotFound &&
+       [q rangeOfString:@"\n"].location == NSNotFound,
+       "the question line holds no path, no labeled value, no second line");
+
+    sw_t_conv_answer = "y";
+    OK(sw_ask_run_confirm(), "a y answer to the same question confirms");
+
+    g_conversation = saved;
+}
+
 /* The PRE-AUTH block (user/directory/input) moved to the audit plugin
  * (plugin/sudowhat_audit.m) in v0.10.0, so the former emit_full_context /
  * echoCommand / echoColor tests are gone; what this plugin echoes is the
@@ -789,6 +855,7 @@ int main(void) {
         test_exec_confirm_default();
         test_confirm_decision();
         test_confirm_answer_classifier();
+        test_confirm_question();
         test_integrity_line_detection();
         test_defer_decision();
         test_policy_deference_defaults();

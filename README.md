@@ -91,9 +91,9 @@ literal `\n` in argv pose as a real newline.
   (the command as given), `PATH:` when the command is a bare name that
   `PATH` will resolve, and `execute:` (what sudo resolved). If an attacker's
   binary sits earlier in `PATH` than the real one, the hijack shows up as
-  `input:` and `execute:` simply disagreeing. Where `execute:` stands alone
-  (root called sudo, or sudo's password prompt came between), it names the
-  target user itself: `execute as jooize:`.
+  `input:` and `execute:` simply disagreeing. Where `execute:` stands apart
+  from that block (root called sudo, or sudo's password prompt came between),
+  it brings its own `run as:` row, directly above it.
 - **Console-only biometric**: an SSH or headless caller is never shown a
   dialog on your screen. It gets sudo's native password on its own terminal,
   or is denied.
@@ -234,7 +234,7 @@ runtime configuration to tamper with. The module options
 | `execDisplay` | `"on"` \| `"off"` (`"on"`) | The resolved `execute:` terminal line. |
 | `echoColor` | `"on"` \| `"off"` (`"on"`) | Role-highlighting of the `input:` / `execute:` values. `NO_COLOR` / `TERM=dumb` still force plain at runtime. |
 | `policyDeference` | `"on"` \| `"off"` (`"on"`) | Skip the console dialog when sudoers itself waived authentication (`NOPASSWD`, `!authenticate`, cached credential). |
-| `execConfirm` | `"on"` \| `"off"` (`"off"`) | On the terminal-password path, ask one `run? [y/N]` after authentication with the resolved `execute:` line visible. |
+| `execConfirm` | `"on"` \| `"off"` (`"off"`) | On the terminal-password path, ask one `run this command? [y/N]` after authentication, under the resolved `execute:` line. |
 
 ### Other configuration managers
 

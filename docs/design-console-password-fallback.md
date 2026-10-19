@@ -26,7 +26,7 @@ failed, locked out, or cancelled:
   — the same path a non-console caller takes — and the approval plugin steps
   aside once sudo has authenticated them. The full terminal ceremony is
   preserved: the audit block, the resolved `execute:` line, and (if enabled)
-  the `execConfirm` post-auth `run? [y/N]`.
+  the `execConfirm` post-auth `run this command? [y/N]`.
 
 Baked into the signed bundles at build time like every other setting.
 

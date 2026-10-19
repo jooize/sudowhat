@@ -548,9 +548,14 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
 #define SW_EXEC_PREFIX_SOLO_STYLED \
     "sudowhat: \033[1m" SW_EXEC_LABEL "\033[0m "
 
-/* The solo frame's label when it names the target user: "execute as <user>:"
- * (see sw_format_exec_line). */
-#define SW_EXEC_AS_LABEL "execute as"
+/* The run as: row a solo line brings along when it names the target user (see
+ * sw_format_exec_line): the audit block's own label, in the same 12-col gutter,
+ * so the pair reads as the same table the audit block starts. */
+#define SW_RUNAS_LABEL "run as:"
+#define SW_RUNAS_GAP   "     "  /* pads "run as:" (7) out to the 12-col gutter */
+#define SW_RUNAS_PREFIX "sudowhat: " SW_RUNAS_LABEL SW_RUNAS_GAP
+#define SW_RUNAS_PREFIX_STYLED \
+    "sudowhat: \033[1m" SW_RUNAS_LABEL "\033[0m" SW_RUNAS_GAP
 
 /* Which of those two frames an emit site asks for.
  *
@@ -563,8 +568,7 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
  * or a confirm question -- starts a new one. The blank is this line's because
  * it is always the table's last row; no other line knows the table has ended.
  *
- * SOLO: the line stands alone. The gutter is dropped and no blank line follows.
- * Two kinds of site:
+ * SOLO: the line stands apart from the audit block. Two kinds of site:
  *   - the root bypass: PROVABLY alone -- the audit plugin exempts uid 0, so no
  *     input: block precedes it, and verify: is raised only on the console
  *     biometric path, which the root bypass returns before reaching;
@@ -572,10 +576,14 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
  *     invocation (the pam_sudowhat marker is present): sudo's own prompt sits
  *     between the audit block and this line, so it no longer belongs to that
  *     table (see sw_step_aside_layout).
- * A column aligns siblings; with no siblings, a label floating four spaces from
- * its value reads as a rendering bug rather than as alignment, and a blank line
- * after a single line splits nothing. Same unpadded shape the Linux port prints
- * for a lone line.
+ * With no run as: row above it, a solo line given the target user brings that
+ * row along: run as: then execute:, a two-row table in the shared gutter,
+ * closed by one blank line like the grouped table. Given no user, it is a lone
+ * line: the gutter is dropped and no blank line follows, since a column aligns
+ * siblings, and with none a label floating four spaces from its value reads as
+ * a rendering bug rather than as alignment, while a blank line after a single
+ * line splits nothing. Same unpadded shape the Linux port prints for a lone
+ * line.
  *
  * One accepted edge: a NON-root run on a build with auditDisplay=off is alone
  * too, and still gets the grouped form and its blank line. This bundle cannot
@@ -743,11 +751,13 @@ static NSString *sw_runas_name(char * const command_info[]) {
  *
  * runas names the target user, and only the solo frame shows it: a solo line
  * has no run as: row above it (none at all for a root caller, whom the audit
- * bundle exempts; a password prompt between for the step-aside), so it says
- * whose rights the command runs with itself -- "execute as jooize:". The name
- * is escaped like the run as: row and styled like its value: plain for root,
- * yellow otherwise, outside the label's bold. A grouped line ignores it, and a
- * solo line without one keeps the bare "execute:" label.
+ * bundle exempts; a password prompt between for the step-aside), so it prints
+ * that row itself, directly above execute:. The name gets a row of its own
+ * because its length is not ours to choose: a value like that ends its line,
+ * so nothing (least of all the command) may follow it. It is escaped and
+ * styled exactly as the audit block's run as: value: plain for root, yellow
+ * otherwise, outside the label's bold. A grouped line ignores it, and a solo
+ * line without one keeps the bare "execute:" line.
  *
  * Returns nil when there is no path or the renderers produced nothing, which
  * makes "show nothing" a plain nil check at the write site rather than a
@@ -766,12 +776,10 @@ static NSString *sw_format_exec_line(const char *path,
         if (frameColor && ![user isEqualToString:@"root"]) {
             user = [NSString stringWithFormat:@"\033[33m%@\033[0m", user];
         }
-        return [NSString stringWithFormat:@"%@%@%@%@\n",
-                frameColor ? @"sudowhat: \033[1m" SW_EXEC_AS_LABEL "\033[0m "
-                           : @"sudowhat: " SW_EXEC_AS_LABEL " ",
-                user,
-                frameColor ? @"\033[1m:\033[0m " : @": ",
-                value];
+        /* Two rows make a table, so it closes with one blank line. */
+        return [NSString stringWithFormat:@"%s%@\n%s%@\n\n",
+                frameColor ? SW_RUNAS_PREFIX_STYLED : SW_RUNAS_PREFIX, user,
+                frameColor ? SW_EXEC_PREFIX_STYLED : SW_EXEC_PREFIX, value];
     }
     const char *prefix;
     if (layout == SW_EXEC_SOLO) {
@@ -853,7 +861,7 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
  * to execConfirm and SW_ACOL_ to echoColor.
  *
  *   on  - (default) every informational emit site prints: the root bypass (the
- *         solo line), the non-console step-aside last-look, the
+ *         solo rows), the non-console step-aside last-look, the
  *         policy-deference skip, and the console biometric pre-sheet line.
  *   off - none of them print. The bundle still loads, still verifies, still
  *         gates exactly as before -- it just shows nothing. Same spirit as the
@@ -867,16 +875,16 @@ static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
  *
  * PRECEDENCE over execConfirm, the one subtlety. This knob silences the
  * informational echo only. With execConfirm = on, the confirm ceremony on the
- * step-aside path STILL prints the resolved line before its `run? [y/N]`: a
- * y/N about a command the plugin refuses to show would be empty ceremony. That
- * is the same principle sw_step_aside_allow already applies to a missing
- * command key, where it fails closed instead of asking about nothing --
- * extended here from "cannot show" to "configured not to show". Mechanically,
- * the confirm branch calls write_exec_line_to_tty directly, below this gate,
- * while every informational site goes through emit_exec_line, which carries
- * it. An admin who wants neither the line nor the question turns execConfirm
- * off as well; execDisplay = off alone means "do not narrate", not "ask me
- * blind".
+ * step-aside path STILL prints the resolved line before its
+ * `run this command? [y/N]`: a y/N about a command the plugin refuses to show
+ * would be empty ceremony. That is the same principle sw_step_aside_allow
+ * already applies to a missing command key, where it fails closed instead of
+ * asking about nothing -- extended here from "cannot show" to "configured not
+ * to show". Mechanically, the confirm branch calls write_exec_line_to_tty
+ * directly, below this gate, while every informational site goes through
+ * emit_exec_line, which carries it. An admin who wants neither the line nor
+ * the question turns execConfirm off as well; execDisplay = off alone means
+ * "do not narrate", not "ask me blind".
  *
  * The runtime gates are untouched in both modes: /dev/tty only, no stderr
  * fallback, and nothing at all without a controlling terminal.
@@ -986,9 +994,10 @@ static BOOL sw_defer_decision(BOOL deferenceOn, BOOL markerPresent,
  *   off - (default) the terminal-password path prints the execute: line and
  *         allows. A last-look, not a decision.
  *   on  - the terminal-password path prints the execute: line and then asks one
- *         `run? [y/N]` on the tty via sudo's conversation API, so the decision
- *         completes AFTER the resolved path is visible -- the same guarantee
- *         biometric mode gives, split into authenticate-then-confirm.
+ *         `run this command? [y/N]` on the tty via sudo's conversation API,
+ *         so the decision completes AFTER the resolved path is visible -- the
+ *         same guarantee biometric mode gives, split into
+ *         authenticate-then-confirm.
  *
  * AUTHENTICATE-then-confirm, literally: the question is asked only when sudo
  * actually ran the PAM auth stack for THIS invocation, i.e. when a human just
@@ -1074,12 +1083,12 @@ static BOOL sw_confirm_decision(BOOL confirmOn, BOOL haveTty,
     return NO;
 }
 
-/* Classify the answer to `run? [y/N]`. Accepts only an affirmative: "y" or
- * "yes", any case, with surrounding whitespace (including the newline a
- * conversation implementation may leave on) trimmed. Everything else -- "n",
- * empty, garbage, NULL -- is a decline, which is the whole point of a [y/N]
- * default: a stray Enter must never approve. Pure, so the classification is
- * unit-testable without a tty. */
+/* Classify the answer to `run this command? [y/N]`. Accepts only an
+ * affirmative: "y" or "yes", any case, with surrounding whitespace (including
+ * the newline a conversation implementation may leave on) trimmed. Everything
+ * else -- "n", empty, garbage, NULL -- is a decline, which is the whole point
+ * of a [y/N] default: a stray Enter must never approve. Pure, so the
+ * classification is unit-testable without a tty. */
 static BOOL sw_confirm_answer_is_yes(const char *reply) {
     if (reply == NULL) return NO;
 
@@ -1120,18 +1129,28 @@ static BOOL sw_have_controlling_tty(const char *ttyPath) {
  * provenance marker every other line of ours carries -- this question lands in
  * the middle of somebody else's output and has to say who is asking.
  *
+ * The question holds no value. Everything it decides about already stands on
+ * labeled rows directly above it -- execute: always, with run as: beside it
+ * (the audit block's row, or the solo frame's own) -- so it names its object
+ * with a noun, "this command", and stays one fixed line however long the
+ * command is. The conversation API takes the prompt as one string and sudo
+ * prints it as given, so the rows cannot travel in it; they go to /dev/tty
+ * first (write_exec_line_to_tty), and this is the short question below them.
+ *
  * The conversation contract puts the reply buffer in the caller's hands, so it
  * is freed here. Returns NO on a NULL conversation pointer or a conversation
  * error as well as on a real decline: the caller treats all three the same way
  * (a quiet abort), because a question that could not be asked has not been
  * answered. */
+#define SW_CONFIRM_QUESTION "sudowhat: run this command? [y/N] "
+
 static BOOL sw_ask_run_confirm(void) {
     if (g_conversation == NULL) return NO;
 
     struct sudo_conv_message msg = {
         .msg_type = SUDO_CONV_PROMPT_ECHO_ON,
         .timeout  = 0,
-        .msg      = "sudowhat: run? [y/N] ",
+        .msg      = SW_CONFIRM_QUESTION,
     };
     struct sudo_conv_reply reply = { .reply = NULL };
 
@@ -1174,14 +1193,15 @@ static BOOL sw_ask_run_confirm(void) {
  *
  * markerPresent means sudo ran its authentication stack for this invocation,
  * and a factor collected on the terminal leaves its prompt ("Password:")
- * between the audit block and this line: the line stands alone -> SOLO. With
- * the marker absent (NOPASSWD, a live timestamp cache), nothing was asked, so
- * the line lands directly under the audit block as its last row -> GROUPED.
+ * between the audit block and this line, so it no longer belongs to that table
+ * and brings its own run as: row -> SOLO. With the marker absent (NOPASSWD, a
+ * live timestamp cache), nothing was asked, so the line lands directly under
+ * the audit block as its last row -> GROUPED.
  *
  * Accepted edge: a factor that prints nothing on the terminal (Touch ID through
  * pam_tid) also sets the marker, so that line is SOLO though it sits under the
- * table. The plugin cannot see what PAM printed, and a lone-looking line under
- * a table misreads less than a table row after a prompt. */
+ * table, repeating run as:. The plugin cannot see what PAM printed, and a
+ * repeated row under a table misreads less than a table row after a prompt. */
 static sw_exec_layout sw_step_aside_layout(BOOL markerPresent) {
     return markerPresent ? SW_EXEC_SOLO : SW_EXEC_GROUPED;
 }
@@ -1498,14 +1518,14 @@ static int sudowhat_check(char * const command_info[],
              * controlling terminal, in which case this is a no-op -- but when
              * one IS present (a root shell in a terminal), the ceremony should
              * look the same as everywhere else. The audit plugin exempts root
-             * from its block, so this is the one line root gets; that is fine,
-             * because root is not being gated here, only informed.
+             * from its block, so these are the only rows root gets; that is
+             * fine, because root is not being gated here, only informed.
              *
              * SW_EXEC_SOLO for exactly that reason: no input: block above it
              * (audit exempts uid 0) and no verify: line (biometric is
-             * console-only, and this branch returns before it), so there is
-             * nothing to align with and the label keeps a single space. This is
-             * the ONE site where that holds -- see sw_exec_layout. */
+             * console-only, and this branch returns before it), so no run as:
+             * row precedes it and the line brings its own -- see
+             * sw_exec_layout. */
             emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_SOLO,
                            sw_runas_name(command_info), sw_color_allowed());
             return 1;

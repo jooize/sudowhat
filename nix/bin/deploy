@@ -42,8 +42,9 @@ done
 if [[ -t 1 ]]; then
   C_OFF=$'\033[0m'; C_B=$'\033[1m'; C_DIM=$'\033[2m'
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_CYN=$'\033[36m'
+  C_BLU=$'\033[1;34m'
 else
-  C_OFF=; C_B=; C_DIM=; C_RED=; C_GRN=; C_YEL=; C_CYN=
+  C_OFF=; C_B=; C_DIM=; C_RED=; C_GRN=; C_YEL=; C_CYN=; C_BLU=
 fi
 
 # macOS-only project (Touch ID / LAContext sudo plugin): the system flake is
@@ -105,25 +106,30 @@ pinned_rev="$(printf '%s\n' "${pin_line}" | grep -oE 'rev=[0-9a-f]{40}' | head -
   exit 1
 }
 
-# Header (mirrors deploy-plan). C_DIM is the dim ATTRIBUTE and does not reset the
-# foreground, so reset with C_OFF before each colour switch or it bleeds.
-printf '%sTarget:%s  %s%s%s  %s(%s)%s\n' \
-  "$C_DIM" "$C_OFF" "$C_CYN" "${target_tag}" "$C_OFF" \
-  "$C_DIM" "${target_rev:0:10}" "$C_OFF"
+# Header. Each row leads with what is fixed-width (the label, a 10-char rev)
+# and ends with the one value whose length git or the flake chooses (a tag, a
+# ref, a path), so nothing follows such a value on its line; the flake path
+# takes a row of its own. Same facts as deploy-plan's header. C_DIM is the dim
+# ATTRIBUTE and does not reset the foreground, so reset with C_OFF before each
+# colour switch or it bleeds.
+printf '%sTarget:%s  %s%s%s  %s%s%s\n' \
+  "$C_DIM" "$C_OFF" "$C_CYN" "${target_rev:0:10}" "$C_OFF" \
+  "$C_CYN" "${target_tag}" "$C_OFF"
 printf '%sHEAD:%s    %s%s%s' "$C_DIM" "$C_OFF" "$C_CYN" "${head:0:10}" "$C_OFF"
 if [[ "${head}" == "${target_rev}" ]]; then
-  printf '   %s(%s== %s%s)%s\n' "$C_DIM" "$C_OFF$C_GRN" "${target_tag}" "$C_OFF$C_DIM" "$C_OFF"
+  printf '  %s(%sat the target%s)%s\n' "$C_DIM" "$C_OFF$C_GRN" "$C_OFF$C_DIM" "$C_OFF"
 else
   ahead="$(git rev-list --count "${target_rev}..HEAD" 2>/dev/null || echo '?')"
-  printf '   %s(%s%s commit(s) after %s -- unreleased%s)%s\n' \
-    "$C_DIM" "$C_OFF$C_YEL" "${ahead}" "${target_tag}" "$C_OFF$C_DIM" "$C_OFF"
+  printf '  %s(%s%s commit(s) after the target -- unreleased%s)%s\n' \
+    "$C_DIM" "$C_OFF$C_YEL" "${ahead}" "$C_OFF$C_DIM" "$C_OFF"
 fi
-printf '%sPinned:%s  %s%s%s  %s%s  (%s)%s\n' \
+printf '%sPinned:%s  %s%s%s  %s%s%s\n' \
   "$C_DIM" "$C_OFF" "$C_CYN" "${pinned_rev:0:10}" "$C_OFF" \
-  "$C_DIM" "${pin_ref_kv:-ref=?}" "${FLAKE}" "$C_OFF"
+  "$C_DIM" "${pin_ref_kv:-ref=?}" "$C_OFF"
+printf '%sFlake:%s   %s%s%s\n' "$C_DIM" "$C_OFF" "$C_CYN" "${FLAKE}" "$C_OFF"
 if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
-  printf '%sWARNING: tag %s != its nix/package.nix version %s.%s\n' \
-    "$C_YEL$C_B" "${target_tag}" "${tag_version}" "$C_OFF"
+  printf '%sWARNING: nix/package.nix at the target tag declares version %s%s\n' \
+    "$C_YEL$C_B" "${tag_version}" "$C_OFF"
 fi
 printf '\n'
 
@@ -141,7 +147,8 @@ subst="s{\\Q${pin_ref_kv}\\E}{ref=refs/tags/${target_tag}}g; s{\\Qrev=${pinned_r
 PIN_CMD=(perl -i -pe "${subst}" -- "${FLAKE}")
 REBUILD_CMD=(darwin-rebuild switch --flake "$(dirname "${FLAKE}")")
 
-printf '%sWill run as root:%s\n' "$C_B" "$C_OFF"
+# No label above the two lines: the question below names them ("the lines
+# above"), and the leading sudo already says where root begins.
 printf '  %ssudo' "$C_CYN"; printf ' %q' "${PIN_CMD[@]}"; printf '%s\n' "$C_OFF"
 printf '  %ssudo' "$C_CYN"; printf ' %q' "${REBUILD_CMD[@]}"; printf '%s\n' "$C_OFF"
 printf '\n'
@@ -157,7 +164,11 @@ if (( ! YES )); then
       "$C_RED" "$C_OFF" >&2
     exit 2
   fi
-  printf '%sProceed? [y/N]%s ' "$C_B" "$C_OFF"
+  # The question holds no value: the commands it decides about stand on the
+  # lines directly above it, so it names them with a noun. Bold carries the
+  # sentence; the two keys are bold blue, each re-opening bold after its reset.
+  printf '%srun the lines above as root? [%sy%s%s/%sN%s%s]%s ' \
+    "$C_B" "$C_BLU" "$C_OFF" "$C_B" "$C_BLU" "$C_OFF" "$C_B" "$C_OFF"
   read -r answer
   case "${answer}" in
     y|Y|yes|YES) ;;

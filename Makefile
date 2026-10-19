@@ -67,12 +67,12 @@ endif
 
 # Master switch for the post-resolution run confirmation: "off" (default) prints
 # the resolved `execute:` line on the terminal-password path and allows, a
-# last-look before exec; "on" additionally asks one `run? [y/N]` there via sudo's
-# conversation API, so the decision completes after the resolved path is visible
-# -- the same guarantee biometric mode gives. Tty-gated either way, so a piped or
-# automated invocation behaves identically with it on or off, and asked only when
-# sudo actually ran the PAM auth stack for that invocation, so a NOPASSWD caller
-# is never re-gated. The nix module
+# last-look before exec; "on" additionally asks one `run this command? [y/N]`
+# there via sudo's conversation API, so the decision completes after the
+# resolved path is visible -- the same guarantee biometric mode gives. Tty-gated
+# either way, so a piped or automated invocation behaves identically with it on
+# or off, and asked only when sudo actually ran the PAM auth stack for that
+# invocation, so a NOPASSWD caller is never re-gated. The nix module
 # exposes the same names via services.sudowhat.execConfirm. Passed as a bare
 # token to -DSW_EXEC_CONFIRM. An unknown value normalizes to "off" with a
 # warning, rather than failing.
@@ -303,9 +303,11 @@ test: install
 # Each binary prints its own TAP 14 stream on stdout (see tests/sw_test.h).
 # test_escape_core is the cross-language guard: it links the Rust staticlib and
 # asserts it escapes byte-identically to the ObjC PromptFormatter.
+# tests/test_deploy.bash is a script, not a build product: it runs nix/bin/deploy
+# against a scratch repo and flake and prints the same TAP 14 stream.
 TEST_BINARIES = build/test_prompt_formatter build/test_plugin_internals \
                 build/test_escape_core build/test_audit_internals \
-                build/test_sigverifier
+                build/test_sigverifier tests/test_deploy.bash
 
 test-unit: $(TEST_BINARIES)
 	@for t in $(TEST_BINARIES); do $$t || exit 1; done
