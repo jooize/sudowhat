@@ -342,7 +342,8 @@ auth, the approval plugin prints `execute:` and then asks one
 holds no value; the command stands on the `execute:` row above it). The
 decision then completes AFTER the resolved path is visible -- the same
 guarantee biometric mode gives, split into authenticate-then-confirm. No password ever touches plugin code; decline
-is a quiet abort (nothing wedges; re-run at will). Tty-gated: no controlling
+is a quiet abort, one yellow `sudowhat: aborted; command not run` line
+(nothing wedges; re-run at will). Tty-gated: no controlling
 terminal means no prompt, so piped/automated invocations behave identically
 with the key on or off. Off (default) keeps the plain last-look.
 

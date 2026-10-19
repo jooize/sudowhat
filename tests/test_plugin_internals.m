@@ -704,6 +704,31 @@ static int sw_t_conversation(int num_msgs,
     return 0;
 }
 
+/* A declined confirm says so in the house decline shape: lowercase,
+ * `aborted; <what stays unchanged>`, yellow on a terminal and plain text in
+ * errstr. */
+static void test_decline_line(void) {
+    EQ(@(sw_decline_line(NO)), @"sudowhat: aborted; command not run",
+       "the decline line names what did not happen");
+    EQ(@(sw_decline_line(YES)), @"\033[33msudowhat: aborted; command not run\033[0m",
+       "on a terminal the whole line is yellow");
+
+    sudo_printf_t saved = g_plugin_printf;
+    g_plugin_printf = NULL;
+    const char *err = NULL;
+    int saved_err = dup(STDERR_FILENO);
+    int devnull = open("/dev/null", O_WRONLY);
+    dup2(devnull, STDERR_FILENO);
+    set_decline(&err);
+    fflush(stderr);
+    dup2(saved_err, STDERR_FILENO);
+    close(devnull);
+    close(saved_err);
+    g_plugin_printf = saved;
+    OK(err != NULL && strcmp(err, "sudowhat: aborted; command not run") == 0,
+       "errstr carries the plain decline line, never an escape byte");
+}
+
 static void test_confirm_question(void) {
     sudo_conv_t saved = g_conversation;
     g_conversation = sw_t_conversation;
@@ -865,6 +890,7 @@ int main(void) {
         test_confirm_decision();
         test_confirm_answer_classifier();
         test_confirm_question();
+        test_decline_line();
         test_integrity_line_detection();
         test_defer_decision();
         test_policy_deference_defaults();

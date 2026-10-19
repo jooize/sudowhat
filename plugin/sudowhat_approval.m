@@ -380,6 +380,35 @@ static BOOL sw_color_allowed(void) {
     return YES;
 }
 
+/* The decline line (terminal-output): lowercase, `aborted; <what stays
+ * unchanged>`, `aborted` because a [y/N] was answered after looking, and
+ * yellow on a terminal -- a decline is a normal outcome, not an error. The
+ * state half names what did not happen: the command. Pure, so both renderings
+ * are testable. */
+#define SW_DECLINE_TEXT "sudowhat: aborted; command not run"
+
+static const char *sw_decline_line(BOOL color) {
+    return color ? "\033[33m" SW_DECLINE_TEXT "\033[0m" : SW_DECLINE_TEXT;
+}
+
+/* A decline goes out like an error (the deny return needs an errstr, and macOS
+ * sudo prints none of its own; see set_errstr), but errstr keeps the plain
+ * text, since a sudo that prints or logs it would show escape bytes raw. The
+ * yellow goes only into the line printed here, when stderr -- where
+ * plugin_printf's error channel writes -- is a terminal and color is
+ * allowed. */
+static void set_decline(const char **errstr) {
+    snprintf(g_errbuf, sizeof(g_errbuf), "%s", SW_DECLINE_TEXT);
+    if (errstr) *errstr = g_errbuf;
+    const char *line = sw_decline_line(sw_color_allowed() && isatty(STDERR_FILENO));
+    if (g_plugin_printf) {
+        g_plugin_printf(SUDO_CONV_ERROR_MSG, "%s\n", line);
+    } else {
+        fprintf(stderr, "%s\n", line);
+        fflush(stderr);
+    }
+}
+
 /* Write the verify-code line straight to the controlling terminal.
  *
  * The code is an out-of-band trust signal the user compares against the
@@ -1271,7 +1300,7 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
      * and the caller can simply run the command again. */
     if (!sw_ask_run_confirm(layout == SW_EXEC_SOLO)) {
         close(preFd);
-        set_errstr(errstr, "sudowhat: run not confirmed");
+        set_decline(errstr);
         return 0;
     }
 

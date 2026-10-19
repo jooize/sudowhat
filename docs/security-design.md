@@ -345,8 +345,8 @@ authentication for is therefore never re-gated (a `NOPASSWD` rule,
 `Defaults !authenticate`, or, within a non-zero
 `services.sudowhat.authCacheMinutes` window, a still-cached credential),
 terminal or not; at the default timeout of `0` every command authenticates and
-so every command is asked. Declining is a quiet abort (nothing wedges; re-run
-at will). It applies to the terminal-password path only, it is baked into the
+so every command is asked. Declining is a quiet abort, one yellow
+`sudowhat: aborted; command not run` line (nothing wedges; re-run at will). It applies to the terminal-password path only, it is baked into the
 signed bundle at build time like every other sudowhat setting, and the default
 `"off"` keeps the plain last look.
 
