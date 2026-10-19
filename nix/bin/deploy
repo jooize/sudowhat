@@ -121,30 +121,44 @@ pinned_rev="$(printf '%s\n' "${pin_line}" | grep -oE 'rev=[0-9a-f]{40}' | head -
 # takes a row of its own. Same facts as deploy-plan's header. C_DIM is the dim
 # ATTRIBUTE and does not reset the foreground, so reset with C_OFF before each
 # colour switch or it bleeds.
-printf '%sTarget:%s  %s%s%s  %s%s%s\n' \
-  "$C_DIM" "$C_OFF" "$C_CYN" "${target_rev:0:10}" "$C_OFF" \
-  "$C_CYN" "${target_tag}" "$C_OFF"
-printf '%sHEAD:%s    %s%s%s' "$C_DIM" "$C_OFF" "$C_CYN" "${head:0:10}" "$C_OFF"
-if [[ "${head}" == "${target_rev}" ]]; then
-  printf '  %s(%sat the target%s)%s\n' "$C_DIM" "$C_OFF$C_GRN" "$C_OFF$C_DIM" "$C_OFF"
-else
-  ahead="$(git rev-list --count "${target_rev}..HEAD" 2>/dev/null || echo '?')"
-  printf '  %s(%s%s commit(s) after the target -- unreleased%s)%s\n' \
-    "$C_DIM" "$C_OFF$C_YEL" "${ahead}" "$C_OFF$C_DIM" "$C_OFF"
-fi
-printf '%sPinned:%s  %s%s%s  %s%s%s\n' \
-  "$C_DIM" "$C_OFF" "$C_CYN" "${pinned_rev:0:10}" "$C_OFF" \
-  "$C_DIM" "${pin_ref_kv:-ref=?}" "$C_OFF"
-printf '%sFlake:%s   %s%s%s\n' "$C_DIM" "$C_OFF" "$C_CYN" "${FLAKE}" "$C_OFF"
-if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
-  printf '%sWARNING: nix/package.nix at the target tag declares version %s%s\n' \
-    "$C_YEL$C_B" "${tag_version}" "$C_OFF"
-fi
-printf '\n'
+print_header() {
+  printf '%sTarget:%s  %s%s%s  %s%s%s\n' \
+    "$C_DIM" "$C_OFF" "$C_CYN" "${target_rev:0:10}" "$C_OFF" \
+    "$C_CYN" "${target_tag}" "$C_OFF"
+  printf '%sHEAD:%s    %s%s%s' "$C_DIM" "$C_OFF" "$C_CYN" "${head:0:10}" "$C_OFF"
+  if [[ "${head}" == "${target_rev}" ]]; then
+    printf '  %s(%sat the target%s)%s\n' "$C_DIM" "$C_OFF$C_GRN" "$C_OFF$C_DIM" "$C_OFF"
+  else
+    local ahead
+    ahead="$(git rev-list --count "${target_rev}..HEAD" 2>/dev/null || echo '?')"
+    printf '  %s(%s%s commit(s) after the target -- unreleased%s)%s\n' \
+      "$C_DIM" "$C_OFF$C_YEL" "${ahead}" "$C_OFF$C_DIM" "$C_OFF"
+  fi
+  printf '%sPinned:%s  %s%s%s  %s%s%s\n' \
+    "$C_DIM" "$C_OFF" "$C_CYN" "${pinned_rev:0:10}" "$C_OFF" \
+    "$C_DIM" "${pin_ref_kv:-ref=?}" "$C_OFF"
+  printf '%sFlake:%s   %s%s%s\n' "$C_DIM" "$C_OFF" "$C_CYN" "${FLAKE}" "$C_OFF"
+  if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
+    printf '%sWARNING: nix/package.nix at the target tag declares version %s%s\n' \
+      "$C_YEL$C_B" "${tag_version}" "$C_OFF"
+  fi
+  printf '\n'
+}
 
 if [[ "${pinned_rev}" == "${target_rev}" ]]; then
+  print_header
   printf '%sAlready in sync. Nothing to deploy.%s\n' "$C_GRN$C_B" "$C_OFF"
   exit 0
+fi
+
+# Off a terminal there is nobody to answer the question, so the run refuses
+# here, before any row: the header and the command lines are the question's
+# rows, and a refusal prints none (terminal-output). --dry-run asks nothing,
+# and --yes has answered already.
+if (( ! DRY_RUN && ! YES )) && [[ ! -t 0 ]]; then
+  printf '%serror: no tty for confirmation -- pass --yes to proceed non-interactively.%s\n' \
+    "$E_RED" "$E_OFF" >&2
+  exit 2
 fi
 
 # Literal ref+rev swap via perl. \Q..\E quotemeta-escapes the pattern (so the
@@ -156,8 +170,12 @@ subst="s{\\Q${pin_ref_kv}\\E}{ref=refs/tags/${target_tag}}g; s{\\Qrev=${pinned_r
 PIN_CMD=(perl -i -pe "${subst}" -- "${FLAKE}")
 REBUILD_CMD=(darwin-rebuild switch --flake "$(dirname "${FLAKE}")")
 
-# No label above the two lines: the question below names them ("the lines
-# above"), and the leading sudo already says where root begins.
+# With --yes these rows are the record of what ran; otherwise they are the
+# question's rows. No label above the two command lines: the question names
+# them ("the lines above"), they count as its rows, and nothing but the
+# gate's blank line stands between them and it. The leading sudo already
+# says where root begins.
+print_header
 printf '  %ssudo' "$C_CYN"; printf ' %q' "${PIN_CMD[@]}"; printf '%s\n' "$C_OFF"
 printf '  %ssudo' "$C_CYN"; printf ' %q' "${REBUILD_CMD[@]}"; printf '%s\n' "$C_OFF"
 printf '\n'
@@ -167,22 +185,37 @@ if (( DRY_RUN )); then
   exit 0
 fi
 
+# A decline is a normal outcome with its own quiet line: yellow, the verb for
+# a [y/N] answered after looking, and what stays as it was. Exit 2.
+decline() {
+  printf '%saborted; flake pin unchanged%s\n' "$C_YEL" "$C_OFF"
+  exit 2
+}
+
 if (( ! YES )); then
-  if [[ ! -t 0 ]]; then
-    printf '%serror: no tty for confirmation -- pass --yes to proceed non-interactively.%s\n' \
-      "$E_RED" "$E_OFF" >&2
-    exit 2
-  fi
-  # The question holds no value: the commands it decides about stand on the
-  # lines directly above it, so it names them with a noun. Bold carries the
-  # sentence; the two keys are bold blue, each re-opening bold after its reset.
-  printf '%srun the lines above as root? [%sy%s%s/%sN%s%s]%s ' \
+  # One verb and its noun, holding no value: the commands it decides about
+  # are the lines directly above it. Bold carries the sentence; the two keys
+  # are bold blue, each re-opening bold after its reset. The answer is typed
+  # at the end of the question line, after one space.
+  printf -v question '%srun the lines above? [%sy%s%s/%sN%s%s]%s ' \
     "$C_B" "$C_BLU" "$C_OFF" "$C_B" "$C_BLU" "$C_OFF" "$C_B" "$C_OFF"
-  read -r answer
-  case "${answer}" in
-    y|Y|yes|YES) ;;
-    *) printf '%sAborted.%s\n' "$C_YEL" "$C_OFF"; exit 2 ;;
-  esac
+  printf '%s' "${question}"
+  while :; do
+    # End of input never acts: a closed terminal is not an answer. The
+    # cursor still waits on the question line, so end it first.
+    if ! IFS= read -r answer; then
+      printf '\n'
+      decline
+    fi
+    case "${answer}" in
+      y|Y|yes|YES) break ;;
+      ''|n|N|no|NO) decline ;;
+    esac
+    # Anything else is not acted on: say so, never echo what was typed (a
+    # pasted control sequence printed raw could rewrite the question), and
+    # ask again on a fresh question line.
+    printf '%snot an answer%s\n%s' "$C_YEL" "$C_OFF" "${question}"
+  done
 fi
 
 sudo "${PIN_CMD[@]}"

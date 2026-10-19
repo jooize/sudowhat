@@ -102,6 +102,9 @@ rc=0
 (cd -- "${repo}" && /bin/bash "${DEPLOY}") </dev/null >"${out}" 2>&1 || rc=$?
 ok "off a terminal it declines with exit 2" test "${rc}" -eq 2
 ok "off a terminal it prints no question" lacks "$(cat -- "${out}")" "[y/N]"
+# A refusal prints no rows: neither the header nor the command lines.
+ok "off a terminal it prints no header row" lacks "$(cat -- "${out}")" "HEAD:"
+ok "off a terminal it prints no command line" lacks "$(cat -- "${out}")" "  sudo "
 
 # The question's only arguments are colour variables, so no value can reach
 # it. Checked on the source, which every runner can read.
@@ -111,17 +114,18 @@ only_colours() { # <the printf's argument line>
   [[ -n "$1" ]] &&
     test -z "$(printf '%s\n' "$1" | tr ' ' '\n' | grep -vE '^("\$C_[A-Z]+")?$')"
 }
-q_args="$(grep -A1 -F "run the lines above as root? [" "${DEPLOY}" | tail -n1 || true)"
+q_args="$(grep -A1 -F "run the lines above? [" "${DEPLOY}" | tail -n1 || true)"
 ok "the question's printf takes only colour arguments" only_colours "${q_args}"
 
 # On a terminal: answer n, then read the question line back. The line starts
 # with the question; after it the terminal may show the echoed answer, or the
 # decline line when the typed-ahead answer was echoed before the question.
-QUESTION="run the lines above as root? [y/N] "
+QUESTION="run the lines above? [y/N] "
+DECLINE="aborted; flake pin unchanged"
 bare_question() { # <the line holding [y/N]>
   [[ "$1" == "${QUESTION}"* ]] || return 1
   case "${1#"${QUESTION}"}" in
-    ''|n|Aborted.) return 0 ;;
+    ''|n|"${DECLINE}") return 0 ;;
   esac
   return 1
 }
@@ -136,11 +140,28 @@ if (( pty_ok )); then
   ok "on a terminal the question is asked" test -n "${q}"
   ok "the question line holds no value" bare_question "${q}"
   ok "an n answer aborts" lacks "${plain}" "stub sudo"
+  ok "and says so in the decline shape" grep -qF -- "${DECLINE}" <<<"${plain}"
   ok "and the flake keeps its pin" grep -qF "rev=${old_rev}" "${NIX_DARWIN_FLAKE}"
+
+  # An answer that is not one is not acted on: one "not an answer" line,
+  # the question again, and the next answer decides.
+  (cd -- "${repo}" && printf 'x\nn\n' | script -q /dev/null /bin/bash "${DEPLOY}") \
+    >"${out}" 2>&1 || true
+  plain="$(sed -e $'s/\033\\[[0-9;]*m//g' -e $'s/\r$//' -- "${out}")"
+  ok "an unknown answer says it is not one" grep -qx 'not an answer' <<<"${plain}"
+  ok "and asks again" test "$(grep -cF '[y/N]' <<<"${plain}")" -eq 2
+  ok "then the n declines" grep -qF -- "${DECLINE}" <<<"${plain}"
+
+  # NO_COLOR keeps every escape byte off the terminal.
+  (cd -- "${repo}" && printf 'n\n' | NO_COLOR=1 script -q /dev/null /bin/bash "${DEPLOY}") \
+    >"${out}" 2>&1 || true
+  ok "NO_COLOR prints no escape byte" lacks "$(cat -- "${out}")" $'\033'
 else
   for name in "on a terminal the question is asked" \
               "the question line holds no value" \
-              "an n answer aborts" "and the flake keeps its pin"; do
+              "an n answer aborts" "and says so in the decline shape" \
+              "and the flake keeps its pin" "an unknown answer says it is not one" \
+              "and asks again" "then the n declines" "NO_COLOR prints no escape byte"; do
     skip "${name}" "no pty here (script cannot open one; a sandboxed runner?)"
   done
 fi
