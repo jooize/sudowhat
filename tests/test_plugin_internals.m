@@ -729,6 +729,30 @@ static void test_decline_line(void) {
        "errstr carries the plain decline line, never an escape byte");
 }
 
+/* An error about the target binary ends with its path, escaped. */
+static void test_path_error(void) {
+    sudo_printf_t saved = g_plugin_printf;
+    g_plugin_printf = NULL;
+    int saved_err = dup(STDERR_FILENO);
+    int devnull = open("/dev/null", O_WRONLY);
+    dup2(devnull, STDERR_FILENO);
+    const char *err = NULL;
+    set_errstr_path(&err, "cannot open the target binary", ENOENT, "/opt/x y");
+    NSString *plain = err ? @(err) : nil;
+    set_errstr_path(&err, "fstat failed", EBADF, "/tmp/ev\033[2Jil");
+    NSString *hostile = err ? @(err) : nil;
+    fflush(stderr);
+    dup2(saved_err, STDERR_FILENO);
+    close(devnull);
+    close(saved_err);
+    g_plugin_printf = saved;
+    EQ(plain, @"sudowhat: cannot open the target binary (No such file or directory): /opt/x y",
+       "the reason sits before the path, which ends the line");
+    OK([hostile hasPrefix:@"sudowhat: fstat failed (Bad file descriptor): /tmp/ev"] &&
+       [hostile rangeOfString:@"\033"].location == NSNotFound,
+       "a control byte in the path is escaped, never written raw");
+}
+
 static void test_confirm_question(void) {
     sudo_conv_t saved = g_conversation;
     g_conversation = sw_t_conversation;
@@ -891,6 +915,7 @@ int main(void) {
         test_confirm_answer_classifier();
         test_confirm_question();
         test_decline_line();
+        test_path_error();
         test_integrity_line_detection();
         test_defer_decision();
         test_policy_deference_defaults();

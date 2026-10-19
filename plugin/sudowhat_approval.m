@@ -737,6 +737,17 @@ static NSString *sw_exec_escape(const char *input) {
     return s;
 }
 
+/* An error about the target binary, its path last (terminal-output): "<what>
+ * (<reason>): <path>". Nothing may follow the path on its line, since its
+ * length and bytes are the caller's, and it is control-escaped like every
+ * other value we print, so a hostile name cannot reach the terminal raw. err
+ * is the errno the caller saved. */
+static void set_errstr_path(const char **errstr, const char *what, int err,
+                            const char *path) {
+    set_errstr(errstr, "sudowhat: %s (%s): %s", what, strerror(err),
+               utf8_or(sw_exec_escape(path), "(the path cannot be shown)"));
+}
+
 /* The Touch ID sheet's prompt style for a macOS version: from 27 on, our text
  * is the sheet's bold headline and macOS appends a period even after ours, so
  * the text ends bare (SWPromptStyleSystemHeadline). Pure, so the cut-over is
@@ -1274,16 +1285,14 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
      * O_CLOEXEC so the fd does not leak into the execed program. */
     int preFd = open(commandC, O_RDONLY | O_CLOEXEC);
     if (preFd < 0) {
-        set_errstr(errstr, "sudowhat: cannot open target binary %s: %s",
-                   commandC, strerror(errno));
+        set_errstr_path(errstr, "cannot open the target binary", errno, commandC);
         return 0;
     }
     struct stat preSt;
     if (fstat(preFd, &preSt) != 0) {
         int saved = errno;
         close(preFd);
-        set_errstr(errstr, "sudowhat: fstat(%s) failed: %s",
-                   commandC, strerror(saved));
+        set_errstr_path(errstr, "fstat failed", saved, commandC);
         return -1;
     }
 
@@ -1310,8 +1319,7 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
     if (stat(commandC, &postSt) != 0) {
         int saved = errno;
         close(preFd);
-        set_errstr(errstr, "sudowhat: post-confirm stat(%s) failed: %s",
-                   commandC, strerror(saved));
+        set_errstr_path(errstr, "post-confirm stat failed", saved, commandC);
         return 0;
     }
     close(preFd);
@@ -1715,16 +1723,15 @@ static int sudowhat_check(char * const command_info[],
          * doesn't leak into the execed program. */
         int preFd = open(commandC, O_RDONLY | O_CLOEXEC);
         if (preFd < 0) {
-            set_errstr(errstr, "sudowhat: cannot open target binary %s: %s",
-                       commandC, strerror(errno));
+            set_errstr_path(errstr, "cannot open the target binary", errno,
+                            commandC);
             return 0;
         }
         struct stat preSt;
         if (fstat(preFd, &preSt) != 0) {
             int saved = errno;
             close(preFd);
-            set_errstr(errstr, "sudowhat: fstat(%s) failed: %s",
-                       commandC, strerror(saved));
+            set_errstr_path(errstr, "fstat failed", saved, commandC);
             return -1;
         }
 
@@ -1894,8 +1901,7 @@ static int sudowhat_check(char * const command_info[],
         if (stat(commandC, &postSt) != 0) {
             int saved = errno;
             close(preFd);
-            set_errstr(errstr, "sudowhat: post-auth stat(%s) failed: %s",
-                       commandC, strerror(saved));
+            set_errstr_path(errstr, "post-auth stat failed", saved, commandC);
             return 0;
         }
         close(preFd);
