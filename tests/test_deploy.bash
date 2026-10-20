@@ -130,6 +130,24 @@ rc=0
 ok "an unknown argument exits 1" test "${rc}" -eq 1
 ok "and is an error verdict ending with the argument" \
   test "$(head -n1 -- "${out}")" = "${CROSS} error: unknown argument: --bogus"
+# The argument is someone else's text: it shows by the untrusted-text rules
+# (a line feed as its code point, an invalid byte as \xHH, a backslash that
+# would begin an escape as its own), in both scripts.
+for script in "${DEPLOY}" "${DEPLOY_PLAN}"; do
+  name="${script##*/}"
+  rc=0
+  (cd -- "${repo}" && /bin/bash "${script}" $'--a\nb' ) >"${out}" 2>&1 || rc=$?
+  ok "${name}: an unknown argument exits 1" test "${rc}" -eq 1
+  ok "${name}: a line feed in it shows as its code point" \
+    test "$(head -n1 -- "${out}")" = "${CROSS} error: unknown argument: --a\u{A}b"
+  (cd -- "${repo}" && /bin/bash "${script}" $'x\xff') >"${out}" 2>&1 || true
+  ok "${name}: an invalid byte shows as \\xHH" \
+    test "$(head -n1 -- "${out}")" = "${CROSS} error: unknown argument: x\xFF"
+  (cd -- "${repo}" && /bin/bash "${script}" '\u{41}') >"${out}" 2>&1 || true
+  ok "${name}: a backslash that would begin an escape shows as its own" \
+    test "$(head -n1 -- "${out}")" = "${CROSS} error: unknown argument: \u{5C}u{41}"
+done
+
 nopin_flake="${tmp}/nopin/flake.nix"
 mkdir -p -- "${tmp}/nopin"
 printf '{ }\n' >"${nopin_flake}"

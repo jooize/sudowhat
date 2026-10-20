@@ -43,10 +43,73 @@ else
   C_OFF=; C_B=; C_DIM=; C_GRN=; C_YEL=; C_CYN=; C_BLU=
 fi
 if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
-  E_OFF=$'\033[0m'; E_DIM=$'\033[2m'; E_RED=$'\033[31m'
+  E_OFF=$'\033[0m'; E_DIM=$'\033[2m'; E_RED=$'\033[31m'; E_HID=$'\033[7;31m'
 else
-  E_OFF=; E_DIM=; E_RED=
+  E_OFF=; E_DIM=; E_RED=; E_HID=
 fi
+
+# Text someone else wrote (here: an argument) is shown by the house
+# untrusted-text rules, the same ones escape_core applies to sudo's argv: a
+# code point on the hidden list shows as \u{HEX} wrapped in <on>..<off> (the
+# reserved reverse red on a terminal), a byte that is not valid UTF-8 as \xHH,
+# a backslash that would begin an escape (before "u{", or before "x" and a hex
+# digit) as \u{5C}, and every other character as itself. Works on the bytes
+# (LC_ALL=C), decoding UTF-8 by hand so only the bytes that fail are escaped.
+# Bash 3.2 reads a high byte as a negative number, hence the +256.
+is_hidden() { # <code point>
+  local u=$1
+  (( u <= 0x1F || (u >= 0x7F && u <= 0x9F) || u == 0xA0 || u == 0xAD
+     || u == 0x34F || u == 0x61C || (u >= 0x115F && u <= 0x1160)
+     || (u >= 0x17B4 && u <= 0x17B5) || (u >= 0x180B && u <= 0x180E)
+     || (u >= 0x2000 && u <= 0x200F) || (u >= 0x2028 && u <= 0x202F)
+     || (u >= 0x205F && u <= 0x206F) || u == 0x3000 || u == 0x3164
+     || (u >= 0xFE00 && u <= 0xFE0F) || u == 0xFEFF || u == 0xFFA0
+     || (u >= 0xFFF9 && u <= 0xFFFB) || (u >= 0xE0000 && u <= 0xE007F)
+     || (u >= 0xE0100 && u <= 0xE01EF) ))
+}
+escape_untrusted() { # <text> <on> <off>
+  local LC_ALL=C
+  local s=$1 on=$2 off=$3 out='' c i=0 n b nb cp len min k
+  n=${#s}
+  while (( i < n )); do
+    printf -v b '%d' "'${s:i:1}"
+    (( b < 0 )) && b=$((b + 256))
+    len=0 cp=0 min=0
+    if (( b < 0x80 )); then len=1 cp=$b
+    elif (( b >= 0xC2 && b <= 0xDF )); then len=2 cp=$((b & 0x1F)) min=0x80
+    elif (( b >= 0xE0 && b <= 0xEF )); then len=3 cp=$((b & 0x0F)) min=0x800
+    elif (( b >= 0xF0 && b <= 0xF4 )); then len=4 cp=$((b & 0x07)) min=0x10000
+    fi
+    k=1
+    while (( k < len )); do
+      if (( i + k >= n )); then len=0; break; fi
+      printf -v nb '%d' "'${s:i+k:1}"
+      (( nb < 0 )) && nb=$((nb + 256))
+      if (( nb < 0x80 || nb > 0xBF )); then len=0; break; fi
+      cp=$(( (cp << 6) | (nb & 0x3F) ))
+      k=$((k + 1))
+    done
+    if (( len > 1 && (cp < min || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) )); then
+      len=0
+    fi
+    if (( len == 0 )); then
+      printf -v c '\\x%02X' "$b"
+      out+=$c
+      i=$((i + 1))
+      continue
+    fi
+    if is_hidden "$cp"; then
+      printf -v c '%s\\u{%X}%s' "$on" "$cp" "$off"
+    elif (( cp == 0x5C )) && [[ "${s:i+1:2}" == 'u{' || "${s:i+1:2}" == x[0-9A-Fa-f] ]]; then
+      c='\u{5C}'
+    else
+      c=${s:i:len}
+    fi
+    out+=$c
+    i=$((i + len))
+  done
+  printf '%s' "$out"
+}
 
 YES=0 DRY_RUN=0
 for arg in "$@"; do
@@ -54,7 +117,8 @@ for arg in "$@"; do
     --yes) YES=1 ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
-    *) printf '%s\xe2\x9c\x97 error: unknown argument: %s%s\n' "$E_RED" "$arg" "$E_OFF" >&2
+    *) printf '%s\xe2\x9c\x97 error: unknown argument: %s%s\n' "$E_RED" \
+         "$(escape_untrusted "$arg" "$E_HID" "$E_OFF$E_RED")" "$E_OFF" >&2
        usage >&2; exit 1 ;;
   esac
 done
