@@ -819,9 +819,25 @@ static void test_confirm_question(void) {
     EQ(@(sw_t_conv_msg), @"not an answer\nsudowhat: run this command? [y/N] ",
        "the re-ask is one not an answer line, then the question, no blank line");
 
+    /* On a terminal the question takes the house prompt shape: the sentence
+     * bold, y and N bold blue, the provenance prefix plain. */
+    EQ(@(sw_confirm_prompt(YES, NO)),
+       @"sudowhat: \033[1mrun this command? [\033[1;34my\033[0m\033[1m/"
+        "\033[1;34mN\033[0m\033[1m]\033[0m ",
+       "on a terminal the question is bold and its keys bold blue");
+    EQ(@(sw_confirm_prompt(YES, YES)),
+       [@"\n" stringByAppendingString:@(sw_confirm_prompt(YES, NO))],
+       "the styled question under a lone line opens with its blank line");
+    EQ(@(sw_confirm_prompt(NO, NO)), @"sudowhat: run this command? [y/N] ",
+       "off a terminal the question is plain text");
+    EQ(@(sw_confirm_prompt(NO, YES)), @"\nsudowhat: run this command? [y/N] ",
+       "plain under a lone line, with its blank line");
     EQ(@(sw_reask_prompt(YES)),
-       @"\033[33mnot an answer\033[0m\nsudowhat: run this command? [y/N] ",
-       "on a terminal the not an answer line is yellow, the question is not");
+       [@"\033[33mnot an answer\033[0m\n" stringByAppendingString:
+           @(sw_confirm_prompt(YES, NO))],
+       "on a terminal the not an answer line is yellow, then the styled question");
+    EQ(@(sw_reask_prompt(NO)), @"not an answer\nsudowhat: run this command? [y/N] ",
+       "off a terminal the re-ask is plain");
 
     static const char *const unknown_then_n[] = { "x", "n" };
     sw_t_conv_script = unknown_then_n;

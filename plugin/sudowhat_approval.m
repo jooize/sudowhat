@@ -1205,12 +1205,17 @@ static BOOL sw_have_controlling_tty(const char *ttyPath) {
  * at the head of the prompt string, where it reaches the terminal through
  * the same channel and in the same write as the question.
  *
+ * The question takes the house prompt shape (terminal-output): the sentence
+ * bold, the two keys the human types, y and N, bold blue. The `sudowhat: `
+ * prefix stays plain, like the provenance prefix on every other line of ours.
+ *
  * An answer that is not one (sw_confirm_answer) is not acted on: the next
  * prompt is one yellow `not an answer` line and the question again, without
  * the blank line, read through the same conversation. What was typed is never
  * echoed back, since a pasted control sequence printed raw could rewrite the
- * question line. Yellow only when colour is allowed and ttyPath ("/dev/tty"
- * in production, where sudo writes the prompt) is a terminal.
+ * question line. Colour (the bold, the blue, the yellow) only when it is
+ * allowed and ttyPath ("/dev/tty" in production, where sudo writes the
+ * prompt) is a terminal; otherwise every prompt is plain text.
  *
  * End of input never acts: the conversation returns an error when its read
  * gets EOF (or a closed terminal), and that declines like n. No newline is
@@ -1223,21 +1228,36 @@ static BOOL sw_have_controlling_tty(const char *ttyPath) {
  * (a quiet abort), because a question that could not be asked has not been
  * answered. */
 #define SW_CONFIRM_QUESTION "sudowhat: run this command? [y/N] "
+/* The same bytes once the SGR is stripped: the sentence bold, each key bold
+ * blue, bold re-opened after each key's reset. */
+#define SW_CONFIRM_QUESTION_STYLED \
+    "sudowhat: \033[1mrun this command? [\033[1;34my\033[0m\033[1m/" \
+    "\033[1;34mN\033[0m\033[1m]\033[0m "
 #define SW_NOT_AN_ANSWER    "not an answer"
+
+/* The first prompt, with the blank line that makes it a block when blankFirst.
+ * Pure, so every rendering is testable. */
+static const char *sw_confirm_prompt(BOOL color, BOOL blankFirst) {
+    if (color) {
+        return blankFirst ? "\n" SW_CONFIRM_QUESTION_STYLED
+                          : SW_CONFIRM_QUESTION_STYLED;
+    }
+    return blankFirst ? "\n" SW_CONFIRM_QUESTION : SW_CONFIRM_QUESTION;
+}
 
 /* The prompt after an answer that was not one. Pure, so both renderings are
  * testable. */
 static const char *sw_reask_prompt(BOOL color) {
-    return color ? "\033[33m" SW_NOT_AN_ANSWER "\033[0m\n" SW_CONFIRM_QUESTION
+    return color ? "\033[33m" SW_NOT_AN_ANSWER "\033[0m\n" SW_CONFIRM_QUESTION_STYLED
                  : SW_NOT_AN_ANSWER "\n" SW_CONFIRM_QUESTION;
 }
 
 static BOOL sw_ask_run_confirm(const char *ttyPath, BOOL blankFirst) {
     if (g_conversation == NULL) return NO;
 
-    const char *again = sw_reask_prompt(sw_color_allowed()
-                                        && sw_have_controlling_tty(ttyPath));
-    const char *prompt = blankFirst ? "\n" SW_CONFIRM_QUESTION : SW_CONFIRM_QUESTION;
+    BOOL color = sw_color_allowed() && sw_have_controlling_tty(ttyPath);
+    const char *again = sw_reask_prompt(color);
+    const char *prompt = sw_confirm_prompt(color, blankFirst);
 
     for (;;) {
         struct sudo_conv_message msg = {
