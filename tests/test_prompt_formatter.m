@@ -1,17 +1,15 @@
 /*
  * Adversarial unit tests for SudoWhatPromptFormatter.
  *
- * This class is the anti-spoofing boundary: it shell-quotes argv tokens and
- * escapes hidden characters (the untrusted-text hidden list) so the bytes
- * shown in the Touch ID sheet cannot fake structure (hidden line breaks,
- * reordered text, an escape that is not one). These tests try hard to break
- * those guarantees.
+ * This class lays out the Touch ID sheet, the anti-spoofing boundary: every
+ * value on it is escaped and shell-quoted by escape_core from the raw bytes
+ * sudo handed over, so the text shown cannot fake structure (hidden line
+ * breaks, reordered text, an escape that is not one) and no value is dropped
+ * for its bytes. The escape rules themselves are pinned in escape_core's own
+ * test module; these tests try hard to break the layout built on them.
  */
 #import "PromptFormatter.h"
 #import "sw_test.h"
-
-/* escapeControlChars: is now public (the plugin escapes echoed values with it),
- * so no category is needed. */
 
 /* Closing-line constants copied verbatim from PromptFormatter.m. If these ever
  * mismatch the source the exact-match tests below will flag it. */
@@ -21,22 +19,39 @@ static NSString *const SEE_TERMINAL = @"(see terminal)";
 
 static const NSUInteger kMaxTotal = 480;   /* PromptFormatter.m kMaxTotal */
 
-static NSString *esc(NSString *s) { return [SudoWhatPromptFormatter escapeControlChars:s]; }
-static NSString *q(NSString *s)   { return [SudoWhatPromptFormatter quoteToken:s]; }
+/* The values as sudo hands them over: NUL-terminated byte strings, argv a
+ * NULL-terminated array of them. These helpers take NSStrings for the many
+ * valid-UTF-8 cases; the invalid-byte tests call the formatter with C strings
+ * directly. */
+static NSString *fmt_ov(NSString *path, NSString *user, NSString *cwd,
+                        NSString *verify, NSArray<NSString *> *argv,
+                        SWPromptStyle style, SWPromptOverflow *ov) {
+    NSUInteger n = argv.count;
+    char *a[n + 1];
+    for (NSUInteger i = 0; i < n; i++) a[i] = (char *)argv[i].UTF8String;
+    a[n] = NULL;
+    return [SudoWhatPromptFormatter formatWithCommandPath:path.UTF8String
+                                                runasUser:user.UTF8String
+                                                      cwd:cwd.UTF8String
+                                               verifyCode:verify
+                                                     argv:a
+                                                    style:style
+                                                 overflow:ov];
+}
 static NSString *fmt(NSString *path, NSString *user, NSString *cwd,
                      NSString *verify, NSArray *argv, SWPromptStyle style) {
-    return [SudoWhatPromptFormatter formatWithCommandPath:path runasUser:user
-                                                      cwd:cwd verifyCode:verify
-                                                     argv:argv style:style];
+    return fmt_ov(path, user, cwd, verify, argv, style, NULL);
 }
-static NSString *fullcmd(NSString *path, NSArray *argv) {
-    return [SudoWhatPromptFormatter fullCommandLineForCommandPath:path argv:argv];
-}
-static BOOL fmt_trunc(NSString *path, NSArray *argv, SWPromptStyle style) {
+static BOOL fmt_trunc(NSString *path, NSArray<NSString *> *argv,
+                      SWPromptStyle style) {
+    NSUInteger n = argv.count;
+    char *a[n + 1];
+    for (NSUInteger i = 0; i < n; i++) a[i] = (char *)argv[i].UTF8String;
+    a[n] = NULL;
     BOOL t = NO;
-    [SudoWhatPromptFormatter formatWithCommandPath:path runasUser:@"root"
-                                               cwd:nil verifyCode:@"AB12"
-                                              argv:argv style:style
+    [SudoWhatPromptFormatter formatWithCommandPath:path.UTF8String
+                                         runasUser:"root" cwd:NULL
+                                        verifyCode:@"AB12" argv:a style:style
                                       wasTruncated:&t];
     return t;
 }
@@ -64,181 +79,8 @@ static NSUInteger charcount(NSString *s, unichar target) {
 static NSString *U(NSString *hex) {
     return [NSString stringWithFormat:@"%Cu{%@}", (unichar)'\\', hex];
 }
-static NSString *astral(UTF32Char u) {
-    UniChar pair[2];
-    CFStringGetSurrogatePairForLongCharacter(u, pair);
-    return [NSString stringWithCharacters:pair length:2];
-}
-
-static void test_escape_form(void) {
-    /* Every hidden character shows as backslash, u{, uppercase hex with no
-     * leading zeros, }. No named escapes: a line feed is its code point. */
-    EQ(esc(uni(0x0a)), U(@"A"), "line feed -> its code point");
-    EQ(esc(uni(0x0d)), U(@"D"), "carriage return -> its code point");
-    EQ(esc(uni(0x09)), U(@"9"), "tab -> its code point");
-    EQ(esc(uni(0x00)), U(@"0"), "NUL -> its code point");
-    EQ(esc(uni(0x1b)), U(@"1B"), "ESC -> uppercase hex");
-    EQ(esc(uni(0x7f)), U(@"7F"), "DEL");
-    EQ(esc(([NSString stringWithFormat:@"a%@b", uni(0x0a)])),
-       ([NSString stringWithFormat:@"a%@b", U(@"A")]), "escape between letters");
-}
-
-static void test_escape_backslash(void) {
-    /* An escape on screen can only be one: a literal backslash that would read
-     * as the start of an escape (before u{, or before x and a hex digit) shows
-     * as its own escape; every other backslash is drawn as itself. */
-    NSString *bs = U(@"5C");
-    EQ(esc(@"\\"), @"\\", "a lone backslash is itself");
-    EQ(esc(@"\\n"), @"\\n", "backslash-n is itself");
-    EQ(esc(@"C:\\Users"), @"C:\\Users", "a path backslash is itself");
-    EQ(esc(@"\\u41"), @"\\u41", "backslash-u without a brace is itself");
-    EQ(esc(@"\\xg"), @"\\xg", "backslash-x without a hex digit is itself");
-    EQ(esc(@"\\x"), @"\\x", "a trailing backslash-x is itself");
-    EQ(esc(@"\\u{41}"), ([NSString stringWithFormat:@"%@u{41}", bs]),
-       "backslash before u{ is escaped");
-    EQ(esc(@"\\x41"), ([NSString stringWithFormat:@"%@x41", bs]),
-       "backslash before x and a hex digit is escaped");
-    EQ(esc(@"\\xff"), ([NSString stringWithFormat:@"%@xff", bs]),
-       "lowercase hex digits count too");
-    /* A literal backslash-n can no longer pass for a line feed. */
-    OK(![esc(@"\\n") isEqualToString:esc(uni(0x0a))],
-       "literal backslash-n distinguishable from a real line feed");
-}
-
-static void test_escape_hidden_list(void) {
-    /* Both ends of every range and each single point on the hidden list. */
-    struct { UTF32Char cp; NSString *hex; } pts[] = {
-        {0x80, @"80"}, {0x85, @"85"}, {0x9f, @"9F"}, {0xa0, @"A0"}, {0xad, @"AD"},
-        {0x34f, @"34F"}, {0x61c, @"61C"}, {0x115f, @"115F"}, {0x1160, @"1160"},
-        {0x17b4, @"17B4"}, {0x17b5, @"17B5"}, {0x180b, @"180B"}, {0x180e, @"180E"},
-        {0x2000, @"2000"}, {0x200b, @"200B"}, {0x200f, @"200F"},
-        {0x2028, @"2028"}, {0x2029, @"2029"}, {0x202e, @"202E"}, {0x202f, @"202F"},
-        {0x205f, @"205F"}, {0x2060, @"2060"}, {0x2066, @"2066"}, {0x206f, @"206F"},
-        {0x3000, @"3000"}, {0x3164, @"3164"}, {0xfe00, @"FE00"}, {0xfe0f, @"FE0F"},
-        {0xfeff, @"FEFF"}, {0xffa0, @"FFA0"}, {0xfff9, @"FFF9"}, {0xfffb, @"FFFB"},
-        {0xe0000, @"E0000"}, {0xe0041, @"E0041"}, {0xe007f, @"E007F"},
-        {0xe0100, @"E0100"}, {0xe01ef, @"E01EF"},
-    };
-    for (size_t i = 0; i < sizeof(pts) / sizeof(pts[0]); i++) {
-        NSString *in = pts[i].cp > 0xffff ? astral(pts[i].cp) : uni((unichar)pts[i].cp);
-        EQ(esc(in), U(pts[i].hex), "a hidden-list code point is escaped");
-    }
-    /* Just outside the list, and lookalikes: drawn as themselves. */
-    UTF32Char outside[] = { 0x7e, 0xa1, 0xac, 0x34e, 0x2010, 0x2030, 0x205e,
-                            0x2070, 0xfe10, 0xfffc, 0x2026, 0x22ef, 0x2024,
-                            0xe0080, 0xe01f0 };
-    for (size_t i = 0; i < sizeof(outside) / sizeof(outside[0]); i++) {
-        NSString *in = outside[i] > 0xffff ? astral(outside[i]) : uni((unichar)outside[i]);
-        EQ(esc(in), in, "a code point off the hidden list is itself");
-    }
-    EQ(esc(@"..."), @"...", "a run of dots is itself (a lookalike, out of scope)");
-}
-
-static void test_escape_bidi(void) {
-    /* Trojan Source (CVE-2021-42574): bidi overrides visually reorder text so
-     * the glyphs on the sheet can read as a different command than runs. Every
-     * one must be escaped, even inside a single-quoted token. */
-    EQ(esc(uni(0x202A)), U(@"202A"), "esc LRE");
-    EQ(esc(uni(0x202E)), U(@"202E"), "esc RLO");
-    EQ(esc(uni(0x2066)), U(@"2066"), "esc LRI");
-    EQ(esc(uni(0x2069)), U(@"2069"), "esc PDI");
-    EQ(esc(uni(0x200E)), U(@"200E"), "esc LRM");
-    EQ(esc(uni(0x061C)), U(@"61C"), "esc ALM");
-    /* the canonical attack token still carries the raw override nowhere */
-    NSString *rlo = [NSString stringWithFormat:@"/etc/%@fdp.ssm", uni(0x202E)];
-    OK(charcount(esc(rlo), 0x202E) == 0, "no raw RLO survives escaping");
-    /* and single-quoting does not smuggle it either */
-    OK(charcount(q(rlo), 0x202E) == 0, "no raw RLO survives quoteToken");
-}
-
-static void test_escape_zero_width(void) {
-    EQ(esc(uni(0x200B)), U(@"200B"), "esc ZWSP");
-    EQ(esc(uni(0x200C)), U(@"200C"), "esc ZWNJ");
-    EQ(esc(uni(0x200D)), U(@"200D"), "esc ZWJ");
-    EQ(esc(uni(0x2060)), U(@"2060"), "esc WORD JOINER");
-    EQ(esc(uni(0xFEFF)), U(@"FEFF"), "esc ZWNBSP/BOM");
-    /* A variation selector after a character draws nothing but can carry
-     * data, so it shows too, astral ones included. */
-    EQ(esc(([NSString stringWithFormat:@"a%@", uni(0xFE0F)])),
-       ([NSString stringWithFormat:@"a%@", U(@"FE0F")]), "esc VS16 after a letter");
-    EQ(esc(([NSString stringWithFormat:@"a%@", astral(0xE0100)])),
-       ([NSString stringWithFormat:@"a%@", U(@"E0100")]), "esc VS17 after a letter");
-}
-
-static void test_escape_lone_surrogate(void) {
-    /* A lone (unpaired) surrogate is not text: drawn raw it would become a
-     * replacement glyph that hides which unit was there, so it shows as its
-     * escape. It must not crash, and it never pairs with its neighbours. */
-    EQ(esc(uni(0xD800)), U(@"D800"), "lone high surrogate is escaped");
-    EQ(esc(uni(0xDC00)), U(@"DC00"), "lone low surrogate is escaped");
-    EQ(esc(([NSString stringWithFormat:@"%@a", uni(0xD83D)])),
-       ([NSString stringWithFormat:@"%@a", U(@"D83D")]),
-       "a high surrogate before a letter stays lone");
-}
-
-static void test_escape_passthrough(void) {
-    EQ(esc(@"abcXYZ012"), @"abcXYZ012", "alnum passthrough");
-    EQ(esc(@"a b c"),     @"a b c",     "space passthrough (not a control)");
-    EQ(esc(@"+_/.:=@%,-"), @"+_/.:=@%,-", "safe punctuation passthrough");
-    EQ(esc(@"😀"),  @"😀",  "emoji (astral/surrogate pair) survives intact");
-    EQ(esc(@"日本語"), @"日本語", "CJK survives intact");
-    EQ(esc(@"café"), @"café", "latin-1 accented survives");
-    EQ(esc(([NSString stringWithFormat:@"e%@", uni(0x0301)])),
-       ([NSString stringWithFormat:@"e%@", uni(0x0301)]),
-       "combining mark survives");
-}
-
-static void test_quote_empty_nil(void) {
-    EQ(q(nil), @"''", "quote nil -> ''");
-    EQ(q(@""), @"''", "quote empty -> ''");
-}
-
-static void test_quote_safe(void) {
-    EQ(q(@"/bin/echo"), @"/bin/echo", "safe path unquoted");
-    EQ(q(@"hello"),     @"hello",     "safe word unquoted");
-    EQ(q(@"+_./:=@%,-"), @"+_./:=@%,-", "all-safe-punct unquoted");
-    EQ(q(@"a1B2"),      @"a1B2",      "alnum unquoted");
-}
-
-static void test_quote_unsafe(void) {
-    EQ(q(@"a b"),  @"'a b'",  "space forces single-quote");
-    EQ(q(@"a;b"),  @"'a;b'",  "semicolon forces quote");
-    EQ(q(@"#x"),   @"'#x'",   "hash forces quote");
-    EQ(q(@"$HOME"),@"'$HOME'","dollar forces quote");
-    EQ(q(@"a&b"),  @"'a&b'",  "ampersand forces quote");
-    EQ(q(@"a|b"),  @"'a|b'",  "pipe forces quote");
-    EQ(q(@"a>b"),  @"'a>b'",  "redirect forces quote");
-}
-
-static void test_quote_embedded_single_quote(void) {
-    /* classic POSIX single-quote escape: ' -> '\'' */
-    EQ(q(@"a'b"), @"'a'\\''b'", "embedded single quote escaped a'b");
-    EQ(q(@"'"),   @"''\\'''",   "lone single quote");
-    EQ(q(@"can't"), @"'can'\\''t'", "apostrophe in word");
-}
-
-static void test_quote_control_chars_get_quoted(void) {
-    /* A hidden character escapes to a backslash sequence; backslash is unsafe,
-     * so the token gets single-quoted with the escape shown literally. */
-    EQ(q(uni(0x09)), ([NSString stringWithFormat:@"'%@'", U(@"9")]), "tab token");
-    EQ(q(uni(0x0a)), ([NSString stringWithFormat:@"'%@'", U(@"A")]), "line feed token");
-    EQ(q(uni(0x07)), ([NSString stringWithFormat:@"'%@'", U(@"7")]), "bell token");
-    EQ(q(@"\\"),     @"'\\'", "a backslash token is quoted, the backslash itself");
-    EQ(q(([NSString stringWithFormat:@"a%@b", uni(0x0a)])),
-       ([NSString stringWithFormat:@"'a%@b'", U(@"A")]),
-       "line feed inside a word (no real break)");
-}
 
 /* ---- formatWith: layout, dedup, caps, all-or-nothing overflow, budget ---- */
-
-static NSString *fmt_ov(NSString *path, NSString *user, NSString *cwd,
-                        NSString *verify, NSArray *argv, SWPromptStyle style,
-                        SWPromptOverflow *ov) {
-    return [SudoWhatPromptFormatter formatWithCommandPath:path runasUser:user
-                                                      cwd:cwd verifyCode:verify
-                                                     argv:argv style:style
-                                                 overflow:ov];
-}
 
 static void test_format_basic_exact_systemsheet(void) {
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
@@ -460,43 +302,6 @@ static void test_format_verifycode_bounded(void) {
     OK([normal containsString:@"Verify Code: AB12\n"], "short code rendered verbatim");
 }
 
-/* ---- fullCommandLineForCommandPath: and wasTruncated: (terminal echo) ---- */
-
-static void test_fullcmd_basic(void) {
-    /* Same dedup + quoting as the sheet's command region, joined with spaces. */
-    EQ(fullcmd(@"/bin/echo", @[@"echo", @"hello"]), @"/bin/echo hello",
-       "full command joins path + argv, dedup basename argv0");
-    EQ(fullcmd(@"/bin/echo", @[@"/bin/echo", @"hi"]), @"/bin/echo hi",
-       "full command dedups full-path argv0");
-    EQ(fullcmd(@"/bin/echo", @[@"notecho", @"hi"]), @"/bin/echo notecho hi",
-       "full command keeps non-matching argv0");
-    EQ(fullcmd(@"/bin/echo", @[]), @"/bin/echo", "full command path only when no argv");
-    EQ(fullcmd(@"/bin/echo", @[@"echo", @"a b"]), @"/bin/echo 'a b'",
-       "full command shell-quotes a spaced arg");
-}
-
-static void test_fullcmd_escapes_controls(void) {
-    /* The point of routing through PromptFormatter: a real newline / ESC in
-     * argv is rendered as escape TEXT, so writing the result to a terminal can
-     * inject no real control byte (no cursor moves, no ANSI). */
-    NSString *evil = [NSString stringWithFormat:@"a%@b%@c", uni(0x0a), uni(0x1b)];
-    NSString *out = fullcmd(@"/bin/echo", @[@"echo", evil]);
-    OK([out containsString:U(@"A")],  "line feed in arg rendered as escape text");
-    OK([out containsString:U(@"1B")], "ESC in arg rendered as escape text");
-    OK(charcount(out, 0x0a) == 0, "no real newline byte in the full command");
-    OK(charcount(out, 0x1b) == 0, "no real ESC byte in the full command");
-}
-
-static void test_fullcmd_untruncated(void) {
-    /* The terminal echo has NO budget cap: a command far longer than the
-     * sheet's 480-char budget comes back in full, with no truncation marker. */
-    NSString *bigArg = rep(@"x", 4000);
-    NSString *out = fullcmd(@"/bin/echo", @[@"echo", bigArg]);
-    OK(out.length >= 4000, "full command is not capped to the sheet budget");
-    OK([out containsString:bigArg], "full command preserves the entire long arg");
-    OK(![out containsString:@"COMMAND TRUNCATED"], "full command carries no truncation marker");
-}
-
 static void test_wastruncated_flag(void) {
     /* The wasTruncated: wrapper ORs the three overflow flags. It must be YES
      * exactly when some item was replaced by "(see terminal)". */
@@ -511,8 +316,9 @@ static void test_wastruncated_flag(void) {
     OK(fmt_trunc(@"/bin/echo", many, SWPromptStyleSystemHeadline),
        "wasTruncated YES holds for SystemHeadline too");
     /* The wrapper passes NULL through to the overflow variant; tolerate it. */
-    NSString *out = [SudoWhatPromptFormatter formatWithCommandPath:@"/bin/echo"
-        runasUser:@"root" cwd:nil verifyCode:@"AB12" argv:@[@"echo", @"hi"]
+    char *hi[] = { (char *)"echo", (char *)"hi", NULL };
+    NSString *out = [SudoWhatPromptFormatter formatWithCommandPath:"/bin/echo"
+        runasUser:"root" cwd:NULL verifyCode:@"AB12" argv:hi
         style:SWPromptStyleSystemSheet wasTruncated:NULL];
     OK(out != nil, "wasTruncated:NULL is tolerated");
     /* overflow:NULL likewise tolerated */
@@ -521,22 +327,74 @@ static void test_wastruncated_flag(void) {
     OK(out2 != nil, "overflow:NULL is tolerated");
 }
 
+/* ---- bytes that are not valid UTF-8: shown escaped, never dropped ---- */
+
+/* The defect this pins: the sheet once decoded each token to an NSString,
+ * which fails on an invalid byte, and the nil dropped the token. sudo cp
+ * $'x\xff' /etc/y then showed "cp /etc/y" on the sheet while the terminal's
+ * execute: line showed 'x\xFF'. Every token now shows, its invalid byte as
+ * \xHH, exactly as the terminal draws it. */
+static void test_format_invalid_utf8_argv(void) {
+    char *argv[] = { (char *)"cp", (char *)"x\xff", (char *)"/etc/y", NULL };
+    NSString *out = [SudoWhatPromptFormatter formatWithCommandPath:"/bin/cp"
+        runasUser:"root" cwd:NULL verifyCode:@"AB12" argv:argv
+        style:SWPromptStyleSystemSheet];
+    EQ(out,
+       @"run a command.\n\nRUN AS\nroot\n\nEXECUTE\n/bin/cp 'x\\xFF' /etc/y\n\n"
+       @"Verify Code: AB12\n\nCode must match your terminal.",
+       "an argv token with an invalid byte is shown as \\xHH, not dropped");
+
+    /* Valid sequences decode first; only the byte that fails is escaped. */
+    char *mixed[] = { (char *)"echo", (char *)"caf\xc3\xa9\xff", NULL };
+    NSString *m = [SudoWhatPromptFormatter formatWithCommandPath:"/bin/echo"
+        runasUser:"root" cwd:NULL verifyCode:@"AB12" argv:mixed
+        style:SWPromptStyleSystemSheet];
+    OK([m containsString:@"EXECUTE\n/bin/echo 'café\\xFF'\n"],
+       "a valid sequence before an invalid byte is drawn as itself");
+
+    /* A lone invalid byte is a token of its own, still shown. */
+    char *lone[] = { (char *)"rm", (char *)"\xfe", NULL };
+    NSString *l = [SudoWhatPromptFormatter formatWithCommandPath:"/bin/rm"
+        runasUser:"root" cwd:NULL verifyCode:@"AB12" argv:lone
+        style:SWPromptStyleSystemSheet];
+    OK([l containsString:@"EXECUTE\n/bin/rm '\\xFE'\n"],
+       "a token that is one invalid byte is shown");
+}
+
+/* The same for the values that are paths: the program sudo will execve, the
+ * directory it runs in, and the target user's name. */
+static void test_format_invalid_utf8_paths(void) {
+    char *argv[] = { (char *)"tool", (char *)"-v", NULL };
+    NSString *out = [SudoWhatPromptFormatter formatWithCommandPath:"/opt/a\xff/tool"
+        runasUser:"u\xff" cwd:"/tmp/d\xfe" verifyCode:@"AB12" argv:argv
+        style:SWPromptStyleSystemSheet];
+    EQ(out,
+       @"run a command.\n\nRUN AS\nu\\xFF\n\nDIRECTORY\n/tmp/d\\xFE\n\n"
+       @"EXECUTE\n'/opt/a\\xFF/tool' -v\n\n"
+       @"Verify Code: AB12\n\nCode must match your terminal.",
+       "a program path, directory and user with an invalid byte all show it");
+}
+
+/* No path, nothing to show: the formatter returns nil and the plugin refuses,
+ * rather than raising a sheet without a command. */
+static void test_format_null_path(void) {
+    char *argv[] = { (char *)"x", NULL };
+    OK([SudoWhatPromptFormatter formatWithCommandPath:NULL runasUser:"root"
+            cwd:NULL verifyCode:@"AB12" argv:argv
+            style:SWPromptStyleSystemSheet] == nil,
+       "a NULL path -> nil");
+    OK(fmt(@"/bin/echo", @"root", nil, @"AB12", @[], SWPromptStyleSystemSheet) != nil,
+       "an empty argv is a path-only command, not a failure");
+    NSString *noArgv = [SudoWhatPromptFormatter formatWithCommandPath:"/bin/echo"
+        runasUser:NULL cwd:NULL verifyCode:@"AB12" argv:NULL
+        style:SWPromptStyleSystemSheet];
+    OK([noArgv containsString:@"RUN AS\nroot\n"]
+       && [noArgv containsString:@"EXECUTE\n/bin/echo\n"],
+       "a NULL argv is path-only and a NULL user shows root");
+}
+
 int main(void) {
     @autoreleasepool {
-        test_escape_form();
-        test_escape_backslash();
-        test_escape_hidden_list();
-        test_escape_bidi();
-        test_escape_zero_width();
-        test_escape_lone_surrogate();
-        test_escape_passthrough();
-
-        test_quote_empty_nil();
-        test_quote_safe();
-        test_quote_unsafe();
-        test_quote_embedded_single_quote();
-        test_quote_control_chars_get_quoted();
-
         test_format_basic_exact_systemsheet();
         test_format_basic_exact_systemheadline();
         test_format_path_line();
@@ -553,10 +411,11 @@ int main(void) {
         test_format_surrogate_boundary();
         test_format_verifycode_bounded();
 
-        test_fullcmd_basic();
-        test_fullcmd_escapes_controls();
-        test_fullcmd_untruncated();
         test_wastruncated_flag();
+
+        test_format_invalid_utf8_argv();
+        test_format_invalid_utf8_paths();
+        test_format_null_path();
 
         SW_SUMMARY("PromptFormatter");
     }

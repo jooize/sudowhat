@@ -4,9 +4,10 @@
  * Hand-written (no cbindgen) so the header is reviewed and the build stays
  * deterministic. Must stay in sync with the #[no_mangle] signatures in
  * src/lib.rs. Both bundles (plugin/sudowhat_audit.m, plugin/sudowhat_approval.m)
- * link it; tests/test_escape_core.m links the same functions to assert they
- * escape byte-for-byte identically to the ObjC SudoWhatPromptFormatter on
- * valid UTF-8.
+ * link it, and the approval bundle's PromptFormatter renders every Touch ID
+ * sheet value through it, so the sheet and the terminal share one renderer;
+ * tests/test_escape_core.m asserts the sheet's command is the terminal's line
+ * byte for byte.
  *
  * Buffer contract (every function below):
  *   - *needed is ALWAYS set to the full output length in bytes (excluding the

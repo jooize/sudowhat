@@ -1,168 +1,87 @@
 #import "PromptFormatter.h"
 
-@implementation SudoWhatPromptFormatter
+#include "escape_core.h"
 
-+ (NSCharacterSet *)safeSet {
-    static NSCharacterSet *set;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        set = [NSCharacterSet characterSetWithCharactersInString:
-               @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-               @"+_./:=@%,-"];
-    });
-    return set;
+/* Every value on the sheet is rendered by escape_core, from the raw bytes, by
+ * the same functions the terminal's execute: line uses. Its output is valid
+ * UTF-8 for any input (a byte that does not decode becomes the text \xHH), so
+ * a nil from these helpers is an allocation failure, never a property of the
+ * value, and the caller fails closed on it. */
+
+/* Decode one escape_core result. NSString's UTF-8 decode cannot fail on
+ * escape_core output, which is why it is safe here and nowhere upstream. */
+static NSString *sw_pf_string(const uint8_t *buf, size_t len) {
+    return [[NSString alloc] initWithBytes:buf length:len
+                                  encoding:NSUTF8StringEncoding];
 }
 
-/* The hidden list of the untrusted-text rules, verbatim: code points that draw
- * nothing, draw as something else, or reorder the text after them. Twin of
- * escape_core's is_hidden; keep the two in step. A plain space is not on it. */
-static BOOL sw_is_hidden(uint32_t u) {
-    return u <= 0x1F || (u >= 0x7F && u <= 0x9F) || u == 0xA0 || u == 0xAD
-        || u == 0x34F || u == 0x61C || (u >= 0x115F && u <= 0x1160)
-        || (u >= 0x17B4 && u <= 0x17B5) || (u >= 0x180B && u <= 0x180E)
-        || (u >= 0x2000 && u <= 0x200F) || (u >= 0x2028 && u <= 0x202F)
-        || (u >= 0x205F && u <= 0x206F) || u == 0x3000 || u == 0x3164
-        || (u >= 0xFE00 && u <= 0xFE0F) || u == 0xFEFF || u == 0xFFA0
-        || (u >= 0xFFF9 && u <= 0xFFFB) || (u >= 0xE0000 && u <= 0xE007F)
-        || (u >= 0xE0100 && u <= 0xE01EF);
-}
-
-static BOOL sw_is_hex_digit(uint32_t u) {
-    return (u >= '0' && u <= '9') || (u >= 'A' && u <= 'F')
-        || (u >= 'a' && u <= 'f');
-}
-
-/* Append the escape of one code point: a backslash, "u{", uppercase hex with
- * no leading zeros, "}". The format holds no backslash itself; %C adds it. */
-static void sw_append_escape(NSMutableString *out, uint32_t u) {
-    [out appendFormat:@"%Cu{%X}", (unichar)'\\', (unsigned)u];
-}
-
-+ (NSString *)escapeControlChars:(NSString *)s {
-    NSUInteger len = s.length;
-
-    /* Code points first: a surrogate pair combines into its scalar value, so
-     * astral characters (emoji, tag characters) are judged whole. A lone
-     * surrogate stays as its own unit. */
-    NSMutableData *buf = [NSMutableData dataWithLength:(len + 1) * sizeof(uint32_t)];
-    uint32_t *cps = buf.mutableBytes;
-    NSUInteger n = 0;
-    for (NSUInteger i = 0; i < len; ) {
-        unichar c = [s characterAtIndex:i];
-        if (CFStringIsSurrogateHighCharacter(c) && i + 1 < len
-            && CFStringIsSurrogateLowCharacter([s characterAtIndex:i + 1])) {
-            cps[n++] = (uint32_t)CFStringGetLongCharacterForSurrogatePair(
-                c, [s characterAtIndex:i + 1]);
-            i += 2;
-        } else {
-            cps[n++] = c;
-            i += 1;
-        }
+/* A value escaped by the untrusted-text rules (sw_escape_control), with the
+ * two-call sizing protocol: probe for the length, allocate, fill. */
+static NSString *sw_pf_escape(const char *s) {
+    size_t inlen = strlen(s), needed = 0;
+    sw_escape_control((const uint8_t *)s, inlen, NULL, 0, &needed);
+    uint8_t *buf = malloc(needed + 1);
+    if (buf == NULL) return nil;
+    size_t got = 0;
+    NSString *out = nil;
+    if (sw_escape_control((const uint8_t *)s, inlen, buf, needed + 1, &got)
+        == SW_ESCAPE_OK) {
+        out = sw_pf_string(buf, got);
     }
-
-    NSMutableString *out = [NSMutableString stringWithCapacity:len];
-    for (NSUInteger k = 0; k < n; k++) {
-        uint32_t u = cps[k];
-        if (sw_is_hidden(u) || (u >= 0xD800 && u <= 0xDFFF)) {
-            /* Hidden: drawn as its escape, never raw and never dropped. A lone
-             * surrogate is not text at all (it would draw as a replacement
-             * glyph that hides which unit was there), so it shows escaped
-             * too; it cannot arrive from UTF-8, which is all escape_core
-             * sees. */
-            sw_append_escape(out, u);
-        } else if (u == '\\' && k + 2 < n
-                   && ((cps[k + 1] == 'u' && cps[k + 2] == '{')
-                       || (cps[k + 1] == 'x' && sw_is_hex_digit(cps[k + 2])))) {
-            /* A literal backslash that would read as the start of an escape
-             * (before "u{", or before "x" and a hex digit) shows as its own
-             * escape, so an escape on screen can only ever be one. Every other
-             * backslash is drawn as itself. */
-            sw_append_escape(out, '\\');
-        } else if (u > 0xFFFF) {
-            UniChar pair[2];
-            CFStringGetSurrogatePairForLongCharacter((UTF32Char)u, pair);
-            [out appendString:[NSString stringWithCharacters:pair length:2]];
-        } else {
-            unichar c = (unichar)u;
-            [out appendString:[NSString stringWithCharacters:&c length:1]];
-        }
-    }
+    free(buf);
     return out;
 }
 
-+ (NSString *)quoteToken:(NSString *)token {
-    if (token == nil) return @"''";
-    if (token.length == 0) return @"''";
-
-    NSString *escaped = [self escapeControlChars:token];
-
-    NSCharacterSet *unsafe = [[self safeSet] invertedSet];
-    if ([escaped rangeOfCharacterFromSet:unsafe].location == NSNotFound) {
-        return escaped;
+/* The command line (sw_full_command_line): the quoted path, then argv minus
+ * argv[0] when it duplicates the path or its basename. The terminal's plain
+ * execute: value, byte for byte. */
+static NSString *sw_pf_command_line(const char *path, char * const argv[]) {
+    size_t n = 0;
+    if (argv != NULL) {
+        while (argv[n] != NULL) n++;
     }
-
-    NSMutableString *quoted = [NSMutableString stringWithCapacity:escaped.length + 2];
-    [quoted appendString:@"'"];
-    NSUInteger len = escaped.length;
-    for (NSUInteger i = 0; i < len; i++) {
-        unichar c = [escaped characterAtIndex:i];
-        if (c == '\'') {
-            [quoted appendString:@"'\\''"];
-        } else {
-            [quoted appendFormat:@"%C", c];
-        }
+    const uint8_t **toks = calloc(n ? n : 1, sizeof(*toks));
+    size_t *lens = calloc(n ? n : 1, sizeof(*lens));
+    if (toks == NULL || lens == NULL) { free(toks); free(lens); return nil; }
+    for (size_t i = 0; i < n; i++) {
+        toks[i] = (const uint8_t *)argv[i];
+        lens[i] = strlen(argv[i]);
     }
-    [quoted appendString:@"'"];
-    return quoted;
+    size_t plen = strlen(path), needed = 0;
+    sw_full_command_line((const uint8_t *)path, plen, toks, lens, n,
+                         NULL, 0, &needed);
+    uint8_t *buf = malloc(needed + 1);
+    NSString *out = nil;
+    size_t got = 0;
+    if (buf != NULL
+        && sw_full_command_line((const uint8_t *)path, plen, toks, lens, n,
+                                buf, needed + 1, &got) == SW_ESCAPE_OK) {
+        out = sw_pf_string(buf, got);
+    }
+    free(buf);
+    free(toks);
+    free(lens);
+    return out;
 }
 
-/* Build the displayable token list: resolved path, then argv tokens minus
- * argv[0] when it duplicates the path/basename. Each token is shell-quoted and
- * control-char escaped. Shared by the sheet formatter below (which then applies
- * the length budget) and the full-command terminal echo (which does not), so
- * the two renderings can never disagree on how a token is quoted or escaped. */
-+ (NSArray<NSString *> *)commandPartsForPath:(NSString *)path
-                                        argv:(NSArray<NSString *> *)argv {
-    NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithCapacity:(argv.count + 1)];
-    [parts addObject:[self quoteToken:path]];
+@implementation SudoWhatPromptFormatter
 
-    NSString *basename = [path lastPathComponent];
-    NSUInteger startIdx = 0;
-    if (argv.count > 0) {
-        NSString *first = argv[0];
-        if ([first isEqualToString:path] ||
-            (basename.length > 0 && [first isEqualToString:basename])) {
-            startIdx = 1;
-        }
-    }
-    for (NSUInteger i = startIdx; i < argv.count; i++) {
-        [parts addObject:[self quoteToken:argv[i]]];
-    }
-    return parts;
-}
-
-+ (NSString *)fullCommandLineForCommandPath:(NSString *)path
-                                       argv:(NSArray<NSString *> *)argv {
-    return [[self commandPartsForPath:path argv:argv]
-            componentsJoinedByString:@" "];
-}
-
-+ (NSString *)formatWithCommandPath:(NSString *)path
-                          runasUser:(NSString *)user
-                                cwd:(NSString *)cwd
++ (NSString *)formatWithCommandPath:(const char *)path
+                          runasUser:(const char *)user
+                                cwd:(const char *)cwd
                          verifyCode:(NSString *)verifyCode
-                                argv:(NSArray<NSString *> *)argv
+                               argv:(char * const *)argv
                               style:(SWPromptStyle)style {
     return [self formatWithCommandPath:path runasUser:user cwd:cwd
                             verifyCode:verifyCode argv:argv style:style
                               overflow:NULL];
 }
 
-+ (NSString *)formatWithCommandPath:(NSString *)path
-                          runasUser:(NSString *)user
-                                cwd:(NSString *)cwd
++ (NSString *)formatWithCommandPath:(const char *)path
+                          runasUser:(const char *)user
+                                cwd:(const char *)cwd
                          verifyCode:(NSString *)verifyCode
-                                argv:(NSArray<NSString *> *)argv
+                               argv:(char * const *)argv
                               style:(SWPromptStyle)style
                        wasTruncated:(BOOL *)outTruncated {
     SWPromptOverflow ov = { NO, NO, NO };
@@ -173,11 +92,11 @@ static void sw_append_escape(NSMutableString *out, uint32_t u) {
     return out;
 }
 
-+ (NSString *)formatWithCommandPath:(NSString *)path
-                          runasUser:(NSString *)user
-                                cwd:(NSString *)cwd
++ (NSString *)formatWithCommandPath:(const char *)path
+                          runasUser:(const char *)user
+                                cwd:(const char *)cwd
                          verifyCode:(NSString *)verifyCode
-                                argv:(NSArray<NSString *> *)argv
+                               argv:(char * const *)argv
                               style:(SWPromptStyle)style
                            overflow:(SWPromptOverflow *)outOverflow {
     /* LA caps the localizedReason at ~510 chars total — anything past the cap
@@ -207,25 +126,36 @@ static void sw_append_escape(NSMutableString *out, uint32_t u) {
      * controlling terminal; they compare the two before approving. Capped
      * (plain cut, no marker) purely so the budget holds against a malformed
      * code — the production nonce is 3 chars. */
+    if (path == NULL) return nil;
+
     NSString *verifyLine;
     if (verifyCode.length > 0) {
-        NSString *v = [self escapeControlChars:verifyCode];
+        NSString *v = sw_pf_escape(verifyCode.UTF8String);
+        if (v == nil) return nil;
         if (v.length > kMaxVerifyDisplay) v = [v substringToIndex:kMaxVerifyDisplay];
         verifyLine = [NSString stringWithFormat:@"Verify Code: %@", v];
     } else {
         verifyLine = @"Verify Code: unavailable";
     }
 
-    /* Item values, fully escaped/quoted. Each is shown whole or, if over budget,
-     * replaced by the marker — never partially truncated. A displayed cwd always
-     * starts with '/', so it can never collide with the parenthesised marker;
-     * the command region quotes any token with unsafe bytes, so a literal
-     * "(see terminal)" argument renders quoted and stays distinguishable. */
+    /* Item values, escaped (and the command shell-quoted) by escape_core from
+     * the raw bytes. Each is shown whole or, if over budget, replaced by the
+     * marker — never partially truncated. A displayed cwd always starts with
+     * '/', so it can never collide with the parenthesised marker; the command
+     * region quotes any token with unsafe bytes, so a literal "(see terminal)"
+     * argument renders quoted and stays distinguishable. A value that cannot
+     * be rendered fails the whole sheet: a sheet missing a value would ask the
+     * human to approve something it does not show. */
     NSString *const kSeeTerminal = @"(see terminal)";
-    NSString *userVal = (user.length > 0) ? [self escapeControlChars:user] : @"root";
-    NSString *pathVal = (cwd.length > 0) ? [self escapeControlChars:cwd] : nil;
-    NSString *cmdVal  = [[self commandPartsForPath:path argv:argv]
-                          componentsJoinedByString:@" "];
+    NSString *userVal = (user != NULL && user[0] != '\0') ? sw_pf_escape(user)
+                                                          : @"root";
+    NSString *pathVal = nil;
+    if (cwd != NULL && cwd[0] != '\0') {
+        pathVal = sw_pf_escape(cwd);
+        if (pathVal == nil) return nil;
+    }
+    NSString *cmdVal = sw_pf_command_line(path, argv);
+    if (userVal == nil || cmdVal == nil) return nil;
 
     /* Closing reminder. Bounded either way; reserve the larger for the budget
      * so the fit holds before we know which one we will emit. */
@@ -287,8 +217,8 @@ static void sw_append_escape(NSMutableString *out, uint32_t u) {
 
     /* What makes a label unforgeable is the SHAPE, not the spelling: a real
      * label sits alone on its own line, directly after a blank line, with its
-     * value on the line below. escapeControlChars scrubs newlines and Unicode
-     * line/paragraph separators out of every displayed value, so no value can
+     * value on the line below. escape_core escapes newlines and the Unicode
+     * line/paragraph separators in every displayed value, so no value can
      * contain a line break at all — it may well contain the text "RUN AS" or
      * "EXECUTE", but it can never put that text alone on a line of its own,
      * and it can never fabricate the blank line that precedes every real

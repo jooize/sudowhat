@@ -2,15 +2,13 @@
 //!
 //! It renders untrusted text (argv, the target user, a directory, a PATH) for
 //! display so the reader sees exactly the characters that are there, following
-//! the house untrusted-text rules. The stateless logic mirrors
-//! `plugin/PromptFormatter.m` (`escapeControlChars:`, `quoteToken:`,
-//! `fullCommandLineForCommandPath:argv:`), which renders the biometric sheet;
-//! this crate renders the terminal, in memory-safe code, and ports unchanged to
-//! the pure-Rust Linux plugin (no Apple frameworks).
-//!
-//! Equivalence with the ObjC original on valid UTF-8 is a hard requirement,
-//! checked by `tests/test_escape_core.m` against the same vectors. Keep the two
-//! in sync: any change here must keep that guard green.
+//! the house untrusted-text rules. It is the one renderer for every surface:
+//! the terminal lines both macOS bundles print, the Touch ID sheet's values
+//! (`plugin/PromptFormatter.m` lays the sheet out and calls the C ABI below for
+//! every value), and the pure-Rust Linux plugin (no Apple frameworks). One
+//! renderer means the sheet and the terminal cannot disagree on a token;
+//! `tests/test_escape_core.m` holds the sheet's command to the terminal's line
+//! byte for byte.
 //!
 //! The rules, in brief (the untrusted-text skill holds the full text):
 //!
@@ -49,9 +47,7 @@ pub const SW_ESCAPE_TRUNCATED: c_int = 1;
 
 // -------------------------------------------------------------------------
 // Escaping. Operates on the raw bytes: valid UTF-8 is decoded to scalar
-// values, and only the bytes that fail to decode are escaped as bytes. For
-// valid input this matches the ObjC code-point iteration exactly, so the two
-// renderings agree byte for byte.
+// values, and only the bytes that fail to decode are escaped as bytes.
 // -------------------------------------------------------------------------
 
 /// The hidden list of the untrusted-text rules, verbatim: code points that draw
@@ -147,9 +143,7 @@ fn pieces(bytes: &[u8]) -> Vec<Piece> {
 
 /// Escape raw bytes for display: hidden code points and invalid bytes become
 /// escapes, a backslash that would begin an escape becomes its own, and every
-/// other character is itself. Unstyled. Port of
-/// `-[SudoWhatPromptFormatter escapeControlChars:]` (which sees no invalid
-/// bytes: an NSString cannot hold them).
+/// other character is itself. Unstyled.
 pub fn escape_bytes(input: &[u8], out: &mut String) {
     for p in pieces(input) {
         p.push_text(out);
@@ -169,7 +163,7 @@ pub fn escape_control(input: &str, out: &mut String) {
 // -------------------------------------------------------------------------
 
 /// The conservative safe set: a token made only of these characters (and no
-/// escape) is emitted unquoted. Mirrors `+[SudoWhatPromptFormatter safeSet]`.
+/// escape) is emitted unquoted.
 fn is_safe(c: char) -> bool {
     matches!(c,
         'A'..='Z' | 'a'..='z' | '0'..='9'
@@ -200,7 +194,7 @@ type Rendered = Vec<Part>;
 
 /// Render one token: escaped, and single-quoted when it holds anything outside
 /// the safe set (any escape included). A quote inside a quoted token takes the
-/// classic POSIX `'\''`. Port of `-[SudoWhatPromptFormatter quoteToken:]`.
+/// classic POSIX `'\''`.
 fn render_token(raw: &[u8]) -> Rendered {
     let ours = || ("'".to_string(), Mark::Ours);
     if raw.is_empty() {
@@ -272,9 +266,8 @@ fn last_path_component(p: &[u8]) -> &[u8] {
 
 /// The displayable token list: the command path, then argv minus argv[0] when it
 /// dups the path or its basename. Raw (unescaped) tokens -- rendering happens
-/// below. Port of `+[SudoWhatPromptFormatter commandPartsForPath:argv:]`, and
-/// for the same reason: the plain and the coloured renderers share one token
-/// list, so they can never disagree on which tokens the line has.
+/// below. The plain and the coloured renderers share this one token list, so
+/// they can never disagree on which tokens the line has.
 fn command_tokens<'a>(path: &'a [u8], argv: &[&'a [u8]]) -> Vec<&'a [u8]> {
     let mut toks: Vec<&[u8]> = Vec::with_capacity(argv.len() + 1);
     toks.push(path);
@@ -291,8 +284,7 @@ fn command_tokens<'a>(path: &'a [u8], argv: &[&'a [u8]]) -> Vec<&'a [u8]> {
 }
 
 /// The full command line over raw bytes: quoted path, then argv minus argv[0]
-/// when it dups the path or its basename. Port of
-/// `-[SudoWhatPromptFormatter fullCommandLineForCommandPath:argv:]`.
+/// when it dups the path or its basename.
 pub fn full_command_line_bytes(path: &[u8], argv: &[&[u8]], out: &mut String) {
     for (i, tok) in command_tokens(path, argv).iter().enumerate() {
         if i > 0 {

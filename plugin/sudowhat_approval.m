@@ -661,10 +661,10 @@ static NSString *sw_exec_render(sw_cmdline_fn render,
 
 /* Build the RESOLVED command line: sudo's command_info["command"] as the path,
  * then run_argv, with the escape core dropping run_argv[0] when it duplicates
- * the path or its basename (the same dedup the sheet's commandPartsForPath
- * does, from the same token list). Every token is shell-quoted and
- * control-character escaped there, so nothing a caller typed can reach the
- * terminal as a raw escape sequence.
+ * the path or its basename (the same function renders the sheet's EXECUTE
+ * value in PromptFormatter, from the same bytes). Every token is shell-quoted
+ * and control-character escaped there, so nothing a caller typed can reach
+ * the terminal as a raw escape sequence.
  *
  * When colour is on the coloured renderer is tried first and the plain one is
  * the fallback: colour is layout over the same bytes, so degrading to plain
@@ -761,15 +761,17 @@ static SWPromptStyle sw_sheet_style(void) {
 
 /* The target user's name, as sudo resolved it: command_info["runas_user"], the
  * authoritative name for the target uid (uid 0's entry may be named something
- * other than "root"). Without it the default target is uid 0, looked up here. */
-static NSString *sw_runas_name(char * const command_info[]) {
+ * other than "root"). Without it the default target is uid 0, looked up here.
+ *
+ * Returned as the raw bytes, never an NSString: a name that is not valid UTF-8
+ * must reach the renderer and show escaped, not decode to nil and vanish. The
+ * getpwuid result lives in static storage until the next getpw* call, so a
+ * caller uses it at once, as an argument. */
+static const char *sw_runas_name(char * const command_info[]) {
     const char *runasU = find_kv(command_info, "runas_user");
-    if (runasU && runasU[0] != '\0') {
-        return [NSString stringWithUTF8String:runasU];
-    }
+    if (runasU && runasU[0] != '\0') return runasU;
     struct passwd *pw = getpwuid(0);
-    return (pw && pw->pw_name) ? [NSString stringWithUTF8String:pw->pw_name]
-                               : @"root";
+    return (pw && pw->pw_name) ? pw->pw_name : "root";
 }
 
 /* Render the whole execute: line -- frame plus value -- as one string.
@@ -806,13 +808,13 @@ static NSString *sw_runas_name(char * const command_info[]) {
 static NSString *sw_format_exec_line(const char *path,
                                      char * const run_argv[],
                                      sw_exec_layout layout,
-                                     NSString *runas,
+                                     const char *runas,
                                      BOOL frameColor, BOOL valueColor) {
     if (path == NULL) return nil;
     NSString *value = sw_exec_command_line(path, run_argv, valueColor);
     if (value.length == 0) return nil;
-    if (layout == SW_EXEC_SOLO && runas.length > 0) {
-        NSString *user = sw_exec_escape(runas.UTF8String);
+    if (layout == SW_EXEC_SOLO && runas != NULL && runas[0] != '\0') {
+        NSString *user = sw_exec_escape(runas);
         if (user == nil) return nil;
         if (frameColor && ![user isEqualToString:@"root"]) {
             user = [NSString stringWithFormat:@"\033[33m%@\033[0m", user];
@@ -852,7 +854,7 @@ static NSString *sw_format_exec_line(const char *path,
  * and read the bytes back. Returns YES iff the whole line was written. */
 static BOOL write_exec_line_to_tty(const char *ttyPath, const char *path,
                                    char * const run_argv[],
-                                   sw_exec_layout layout, NSString *runas,
+                                   sw_exec_layout layout, const char *runas,
                                    BOOL colorAllowed) {
     if (path == NULL) return NO;
 
@@ -971,7 +973,7 @@ enum { sw_exec_display_mode = SW_ED_SEL(SW_EXEC_DISPLAY) };
  * terminal-password step-aside asks sw_step_aside_layout. */
 static void emit_exec_line(const char *ttyPath, const char *path,
                            char * const run_argv[], sw_exec_layout layout,
-                           NSString *runas, BOOL colorAllowed) {
+                           const char *runas, BOOL colorAllowed) {
     if (sw_exec_display_mode != SW_ED_on) return;
     if (path == NULL) return;
     write_exec_line_to_tty(ttyPath, path, run_argv, layout, runas, colorAllowed);
@@ -1291,7 +1293,7 @@ static int sw_confirm_run(const char *ttyPath, const char *commandC,
      * A line that did not reach the terminal whole fails closed, for the
      * reason sw_step_aside_allow refuses a missing command key: a y/N under
      * a command the human was never shown would approve what nobody saw. */
-    if (!write_exec_line_to_tty(ttyPath, commandC, run_argv, layout, nil,
+    if (!write_exec_line_to_tty(ttyPath, commandC, run_argv, layout, NULL,
                                 sw_color_allowed())) {
         close(preFd);
         set_errstr(errstr, "sudowhat: cannot show the command on the terminal; "
@@ -1382,7 +1384,7 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
     if (!sw_confirm_decision(confirmOn, haveTty, markerPresent,
                              integrityInstalled)) {
         emit_exec_line("/dev/tty", commandC, run_argv,
-                       sw_step_aside_layout(markerPresent), nil,
+                       sw_step_aside_layout(markerPresent), NULL,
                        sw_color_allowed());
         return 1;
     }
@@ -1709,30 +1711,24 @@ static int sudowhat_check(char * const command_info[],
             set_errstr(errstr, "sudowhat: missing 'command' in command_info");
             return -1;
         }
-        NSString *commandPath = [NSString stringWithUTF8String:commandC];
-
-        NSString *runasUser = sw_runas_name(command_info);
-
-        NSMutableArray<NSString *> *argv = [NSMutableArray array];
-        if (run_argv) {
-            for (int i = 0; run_argv[i] != NULL; i++) {
-                NSString *tok = [NSString stringWithUTF8String:run_argv[i]];
-                if (tok) [argv addObject:tok];
-            }
-        }
-
-        /* Resolve cwd once — used by the policy-deference echo just below and by
-         * the prompt formatting further down. Preference: command_info["cwd"]
-         * (set when sudoers has cwd=) > the stashed invoking cwd from user_info
-         * (the default case, where sudo inherits the caller's cwd without
-         * emitting command_info["cwd"]). Either way it reflects where execve
-         * will run. */
+        /* The sheet's values stay the raw bytes sudo handed over -- commandC,
+         * run_argv, the cwd below and the target user -- all the way into
+         * PromptFormatter, which renders them through escape_core like the
+         * terminal's execute: line. None becomes an NSString first: that
+         * decode fails on a byte that is not valid UTF-8, and a nil there once
+         * dropped the whole token from the sheet while the terminal showed it.
+         *
+         * Resolve cwd once, for the prompt formatting further down.
+         * Preference: command_info["cwd"] (set when sudoers has cwd=) > the
+         * stashed invoking cwd from user_info (the default case, where sudo
+         * inherits the caller's cwd without emitting command_info["cwd"]).
+         * Either way it reflects where execve will run. */
         const char *cwdC = find_kv(command_info, "cwd");
-        NSString *cwd = nil;
+        const char *cwd = NULL;
         if (cwdC && cwdC[0] != '\0') {
-            cwd = [NSString stringWithUTF8String:cwdC];
+            cwd = cwdC;
         } else if (g_inv.have_cwd) {
-            cwd = [NSString stringWithUTF8String:g_inv.cwd];
+            cwd = g_inv.cwd;
         }
 
         /* (3.5) POLICY DEFERENCE. sudo runs the PAM auth stack — and pam_sudowhat
@@ -1779,7 +1775,7 @@ static int sudowhat_check(char * const command_info[],
              * deliberately does not reach this path. Record the skip and
              * allow. */
             emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
-                           nil, sw_color_allowed());
+                           NULL, sw_color_allowed());
             syslog(LOG_AUTHPRIV | LOG_NOTICE,
                    "sudowhat: prompt skipped, sudoers waived authentication "
                    "(invoking uid %u)", g_inv.uid);
@@ -1826,13 +1822,21 @@ static int sudowhat_check(char * const command_info[],
          * line, already printed to this terminal before this plugin ran.
          * (Formatting is pure and precedes the seteuid drop, so doing it
          * before the tty write is safe.) */
-        NSString *promptTextLA =
-            [SudoWhatPromptFormatter formatWithCommandPath:commandPath
-                                                 runasUser:runasUser
-                                                       cwd:cwd
-                                                verifyCode:verifyCode
-                                                      argv:argv
-                                                     style:sw_sheet_style()];
+        NSString *promptTextLA = [SudoWhatPromptFormatter
+            formatWithCommandPath:commandC
+                        runasUser:sw_runas_name(command_info)
+                              cwd:cwd
+                       verifyCode:verifyCode
+                             argv:run_argv
+                            style:sw_sheet_style()];
+        /* nil only on an allocation failure in the renderer. Fail closed: a
+         * sheet that cannot show the command is never raised. */
+        if (promptTextLA == nil) {
+            close(preFd);
+            set_errstr(errstr, "sudowhat: cannot render the authentication "
+                               "prompt; command not run");
+            return -1;
+        }
 
         /* Two lines, in this order, then the sheet.
          *
@@ -1853,7 +1857,7 @@ static int sudowhat_check(char * const command_info[],
          * before the LAContext call, which blocks until the human answers. */
         emit_verify_code("/dev/tty", nonceBuf, sw_color_allowed());
         emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_GROUPED,
-                       nil, sw_color_allowed());
+                       NULL, sw_color_allowed());
 
         /* (5) LAContext call.
          *

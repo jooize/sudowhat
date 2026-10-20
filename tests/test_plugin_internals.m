@@ -334,26 +334,26 @@ static void test_exec_line_format(void) {
 
     /* Plain: the provenance prefix, the label padded to the shared gutter, the
      * value. "execute:" is 8 characters, so 4 spaces of gap. */
-    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil, NO, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL, NO, NO),
        @"sudowhat: execute:    /run/current-system/sw/bin/pinned deploy\n\n",
        "plain execute: line, label padded to the gutter");
 
     /* The value starts in the same column as every audit-block row (10 bytes of
      * "sudowhat: " plus the 12-wide gutter). This is the whole reason the two
      * bundles duplicate the width instead of sharing it. */
-    NSRange v = [sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil, NO, NO)
+    NSRange v = [sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL, NO, NO)
                     rangeOfString:@"/run/current-system"];
     OK(v.location == 22, "execute: value starts at the shared value column 22");
 
     /* Styled: our frame contributes the bold label and nothing else; the padding
      * stays outside the emphasis, as in the audit plugin's rows. */
-    OK([sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil, YES, YES)
+    OK([sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL, YES, YES)
            hasPrefix:@"sudowhat: \033[1mexecute:\033[0m    "],
        "styled execute: line bolds the label only, never the padding");
 
     /* No path -> nothing to render, so the write site shows nothing rather than
      * a frame with an empty value. */
-    OK(sw_format_exec_line(NULL, argv, SW_EXEC_GROUPED, nil, NO, NO) == nil,
+    OK(sw_format_exec_line(NULL, argv, SW_EXEC_GROUPED, NULL, NO, NO) == nil,
        "NULL path -> nil line");
 }
 
@@ -366,24 +366,24 @@ static void test_exec_line_solo_format(void) {
 
     /* Exactly one space after the label, and the value therefore starts at
      * column 19 rather than the block's 22. */
-    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, nil, NO, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, NULL, NO, NO),
        @"sudowhat: execute: /run/current-system/sw/bin/pinned deploy\n",
        "solo execute: line, label unpadded (one space)");
 
-    NSRange v = [sw_format_exec_line(path, argv, SW_EXEC_SOLO, nil, NO, NO)
+    NSRange v = [sw_format_exec_line(path, argv, SW_EXEC_SOLO, NULL, NO, NO)
                     rangeOfString:@"/run/current-system"];
     OK(v.location == 19, "solo execute: value follows the label directly");
 
     /* Styled solo: the same bold-the-label-only emphasis as the grouped twin,
      * with the single space outside it. */
-    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, nil, YES, YES)
+    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, NULL, YES, YES)
            hasPrefix:@"sudowhat: \033[1mexecute:\033[0m "],
        "styled solo execute: line bolds the label only");
 
     /* Layout changes the frame and NOTHING else: strip the frame from either
      * form and the same value remains. */
-    NSString *grouped = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil, NO, NO);
-    NSString *solo = sw_format_exec_line(path, argv, SW_EXEC_SOLO, nil, NO, NO);
+    NSString *grouped = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL, NO, NO);
+    NSString *solo = sw_format_exec_line(path, argv, SW_EXEC_SOLO, NULL, NO, NO);
     EQ([[solo substringFromIndex:19] stringByAppendingString:@"\n"],
        [grouped substringFromIndex:22],
        "solo and grouped carry the identical value; grouped adds the closing blank line");
@@ -407,18 +407,18 @@ static void test_exec_line_solo_runas(void) {
     const char *path = "/bin/cat";
     char *argv[] = { (char *)"cat", (char *)"--", (char *)"/tmp/f", NULL };
 
-    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"jooize", NO, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "jooize", NO, NO),
        @"sudowhat: run as:     jooize\n"
         "sudowhat: execute:    /bin/cat -- /tmp/f\n\n",
        "solo line brings a run as: row, both in the shared gutter, then a blank");
-    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"root", NO, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "root", NO, NO),
        @"sudowhat: run as:     root\n"
         "sudowhat: execute:    /bin/cat -- /tmp/f\n\n",
        "root is named too: the rows never leave the user implied");
 
     /* The user ends its row: the line holding it holds nothing after it. */
     NSArray<NSString *> *rows = [sw_format_exec_line(path, argv, SW_EXEC_SOLO,
-                                                     @"jooize", NO, NO)
+                                                     "jooize", NO, NO)
                                     componentsSeparatedByString:@"\n"];
     OK([rows[0] hasSuffix:@"jooize"] &&
        [rows[1] rangeOfString:@"jooize"].location == NSNotFound,
@@ -426,27 +426,34 @@ static void test_exec_line_solo_runas(void) {
 
     /* Styled: the label bold, the user styled like the audit block's run as:
      * value -- plain for root, yellow otherwise -- and outside the bold. */
-    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"jooize", YES, NO)
+    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, "jooize", YES, NO)
            hasPrefix:@"sudowhat: \033[1mrun as:\033[0m     \033[33mjooize\033[0m\n"
                       "sudowhat: \033[1mexecute:\033[0m    "],
        "styled: bold labels, yellow non-root user");
-    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"root", YES, NO)
+    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, "root", YES, NO)
            hasPrefix:@"sudowhat: \033[1mrun as:\033[0m     root\n"],
        "styled: root stays plain, as in the audit block's run as: row");
 
     /* The name is escaped like every other value: a control byte cannot reach
      * the terminal raw or add a row. */
     NSString *hostile = sw_format_exec_line(path, argv, SW_EXEC_SOLO,
-                                            @"ev\nil\033[2J", NO, NO);
+                                            "ev\nil\033[2J", NO, NO);
     OK([hostile rangeOfString:@"\033"].location == NSNotFound &&
        [hostile componentsSeparatedByString:@"\n"].count == 4,
        "a control byte in the name is escaped: two rows, a blank, no raw escape");
 
+    /* A name that is not valid UTF-8 keeps its row, the byte shown as \xHH:
+     * the name once decoded to an NSString, and the nil dropped the row. */
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "u\xff", NO, NO),
+       @"sudowhat: run as:     u\\xFF\n"
+        "sudowhat: execute:    /bin/cat -- /tmp/f\n\n",
+       "a user name with an invalid byte keeps its run as: row");
+
     /* Only the solo frame names the user; a grouped line has run as: above. */
-    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, @"jooize", NO, NO),
-       sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil, NO, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, "jooize", NO, NO),
+       sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL, NO, NO),
        "a grouped line ignores the user");
-    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, @"", NO, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "", NO, NO),
        @"sudowhat: execute: /bin/cat -- /tmp/f\n",
        "no user -> the bare solo label");
 }
@@ -461,8 +468,8 @@ static void test_step_aside_layout(void) {
        "marker present (sudo prompted) -> solo, no closing blank line");
     OK(sw_step_aside_layout(NO) == SW_EXEC_GROUPED,
        "marker absent (nothing asked) -> grouped, the table's last row");
-    NSString *grouped = sw_format_exec_line("/bin/echo", NULL, SW_EXEC_GROUPED, nil, NO, NO);
-    NSString *solo = sw_format_exec_line("/bin/echo", NULL, SW_EXEC_SOLO, nil, NO, NO);
+    NSString *grouped = sw_format_exec_line("/bin/echo", NULL, SW_EXEC_GROUPED, NULL, NO, NO);
+    NSString *solo = sw_format_exec_line("/bin/echo", NULL, SW_EXEC_SOLO, NULL, NO, NO);
     OK([grouped hasSuffix:@"\n\n"] && ![grouped hasSuffix:@"\n\n\n"],
        "a grouped line closes its table with exactly one blank line");
     OK([solo hasSuffix:@"\n"] && ![solo hasSuffix:@"\n\n"],
@@ -479,7 +486,7 @@ static void test_exec_line_color_split(void) {
 
     /* frame on, value off: bold label, plain command -- no escape byte after
      * the frame's closing reset. */
-    NSString *frameOnly = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil,
+    NSString *frameOnly = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL,
                                               YES, NO);
     EQ(frameOnly,
        @"sudowhat: \033[1mexecute:\033[0m    /bin/echo hello\n\n",
@@ -488,14 +495,14 @@ static void test_exec_line_color_split(void) {
     /* frame on, value on: the same frame, and the value now carries the escape
      * core's role colouring. Compared against the frame-only line so this pins
      * the difference, not the palette (tests/test_escape_core.m owns that). */
-    NSString *both = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil, YES, YES);
+    NSString *both = sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL, YES, YES);
     OK([both hasPrefix:@"sudowhat: \033[1mexecute:\033[0m    "],
        "value colouring leaves the frame byte-identical");
     OK(![both isEqualToString:frameOnly],
        "value colouring actually reaches the command value");
 
     /* frame off, value off is the fully plain line (the non-tty rendering). */
-    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil, NO, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL, NO, NO),
        @"sudowhat: execute:    /bin/echo hello\n\n",
        "both off -> not one escape byte");
 }
@@ -517,7 +524,7 @@ static void test_exec_line_matches_escape_core(void) {
      * the same token list. */
     const char *path = "/run/current-system/sw/bin/pinned";
     char *argv[] = { (char *)"pinned", (char *)"deploy", NULL };
-    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, nil, NO, NO),
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, NULL, NO, NO),
        ([NSString stringWithFormat:@"sudowhat: execute:    %@\n\n",
                                    sw_core_line(path, argv)]),
        "execute: value is the escape core's line verbatim (argv[0] dedupped)");
@@ -526,7 +533,7 @@ static void test_exec_line_matches_escape_core(void) {
      * it -- sudo -u somebody's `sh -c ...` must not lose a token. */
     const char *shPath = "/bin/sh";
     char *shArgv[] = { (char *)"-bash", (char *)"-c", (char *)"id", NULL };
-    EQ(sw_format_exec_line(shPath, shArgv, SW_EXEC_GROUPED, nil, NO, NO),
+    EQ(sw_format_exec_line(shPath, shArgv, SW_EXEC_GROUPED, NULL, NO, NO),
        ([NSString stringWithFormat:@"sudowhat: execute:    %@\n\n",
                                    sw_core_line(shPath, shArgv)]),
        "a non-duplicate argv[0] is kept, exactly as the core renders it");
@@ -536,12 +543,12 @@ static void test_exec_line_matches_escape_core(void) {
      * second sudowhat line or emit a raw escape sequence. */
     const char *echoPath = "/bin/echo";
     char *evil[] = { (char *)"echo", (char *)"sudowhat: execute: /bin/true", NULL };
-    EQ(sw_format_exec_line(echoPath, evil, SW_EXEC_GROUPED, nil, NO, NO),
+    EQ(sw_format_exec_line(echoPath, evil, SW_EXEC_GROUPED, NULL, NO, NO),
        @"sudowhat: execute:    /bin/echo 'sudowhat: execute: /bin/true'\n\n",
        "a token spelled like one of our own lines lands quoted, as data");
 
     /* (d) Path only, no argv at all. */
-    EQ(sw_format_exec_line(echoPath, NULL, SW_EXEC_GROUPED, nil, NO, NO),
+    EQ(sw_format_exec_line(echoPath, NULL, SW_EXEC_GROUPED, NULL, NO, NO),
        @"sudowhat: execute:    /bin/echo\n\n", "NULL run_argv -> path-only line");
 }
 
@@ -557,7 +564,7 @@ static void test_emit_exec_line_tty_only(void) {
 
     char *argv[] = { (char *)"pinned", (char *)"deploy", NULL };
     emit_exec_line(path, "/run/current-system/sw/bin/pinned", argv,
-                   SW_EXEC_GROUPED, nil, YES);
+                   SW_EXEC_GROUPED, NULL, YES);
     EQ(sw_read_utf8(path),
        @"sudowhat: execute:    /run/current-system/sw/bin/pinned deploy\n\n",
        "emit_exec_line wrote the resolved line to the tty path");
@@ -566,7 +573,7 @@ static void test_emit_exec_line_tty_only(void) {
 
     /* (b) A NULL command path is a silent skip, not a frame with nothing in it:
      * the file must be left exactly as (a) left it. */
-    emit_exec_line(path, NULL, argv, SW_EXEC_GROUPED, nil, YES);
+    emit_exec_line(path, NULL, argv, SW_EXEC_GROUPED, NULL, YES);
     EQ(sw_read_utf8(path),
        @"sudowhat: execute:    /run/current-system/sw/bin/pinned deploy\n\n",
        "NULL command path writes nothing at all");
@@ -576,7 +583,7 @@ static void test_emit_exec_line_tty_only(void) {
      * and no printf parameter that could carry one, so the line appears on the
      * terminal that launched sudo or nowhere. */
     emit_exec_line("/no/such/dir/sw_tty", "/bin/echo", argv,
-                   SW_EXEC_GROUPED, nil, YES);
+                   SW_EXEC_GROUPED, NULL, YES);
     OK(1, "no controlling terminal -> silent (no fallback), no crash");
 }
 

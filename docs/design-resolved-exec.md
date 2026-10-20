@@ -51,8 +51,8 @@ they differ in weight only, see the delta below):
     sudowhat: execute:    /run/current-system/sw/bin/pinned deploy
 
 Content: `command_info["command"]` + `run_argv[1..]` (argv[0] dropped when it
-duplicates the path/basename, exactly as `commandPartsForPath` does for the
-dialog). Printed ALWAYS -- a predictable ceremony beats a clever conditional,
+duplicates the path/basename; the dialog's EXECUTE value comes from the same
+escape_core function over the same bytes). Printed ALWAYS -- a predictable ceremony beats a clever conditional,
 and "only sometimes present" would itself need explaining.
 
 **Delta (2026-08-27): the root-bypass line is solo.** The gutter above exists
@@ -230,8 +230,8 @@ the name matters most.
 Losing the caps costs nothing structurally, because the caps were never the
 anti-forgery mechanism. What makes a label unforgeable is its *shape*: a real
 label sits alone on its own line, directly after a blank line, with its value
-on the line below -- and `escapeControlChars` strips newlines and the Unicode
-line/paragraph separators out of every displayed value, so no value can contain
+on the line below -- and escape_core escapes newlines and the Unicode
+line/paragraph separators in every displayed value, so no value can contain
 a line break at all. A displayed value may well contain the text `EXECUTE`; it
 can never put that text alone on a line of its own after a blank line. The unit
 tests pin exactly that (an argv token spelling a fake stacked label leaves the

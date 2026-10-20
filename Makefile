@@ -198,9 +198,9 @@ build/pam_sudowhat.so:      CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatPamSigVerif
 build/sudowhat_audit.so:    CFLAGS += -DSW_SIGVERIFIER_CLASS=SudoWhatAuditSigVerifier \
                                       -DSW_AUDIT_DISPLAY=$(SUDOWHAT_AUDIT_DISPLAY)
 
-# The approval bundle links the Rust staticlib too: its `execute:` line renders
-# the resolved command through the same escape core the audit bundle uses, so the
-# two plugins cannot disagree on how a token is spelled. Each bundle gets its own
+# The approval bundle links the Rust staticlib too: its `execute:` line and the
+# Touch ID sheet's text render through the same escape core the audit bundle
+# uses, so no two surfaces can disagree on how a token is spelled. Each bundle gets its own
 # copy of the archive (they are separate Mach-O images), which is the same
 # deliberate duplication as the per-bundle SignatureVerifier class.
 build/sudowhat_approval.so: $(PLUGIN_OBJS) $(ESCAPE_CORE_LIB) | build
@@ -301,8 +301,9 @@ test: install
 # test-unit: offline unit tests for the pure helpers (no root, no install).
 # Builds standalone test executables and runs them; non-zero exit on failure.
 # Each binary prints its own TAP 14 stream on stdout (see tests/sw_test.h).
-# test_escape_core is the cross-language guard: it links the Rust staticlib and
-# asserts it escapes byte-identically to the ObjC PromptFormatter.
+# test_escape_core is the cross-surface guard: it links the Rust staticlib and
+# asserts the Touch ID sheet's command is the terminal's execute: value, byte
+# for byte.
 # tests/test_deploy.bash is a script, not a build product: it runs nix/bin/deploy
 # against a scratch repo and flake and prints the same TAP 14 stream.
 TEST_BINARIES = build/test_prompt_formatter build/test_plugin_internals \
@@ -326,13 +327,17 @@ build/test_sigverifier: tests/test_sigverifier.m tests/sw_test.h \
 	    -framework Foundation -framework CoreFoundation -framework Security \
 	    -o $@ tests/test_sigverifier.m shared/SignatureVerifier.m
 
+# Links the Rust staticlib: PromptFormatter renders every sheet value through
+# escape_core.
 build/test_prompt_formatter: tests/test_prompt_formatter.m tests/sw_test.h \
-		plugin/PromptFormatter.m plugin/PromptFormatter.h | build
+		plugin/PromptFormatter.m plugin/PromptFormatter.h \
+		$(ESCAPE_CORE_DIR)/escape_core.h $(ESCAPE_CORE_LIB) | build
 	$(CC) $(TEST_CFLAGS) -framework Foundation -o $@ \
-	    tests/test_prompt_formatter.m plugin/PromptFormatter.m
+	    tests/test_prompt_formatter.m plugin/PromptFormatter.m $(ESCAPE_CORE_LIB)
 
 # Links the Rust escape_core staticlib (so the C-ABI functions are callable) plus
-# PromptFormatter (the ObjC reference) and compares their output byte-for-byte.
+# PromptFormatter (the sheet's layout) and compares the sheet's command with the
+# terminal's line byte for byte.
 build/test_escape_core: tests/test_escape_core.m tests/sw_test.h \
 		plugin/PromptFormatter.m plugin/PromptFormatter.h \
 		$(ESCAPE_CORE_DIR)/escape_core.h $(ESCAPE_CORE_LIB) | build

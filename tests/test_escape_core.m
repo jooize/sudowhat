@@ -1,23 +1,20 @@
 /*
- * Cross-language equivalence guard: the Rust escape_core C-ABI functions vs the
- * ObjC SudoWhatPromptFormatter, run against the SAME vectors and asserted
- * byte-identical. This is the divergence guard the two-language split requires —
- * the audit plugin renders untrusted argv in Rust, the biometric sheet in ObjC,
- * and they must agree on every byte or a command could read differently in the
- * two places.
+ * Cross-surface guard: the Touch ID sheet and the terminal show one command one
+ * way. The approval plugin draws the terminal's execute: line with
+ * sw_full_command_line (and its coloured twins), and PromptFormatter lays the
+ * sheet's EXECUTE value out from the same function over the same raw bytes.
+ * These tests hold that: for every vector, the sheet's EXECUTE value is the
+ * terminal's plain line byte for byte, invalid UTF-8 included (a byte that
+ * does not decode shows as \xHH on both, and is never dropped).
  *
- * Vectors are valid Unicode only (a lone surrogate cannot cross a UTF-8 C
- * string, so it is out of scope here; the ObjC-only lone-surrogate escape is
- * covered in test_prompt_formatter.m). Invalid UTF-8 is not compared either:
- * Rust escapes each failing byte, and an NSString cannot hold one (the Rust
- * side is pinned in its own test module).
+ * Vectors carry no NUL: sudo's argv is C strings, so a NUL cannot reach either
+ * surface. The escape rules themselves are pinned in escape_core's Rust test
+ * module.
  *
  * The colouriser (sw_full_command_line_colored and its dim variant
- * sw_full_command_line_colored_dim, Rust-only -- the audit bundle cannot link
- * PromptFormatter) is guarded here too, against the same reference: strip the
- * SGR of either and the bytes must equal the plain line from BOTH renderers.
- * Neither has an ObjC twin to diverge from, but they must never diverge from
- * the plain line they decorate, nor from each other.
+ * sw_full_command_line_colored_dim) is guarded here too, against the same
+ * reference: strip the SGR of either and the bytes must equal the plain line
+ * and the sheet's command. Colour is layout over those bytes, never content.
  */
 #import "PromptFormatter.h"
 #import "sw_test.h"
@@ -25,11 +22,50 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- ObjC side ---- */
-static NSString *esc(NSString *s) { return [SudoWhatPromptFormatter escapeControlChars:s]; }
-static NSString *q(NSString *s)   { return [SudoWhatPromptFormatter quoteToken:s]; }
-static NSString *fullcmd(NSString *path, NSArray *argv) {
-    return [SudoWhatPromptFormatter fullCommandLineForCommandPath:path argv:argv];
+/* ---- the sheet (PromptFormatter over raw bytes) ---- */
+
+/* data plus a NUL, so .bytes is a C string. */
+static NSData *cstr(NSData *d) {
+    NSMutableData *m = [d mutableCopy];
+    [m appendBytes:"" length:1];
+    return m;
+}
+
+/* The sheet's EXECUTE value for these bytes: the line after the label. nil
+ * when the formatter refused or the value went to the terminal. */
+static NSString *sheetCmdBytes(NSData *path, NSArray<NSData *> *argv) {
+    NSData *pc = cstr(path);
+    NSUInteger n = argv.count;
+    NSMutableArray<NSData *> *hold = [NSMutableArray array];  /* keep bytes alive */
+    char *a[n + 1];
+    for (NSUInteger i = 0; i < n; i++) {
+        NSData *d = cstr(argv[i]);
+        [hold addObject:d];
+        a[i] = (char *)d.bytes;
+    }
+    a[n] = NULL;
+    NSString *sheet = [SudoWhatPromptFormatter formatWithCommandPath:pc.bytes
+                                                           runasUser:"root"
+                                                                 cwd:NULL
+                                                          verifyCode:@"AB12"
+                                                                argv:a
+                                                               style:SWPromptStyleSystemSheet];
+    NSRange label = [sheet rangeOfString:@"\n\nEXECUTE\n"];
+    if (label.location == NSNotFound) return nil;
+    NSUInteger from = NSMaxRange(label);
+    NSRange end = [sheet rangeOfString:@"\n" options:0
+                                 range:NSMakeRange(from, sheet.length - from)];
+    if (end.location == NSNotFound) return nil;
+    NSString *v = [sheet substringWithRange:NSMakeRange(from, end.location - from)];
+    return [v isEqualToString:@"(see terminal)"] ? nil : v;
+}
+
+static NSData *utf8(NSString *s) { return [s dataUsingEncoding:NSUTF8StringEncoding]; }
+
+static NSString *sheetCmd(NSString *path, NSArray<NSString *> *argv) {
+    NSMutableArray<NSData *> *a = [NSMutableArray array];
+    for (NSString *t in argv) [a addObject:utf8(t)];
+    return sheetCmdBytes(utf8(path), a);
 }
 
 /* ---- Rust side (via the C ABI, two-call sizing) ---- */
@@ -65,17 +101,13 @@ static NSString *rustQuote(NSString *s) {
     return out;
 }
 
-static NSString *rustFullCmd(NSString *path, NSArray<NSString *> *argv) {
-    NSData *pd = [path dataUsingEncoding:NSUTF8StringEncoding];
+static NSString *rustFullCmdBytes(NSData *pd, NSArray<NSData *> *argv) {
     NSUInteger n = argv.count;
     const uint8_t **ap = calloc(n ? n : 1, sizeof(*ap));
     size_t *al = calloc(n ? n : 1, sizeof(*al));
-    NSMutableArray<NSData *> *hold = [NSMutableArray array];  /* keep bytes alive */
     for (NSUInteger i = 0; i < n; i++) {
-        NSData *d = [argv[i] dataUsingEncoding:NSUTF8StringEncoding];
-        [hold addObject:d];
-        ap[i] = d.bytes;
-        al[i] = d.length;
+        ap[i] = argv[i].bytes;
+        al[i] = argv[i].length;
     }
     size_t needed = 0;
     sw_full_command_line(pd.bytes, pd.length, ap, al, n, NULL, 0, &needed);
@@ -90,6 +122,12 @@ static NSString *rustFullCmd(NSString *path, NSArray<NSString *> *argv) {
     free(ap);
     free(al);
     return out;
+}
+
+static NSString *rustFullCmd(NSString *path, NSArray<NSString *> *argv) {
+    NSMutableArray<NSData *> *a = [NSMutableArray array];
+    for (NSString *t in argv) [a addObject:[t dataUsingEncoding:NSUTF8StringEncoding]];
+    return rustFullCmdBytes([path dataUsingEncoding:NSUTF8StringEncoding], a);
 }
 
 static NSString *rustColoredCmd(NSString *path, NSArray<NSString *> *argv) {
@@ -247,19 +285,21 @@ static NSArray<NSString *> *escapeVectors(void) {
     return v;
 }
 
-static void test_escape_equivalence(void) {
+/* Every vector as an argument and inside the program path: the sheet's
+ * EXECUTE value is the terminal's plain line. */
+static void test_sheet_equals_terminal_vectors(void) {
     for (NSString *vec in escapeVectors()) {
-        EQ(rustEscape(vec), esc(vec), "escape byte-identical (Rust == ObjC)");
+        if ([vec rangeOfString:uni(0x00)].location != NSNotFound) continue;
+        EQ(sheetCmd(@"/bin/echo", @[@"echo", vec]),
+           rustFullCmd(@"/bin/echo", @[@"echo", vec]),
+           "an argument reads the same on the sheet and the terminal");
+        NSString *path = cat(@"/opt/", vec);
+        EQ(sheetCmd(path, @[@"prog"]), rustFullCmd(path, @[@"prog"]),
+           "a program path reads the same on the sheet and the terminal");
     }
 }
 
-static void test_quote_equivalence(void) {
-    for (NSString *vec in escapeVectors()) {
-        EQ(rustQuote(vec), q(vec), "quote byte-identical (Rust == ObjC)");
-    }
-}
-
-static void test_fullcmd_equivalence(void) {
+static void test_sheet_equals_terminal_cases(void) {
     NSArray *cases = @[
         @[@"/bin/echo", @[@"echo", @"hello"]],
         @[@"/bin/echo", @[@"/bin/echo", @"hi"]],
@@ -271,29 +311,53 @@ static void test_fullcmd_equivalence(void) {
         @[@"echo", @[@"echo"]],
         @[@"/bin/echo", @[@"echo", @"a'b"]],
         @[@"/bin/echo", @[@"echo", @"$HOME", @"a;b"]],
+        @[@"/usr/bin/日本", @[@"日本", @"café"]],
     ];
     for (NSArray *c in cases) {
         NSString *path = c[0];
         NSArray *argv = c[1];
-        EQ(rustFullCmd(path, argv), fullcmd(path, argv),
-           "full command byte-identical (Rust == ObjC)");
+        EQ(sheetCmd(path, argv), rustFullCmd(path, argv),
+           "the sheet's command is the terminal's line (dedup, quoting)");
     }
+}
 
-    /* control char in an argv token: the escape must match too */
-    NSString *evilArg = cat(cat(@"a", uni(0x0a)), uni(0x1b));
-    EQ(rustFullCmd(@"/bin/echo", @[@"echo", evilArg]),
-       fullcmd(@"/bin/echo", @[@"echo", evilArg]),
-       "full command with control chars byte-identical");
+/* Bytes that are not valid UTF-8, the case an NSString cannot hold. The sheet
+ * once decoded each token to an NSString and dropped the ones that failed;
+ * both surfaces now show every token, each failing byte as \xHH. */
+static void test_sheet_equals_terminal_invalid_utf8(void) {
+    const char *cp = "cp", *bad = "x\xff", *dst = "/etc/y";
+    NSArray<NSData *> *argv = @[
+        [NSData dataWithBytes:cp length:strlen(cp)],
+        [NSData dataWithBytes:bad length:strlen(bad)],
+        [NSData dataWithBytes:dst length:strlen(dst)],
+    ];
+    NSData *path = utf8(@"/bin/cp");
+    EQ(sheetCmdBytes(path, argv), @"/bin/cp 'x\\xFF' /etc/y",
+       "sudo cp $'x\\xff' /etc/y: the sheet shows the token as 'x\\xFF'");
+    EQ(sheetCmdBytes(path, argv), rustFullCmdBytes(path, argv),
+       "and the terminal's line is the same bytes");
 
-    /* unicode path + argv */
-    EQ(rustFullCmd(@"/usr/bin/日本", @[@"日本", @"café"]),
-       fullcmd(@"/usr/bin/日本", @[@"日本", @"café"]),
-       "full command with unicode byte-identical");
+    const uint8_t badPath[] = { '/', 'o', 'p', 't', '/', 'a', 0xFF, '/', 't' };
+    NSData *bp = [NSData dataWithBytes:badPath length:sizeof badPath];
+    NSArray<NSData *> *targv = @[ utf8(@"t"), utf8(@"-v") ];
+    EQ(sheetCmdBytes(bp, targv), @"'/opt/a\\xFF/t' -v",
+       "a program path with an invalid byte shows it as \\xFF");
+    EQ(sheetCmdBytes(bp, targv), rustFullCmdBytes(bp, targv),
+       "and reads the same on the terminal");
+
+    /* Every lone byte that is not valid UTF-8 on its own, inside a token. */
+    for (unsigned b = 0x80; b <= 0xFF; b++) {
+        uint8_t tok[] = { 'a', (uint8_t)b, 'z' };
+        NSArray<NSData *> *av = @[ utf8(@"echo"), [NSData dataWithBytes:tok length:3] ];
+        NSData *ep = utf8(@"/bin/echo");
+        EQ(sheetCmdBytes(ep, av), rustFullCmdBytes(ep, av),
+           "a byte that does not decode reads the same on both surfaces");
+    }
 }
 
 /* The coloured command line is the SAME line with SGR layered on: strip the
- * colour and the bytes must equal what BOTH plain renderers produce (the Rust
- * one and the ObjC reference). That is the invariant the whole design rests on --
+ * colour and the bytes must equal the plain line and the sheet's command. That
+ * is the invariant the whole design rests on --
  * colour is layout, never content, so no highlight can add, hide, or reorder a
  * byte of the command the user is about to authorize. */
 static void test_colored_preserves_bytes(void) {
@@ -313,14 +377,14 @@ static void test_colored_preserves_bytes(void) {
     for (NSArray *c in cases) {
         NSString *path = c[0];
         NSArray *argv = c[1];
-        EQ(stripSGR(rustColoredCmd(path, argv)), fullcmd(path, argv),
-           "coloured command strips back to the ObjC plain line");
+        EQ(stripSGR(rustColoredCmd(path, argv)), sheetCmd(path, argv),
+           "coloured command strips back to the sheet's command");
         EQ(stripSGR(rustColoredCmd(path, argv)), rustFullCmd(path, argv),
            "coloured command strips back to the Rust plain line");
         /* The dim variant (input:) is the same walk under a different base, so
-         * it owes the same round trip against the same ObjC reference. */
-        EQ(stripSGR(rustColoredDimCmd(path, argv)), fullcmd(path, argv),
-           "dim command strips back to the ObjC plain line");
+         * it owes the same round trip against the same plain line. */
+        EQ(stripSGR(rustColoredDimCmd(path, argv)), rustFullCmd(path, argv),
+           "dim command strips back to the plain line");
         EQ(stripSGR(rustColoredDimCmd(path, argv)), stripSGR(rustColoredCmd(path, argv)),
            "input: and execute: show the same bytes, differing only in emphasis");
     }
@@ -329,7 +393,7 @@ static void test_colored_preserves_bytes(void) {
      * survive the colouriser byte for byte, wrapped but never rewritten. */
     NSString *evil = cat(cat(@"a", uni(0x0a)), cat(uni(0x202e), @"b\\c"));
     EQ(stripSGR(rustColoredCmd(@"/bin/echo", @[@"echo", evil])),
-       fullcmd(@"/bin/echo", @[@"echo", evil]),
+       rustFullCmd(@"/bin/echo", @[@"echo", evil]),
        "coloured command with escapes strips back to the plain line");
 }
 
@@ -462,14 +526,12 @@ static void test_colored_dim_variant(void) {
 }
 
 /* A couple of explicit sanity checks so a totally broken Rust build fails
- * loudly, not just silently matching a broken ObjC side. */
+ * loudly, not just silently matching itself on both surfaces. */
 static void test_explicit_values(void) {
     EQ(rustEscape(uni(0x0a)), U(@"A"), "rust escapes a line feed as its code point");
-    EQ(esc(uni(0x0a)), U(@"A"), "objc escapes a line feed as its code point");
     EQ(rustEscape(@"\\x41"), [U(@"5C") stringByAppendingString:@"x41"],
        "rust escapes a backslash that would begin an escape");
     EQ(rustEscape(astral(0xe0041)), U(@"E0041"), "rust escapes a tag character");
-    EQ(esc(astral(0xe0041)), U(@"E0041"), "objc escapes a tag character");
     EQ(rustEscape(@"..."), @"...", "rust draws a run of dots as itself");
     EQ(rustQuote(@"a b"), @"'a b'", "rust quotes a spaced token");
     EQ(rustFullCmd(@"/bin/echo", @[@"echo", @"a b"]), @"/bin/echo 'a b'",
@@ -479,14 +541,14 @@ static void test_explicit_values(void) {
 int main(void) {
     @autoreleasepool {
         test_explicit_values();
-        test_escape_equivalence();
-        test_quote_equivalence();
-        test_fullcmd_equivalence();
+        test_sheet_equals_terminal_vectors();
+        test_sheet_equals_terminal_cases();
+        test_sheet_equals_terminal_invalid_utf8();
         test_colored_preserves_bytes();
         test_colored_roles();
         test_colored_quote_attribution();
         test_colored_hostile_and_anomalies();
         test_colored_dim_variant();
-        SW_SUMMARY("escape_core equivalence (Rust C-ABI == ObjC PromptFormatter)");
+        SW_SUMMARY("escape_core cross-surface (Touch ID sheet == terminal line)");
     }
 }
