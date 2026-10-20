@@ -1212,6 +1212,75 @@ static BOOL sw_ask_run_confirm(BOOL blankFirst) {
     return yes;
 }
 
+/* The confirm ceremony itself: pin the target, show it, ask, re-check the
+ * pin. Split out of sw_step_aside_allow so the steps are testable without
+ * the build knob: ttyPath is "/dev/tty" in production, and a unit test points
+ * it at a temp file (shown) or at a path that cannot be opened (not shown).
+ * Same verdicts as the caller: 1 = allow, 0 = deny, -1 = plugin error. The
+ * pin is taken BEFORE the human is asked anything, so what they approve is
+ * the file that was there when the question was posed. */
+static int sw_confirm_run(const char *ttyPath, const char *commandC,
+                          char * const run_argv[], sw_exec_layout layout,
+                          const char **errstr) {
+    /* Pre-prompt pin -- same pattern, same reasons, as the console path's (3a).
+     * O_CLOEXEC so the fd does not leak into the execed program. */
+    int preFd = open(commandC, O_RDONLY | O_CLOEXEC);
+    if (preFd < 0) {
+        set_errstr_path(errstr, "cannot open the target binary", errno, commandC);
+        return 0;
+    }
+    struct stat preSt;
+    if (fstat(preFd, &preSt) != 0) {
+        int saved = errno;
+        close(preFd);
+        set_errstr_path(errstr, "fstat failed", saved, commandC);
+        return -1;
+    }
+
+    /* Straight to the writer, deliberately below emit_exec_line's execDisplay
+     * gate (see there): this line is not narration, it is the subject of the
+     * question asked two statements down. execDisplay = off silences the four
+     * informational echoes; it must not turn this one into a blind y/N.
+     *
+     * A line that did not reach the terminal whole fails closed, for the
+     * reason sw_step_aside_allow refuses a missing command key: a y/N under
+     * a command the human was never shown would approve what nobody saw. */
+    if (!write_exec_line_to_tty(ttyPath, commandC, run_argv, layout, nil,
+                                sw_color_allowed())) {
+        close(preFd);
+        set_errstr(errstr, "sudowhat: cannot show the command on the terminal; "
+                           "command not run");
+        return 0;
+    }
+
+    /* Decline, an empty answer, or a conversation that could not run at all:
+     * quiet abort. Terse on purpose -- nothing is wedged, nothing is cached,
+     * and the caller can simply run the command again. */
+    if (!sw_ask_run_confirm(layout == SW_EXEC_SOLO)) {
+        close(preFd);
+        set_decline(errstr);
+        return 0;
+    }
+
+    /* Post-answer re-stat: if the file at the path no longer matches the fd we
+     * pinned, the binary was swapped while the human was reading and answering. */
+    struct stat postSt;
+    if (stat(commandC, &postSt) != 0) {
+        int saved = errno;
+        close(preFd);
+        set_errstr_path(errstr, "post-confirm stat failed", saved, commandC);
+        return 0;
+    }
+    close(preFd);
+
+    if (postSt.st_dev != preSt.st_dev || postSt.st_ino != preSt.st_ino) {
+        set_errstr(errstr, "sudowhat: target binary changed during authorization");
+        return 0;
+    }
+
+    return 1;
+}
+
 /* The non-console step-aside, with its display and its optional confirm. Split
  * out of sudowhat_check so the TOCTOU pin, the prompt and the re-stat read as
  * one unit. Returns the plugin verdict: 1 = allow, 0 = deny, -1 = plugin error.
@@ -1281,55 +1350,8 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
         return 0;
     }
 
-    /* Pre-prompt pin -- same pattern, same reasons, as the console path's (3a).
-     * O_CLOEXEC so the fd does not leak into the execed program. */
-    int preFd = open(commandC, O_RDONLY | O_CLOEXEC);
-    if (preFd < 0) {
-        set_errstr_path(errstr, "cannot open the target binary", errno, commandC);
-        return 0;
-    }
-    struct stat preSt;
-    if (fstat(preFd, &preSt) != 0) {
-        int saved = errno;
-        close(preFd);
-        set_errstr_path(errstr, "fstat failed", saved, commandC);
-        return -1;
-    }
-
-    /* Straight to the writer, deliberately below emit_exec_line's execDisplay
-     * gate (see there): this line is not narration, it is the subject of the
-     * question asked two statements down. execDisplay = off silences the four
-     * informational echoes; it must not turn this one into a blind y/N. */
-    sw_exec_layout layout = sw_step_aside_layout(markerPresent);
-    write_exec_line_to_tty("/dev/tty", commandC, run_argv, layout, nil,
-                           sw_color_allowed());
-
-    /* Decline, an empty answer, or a conversation that could not run at all:
-     * quiet abort. Terse on purpose -- nothing is wedged, nothing is cached,
-     * and the caller can simply run the command again. */
-    if (!sw_ask_run_confirm(layout == SW_EXEC_SOLO)) {
-        close(preFd);
-        set_decline(errstr);
-        return 0;
-    }
-
-    /* Post-answer re-stat: if the file at the path no longer matches the fd we
-     * pinned, the binary was swapped while the human was reading and answering. */
-    struct stat postSt;
-    if (stat(commandC, &postSt) != 0) {
-        int saved = errno;
-        close(preFd);
-        set_errstr_path(errstr, "post-confirm stat failed", saved, commandC);
-        return 0;
-    }
-    close(preFd);
-
-    if (postSt.st_dev != preSt.st_dev || postSt.st_ino != preSt.st_ino) {
-        set_errstr(errstr, "sudowhat: target binary changed during authorization");
-        return 0;
-    }
-
-    return 1;
+    return sw_confirm_run("/dev/tty", commandC, run_argv,
+                          sw_step_aside_layout(markerPresent), errstr);
 }
 
 static int sudowhat_open(unsigned int version,

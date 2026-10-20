@@ -789,6 +789,58 @@ static void test_confirm_question(void) {
     g_conversation = saved;
 }
 
+/* The confirm ceremony fails closed when the command line cannot be shown:
+ * no question under a command the human never saw. With the line shown, the
+ * same ceremony asks and a y allows. stderr is silenced around the calls,
+ * since a refusal or decline prints there when sudo gave us no printf. */
+static void test_confirm_run_shows_before_asking(void) {
+    sudo_conv_t saved_conv = g_conversation;
+    sudo_printf_t saved_printf = g_plugin_printf;
+    g_conversation = sw_t_conversation;
+    g_plugin_printf = NULL;
+    int saved_err = dup(STDERR_FILENO);
+    int devnull = open("/dev/null", O_WRONLY);
+    dup2(devnull, STDERR_FILENO);
+
+    char *argv[] = { (char *)"ls", NULL };
+    const char *err = NULL;
+
+    sw_t_conv_calls = 0;
+    sw_t_conv_answer = "y";
+    int rc = sw_confirm_run("/no/such/dir/sw_tty", "/bin/ls", argv,
+                            SW_EXEC_GROUPED, &err);
+    NSString *refusal = err ? @(err) : nil;
+    int calls_unshown = sw_t_conv_calls;
+
+    char path[256];
+    sw_tmpl(path, sizeof path, "confirm");
+    int fd = mkstemp(path);
+    if (fd >= 0) close(fd);
+    sw_t_conv_calls = 0;
+    err = NULL;
+    int rc_shown = (fd >= 0)
+        ? sw_confirm_run(path, "/bin/ls", argv, SW_EXEC_GROUPED, &err) : -2;
+    int calls_shown = sw_t_conv_calls;
+    NSString *shown = (fd >= 0) ? sw_read_utf8(path) : nil;
+    if (fd >= 0) unlink(path);
+
+    fflush(stderr);
+    dup2(saved_err, STDERR_FILENO);
+    close(devnull);
+    close(saved_err);
+    g_conversation = saved_conv;
+    g_plugin_printf = saved_printf;
+
+    OK(rc == 0, "a command line that cannot be shown denies");
+    OK(calls_unshown == 0, "and nothing is asked under it");
+    EQ(refusal, @"sudowhat: cannot show the command on the terminal; command not run",
+       "the refusal says the command was not run");
+    OK(fd >= 0, "mkstemp created a temp file for the confirm test");
+    EQ(shown, @"sudowhat: execute:    /bin/ls\n\n",
+       "with the line shown, the execute: row is written first");
+    OK(rc_shown == 1 && calls_shown == 1, "then the question is asked and y allows");
+}
+
 /* The PRE-AUTH block (user/directory/input) moved to the audit plugin
  * (plugin/sudowhat_audit.m) in v0.10.0, so the former emit_full_context /
  * echoCommand / echoColor tests are gone; what this plugin echoes is the
@@ -914,6 +966,7 @@ int main(void) {
         test_confirm_decision();
         test_confirm_answer_classifier();
         test_confirm_question();
+        test_confirm_run_shows_before_asking();
         test_decline_line();
         test_path_error();
         test_integrity_line_detection();
