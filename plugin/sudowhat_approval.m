@@ -1126,14 +1126,24 @@ static BOOL sw_confirm_decision(BOOL confirmOn, BOOL haveTty,
     return NO;
 }
 
-/* Classify the answer to `run this command? [y/N]`. Accepts only an
- * affirmative: "y" or "yes", any case, with surrounding whitespace (including
- * the newline a conversation implementation may leave on) trimmed. Everything
- * else -- "n", empty, garbage, NULL -- is a decline, which is the whole point
- * of a [y/N] default: a stray Enter must never approve. Pure, so the
- * classification is unit-testable without a tty. */
-static BOOL sw_confirm_answer_is_yes(const char *reply) {
-    if (reply == NULL) return NO;
+/* The three kinds of answer `run this command? [y/N]` can get. */
+typedef enum {
+    SW_ANSWER_UNKNOWN = 0,   /* not an answer: ask again */
+    SW_ANSWER_YES,           /* y or yes: run */
+    SW_ANSWER_NO,            /* Enter, n or no: decline */
+} sw_answer;
+
+/* Classify an answer to `run this command? [y/N]`. "y" and "yes" run; an
+ * empty answer (a bare Enter), "n" and "no" decline, which is the whole point
+ * of a [y/N] default: a stray Enter must never approve. Any case, with
+ * surrounding whitespace (including the newline a conversation implementation
+ * may leave on) trimmed. Anything else is not an answer, and the question is
+ * asked again (terminal-output: an unknown key is never acted on). NULL
+ * declines: a conversation that reported success without a reply has not
+ * been answered, and asking it again could loop. Pure, so the classification
+ * is unit-testable without a tty. */
+static sw_answer sw_confirm_answer(const char *reply) {
+    if (reply == NULL) return SW_ANSWER_NO;
 
     const char *p = reply;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
@@ -1142,13 +1152,22 @@ static BOOL sw_confirm_answer_is_yes(const char *reply) {
                        || end[-1] == '\r' || end[-1] == '\n')) end--;
 
     size_t len = (size_t)(end - p);
-    if (len == 1) return (p[0] == 'y' || p[0] == 'Y');
-    if (len == 3) {
-        return (p[0] == 'y' || p[0] == 'Y')
-            && (p[1] == 'e' || p[1] == 'E')
-            && (p[2] == 's' || p[2] == 'S');
+    if (len == 0) return SW_ANSWER_NO;
+    if (len == 1) {
+        if (p[0] == 'y' || p[0] == 'Y') return SW_ANSWER_YES;
+        if (p[0] == 'n' || p[0] == 'N') return SW_ANSWER_NO;
+        return SW_ANSWER_UNKNOWN;
     }
-    return NO;
+    if (len == 2 && (p[0] == 'n' || p[0] == 'N')
+                 && (p[1] == 'o' || p[1] == 'O')) {
+        return SW_ANSWER_NO;
+    }
+    if (len == 3 && (p[0] == 'y' || p[0] == 'Y')
+                 && (p[1] == 'e' || p[1] == 'E')
+                 && (p[2] == 's' || p[2] == 'S')) {
+        return SW_ANSWER_YES;
+    }
+    return SW_ANSWER_UNKNOWN;
 }
 
 /* Is there a controlling terminal to print on and ask through? Opened and
@@ -1186,30 +1205,59 @@ static BOOL sw_have_controlling_tty(const char *ttyPath) {
  * at the head of the prompt string, where it reaches the terminal through
  * the same channel and in the same write as the question.
  *
+ * An answer that is not one (sw_confirm_answer) is not acted on: the next
+ * prompt is one yellow `not an answer` line and the question again, without
+ * the blank line, read through the same conversation. What was typed is never
+ * echoed back, since a pasted control sequence printed raw could rewrite the
+ * question line. Yellow only when colour is allowed and ttyPath ("/dev/tty"
+ * in production, where sudo writes the prompt) is a terminal.
+ *
+ * End of input never acts: the conversation returns an error when its read
+ * gets EOF (or a closed terminal), and that declines like n. No newline is
+ * printed for the cursor still on the question line, because sudo's own
+ * reader already writes one when it reads nothing (tgetpass, `pass == NULL`).
+ *
  * The conversation contract puts the reply buffer in the caller's hands, so it
  * is freed here. Returns NO on a NULL conversation pointer or a conversation
  * error as well as on a real decline: the caller treats all three the same way
  * (a quiet abort), because a question that could not be asked has not been
  * answered. */
 #define SW_CONFIRM_QUESTION "sudowhat: run this command? [y/N] "
+#define SW_NOT_AN_ANSWER    "not an answer"
 
-static BOOL sw_ask_run_confirm(BOOL blankFirst) {
+/* The prompt after an answer that was not one. Pure, so both renderings are
+ * testable. */
+static const char *sw_reask_prompt(BOOL color) {
+    return color ? "\033[33m" SW_NOT_AN_ANSWER "\033[0m\n" SW_CONFIRM_QUESTION
+                 : SW_NOT_AN_ANSWER "\n" SW_CONFIRM_QUESTION;
+}
+
+static BOOL sw_ask_run_confirm(const char *ttyPath, BOOL blankFirst) {
     if (g_conversation == NULL) return NO;
 
-    struct sudo_conv_message msg = {
-        .msg_type = SUDO_CONV_PROMPT_ECHO_ON,
-        .timeout  = 0,
-        .msg      = blankFirst ? "\n" SW_CONFIRM_QUESTION : SW_CONFIRM_QUESTION,
-    };
-    struct sudo_conv_reply reply = { .reply = NULL };
+    const char *again = sw_reask_prompt(sw_color_allowed()
+                                        && sw_have_controlling_tty(ttyPath));
+    const char *prompt = blankFirst ? "\n" SW_CONFIRM_QUESTION : SW_CONFIRM_QUESTION;
 
-    int rc = g_conversation(1, &msg, &reply, NULL);
-    BOOL yes = (rc == 0) && sw_confirm_answer_is_yes(reply.reply);
-    if (reply.reply != NULL) {
-        free(reply.reply);
-        reply.reply = NULL;
+    for (;;) {
+        struct sudo_conv_message msg = {
+            .msg_type = SUDO_CONV_PROMPT_ECHO_ON,
+            .timeout  = 0,
+            .msg      = prompt,
+        };
+        struct sudo_conv_reply reply = { .reply = NULL };
+
+        int rc = g_conversation(1, &msg, &reply, NULL);
+        sw_answer answer = (rc == 0) ? sw_confirm_answer(reply.reply)
+                                     : SW_ANSWER_NO;
+        if (reply.reply != NULL) {
+            free(reply.reply);
+            reply.reply = NULL;
+        }
+        if (answer == SW_ANSWER_YES) return YES;
+        if (answer == SW_ANSWER_NO)  return NO;
+        prompt = again;
     }
-    return yes;
 }
 
 /* The confirm ceremony itself: pin the target, show it, ask, re-check the
@@ -1253,10 +1301,10 @@ static int sw_confirm_run(const char *ttyPath, const char *commandC,
         return 0;
     }
 
-    /* Decline, an empty answer, or a conversation that could not run at all:
-     * quiet abort. Terse on purpose -- nothing is wedged, nothing is cached,
-     * and the caller can simply run the command again. */
-    if (!sw_ask_run_confirm(layout == SW_EXEC_SOLO)) {
+    /* Decline, an empty answer, end of input, or a conversation that could
+     * not run at all: quiet abort. Terse on purpose -- nothing is wedged,
+     * nothing is cached, and the caller can simply run the command again. */
+    if (!sw_ask_run_confirm(ttyPath, layout == SW_EXEC_SOLO)) {
         close(preFd);
         set_decline(errstr);
         return 0;

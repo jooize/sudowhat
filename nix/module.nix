@@ -280,6 +280,8 @@ in {
         has already authenticated and sudoers has already authorized, so it can
         only ever withhold an allow, never grant one. Declining is a quiet abort
         — nothing is wedged or cached, and the command can simply be re-run.
+        Enter, `n` and end of input decline. Any other answer is not acted on:
+        the plugin prints `not an answer` and asks again.
 
         Tty-gated: with no controlling terminal there is no prompt and behaviour
         is identical to `off`, so piped and automated invocations can never newly

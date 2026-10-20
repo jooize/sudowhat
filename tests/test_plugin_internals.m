@@ -655,29 +655,34 @@ static void test_confirm_decision(void) {
 }
 
 static void test_confirm_answer_classifier(void) {
-    /* Affirmative, any case, whitespace and the conversation's newline trimmed. */
-    OK(sw_confirm_answer_is_yes("y"),      "y accepted");
-    OK(sw_confirm_answer_is_yes("Y"),      "Y accepted");
-    OK(sw_confirm_answer_is_yes("yes"),    "yes accepted");
-    OK(sw_confirm_answer_is_yes("YES"),    "YES accepted");
-    OK(sw_confirm_answer_is_yes("YeS"),    "mixed-case yes accepted");
-    OK(sw_confirm_answer_is_yes(" y "),    "surrounding spaces trimmed");
-    OK(sw_confirm_answer_is_yes("\ty\r\n"), "tab / CR / LF trimmed");
+    /* y and yes run, any case, whitespace trimmed. */
+    OK(sw_confirm_answer("y") == SW_ANSWER_YES,       "y accepted");
+    OK(sw_confirm_answer("Y") == SW_ANSWER_YES,       "Y accepted");
+    OK(sw_confirm_answer("yes") == SW_ANSWER_YES,     "yes accepted");
+    OK(sw_confirm_answer("YES") == SW_ANSWER_YES,     "YES accepted");
+    OK(sw_confirm_answer("YeS") == SW_ANSWER_YES,     "mixed-case yes accepted");
+    OK(sw_confirm_answer(" y ") == SW_ANSWER_YES,     "surrounding spaces trimmed");
+    OK(sw_confirm_answer("\ty\r\n") == SW_ANSWER_YES, "tab / CR / LF trimmed");
 
-    /* Everything else declines. A stray Enter must never approve -- that is the
-     * whole meaning of [y/N]. */
-    OK(!sw_confirm_answer_is_yes("n"),     "n declines");
-    OK(!sw_confirm_answer_is_yes("N"),     "N declines");
-    OK(!sw_confirm_answer_is_yes("no"),    "no declines");
-    OK(!sw_confirm_answer_is_yes(""),      "empty reply declines");
-    OK(!sw_confirm_answer_is_yes("\n"),    "a bare newline declines");
-    OK(!sw_confirm_answer_is_yes("   "),   "whitespace only declines");
-    OK(!sw_confirm_answer_is_yes(NULL),    "NULL reply declines");
-    OK(!sw_confirm_answer_is_yes("yes please"), "trailing words decline");
-    OK(!sw_confirm_answer_is_yes("yep"),   "yep is not yes");
-    OK(!sw_confirm_answer_is_yes("ye"),    "a truncated yes declines");
-    OK(!sw_confirm_answer_is_yes("yy"),    "yy declines");
-    OK(!sw_confirm_answer_is_yes("1"),     "1 declines");
+    /* Enter, n and no decline. A stray Enter must never approve -- that is the
+     * [y/N] default. NULL declines too: no reply is not an answer to re-ask. */
+    OK(sw_confirm_answer("n") == SW_ANSWER_NO,        "n declines");
+    OK(sw_confirm_answer("N") == SW_ANSWER_NO,        "N declines");
+    OK(sw_confirm_answer("no") == SW_ANSWER_NO,       "no declines");
+    OK(sw_confirm_answer("NO") == SW_ANSWER_NO,       "NO declines");
+    OK(sw_confirm_answer("") == SW_ANSWER_NO,         "empty reply declines");
+    OK(sw_confirm_answer("\n") == SW_ANSWER_NO,       "a bare newline declines");
+    OK(sw_confirm_answer("   ") == SW_ANSWER_NO,      "whitespace only declines");
+    OK(sw_confirm_answer(NULL) == SW_ANSWER_NO,       "NULL reply declines");
+
+    /* Anything else is not an answer: never acted on, asked again. */
+    OK(sw_confirm_answer("yes please") == SW_ANSWER_UNKNOWN, "trailing words are not an answer");
+    OK(sw_confirm_answer("yep") == SW_ANSWER_UNKNOWN,  "yep is not an answer");
+    OK(sw_confirm_answer("ye") == SW_ANSWER_UNKNOWN,   "a truncated yes is not an answer");
+    OK(sw_confirm_answer("yy") == SW_ANSWER_UNKNOWN,   "yy is not an answer");
+    OK(sw_confirm_answer("1") == SW_ANSWER_UNKNOWN,    "1 is not an answer");
+    OK(sw_confirm_answer("s") == SW_ANSWER_UNKNOWN,    "s is not an answer");
+    OK(sw_confirm_answer("nope") == SW_ANSWER_UNKNOWN, "nope is not an answer");
 }
 
 /* The question sw_ask_run_confirm puts through sudo's conversation API, read
@@ -690,17 +695,24 @@ static int sw_t_conv_nmsgs;
 static int sw_t_conv_type;
 static char sw_t_conv_msg[256];
 static const char *sw_t_conv_answer;
+/* A scripted run of answers, one per call, used when sw_t_conv_script is set.
+ * A NULL entry is end of input: the conversation fails, as sudo's does when
+ * its read gets EOF. */
+static const char *const *sw_t_conv_script;
 
 static int sw_t_conversation(int num_msgs,
                              const struct sudo_conv_message msgs[],
                              struct sudo_conv_reply replies[],
                              struct sudo_conv_callback *callback) {
     (void)callback;
-    sw_t_conv_calls++;
+    int call = sw_t_conv_calls++;
     sw_t_conv_nmsgs = num_msgs;
     sw_t_conv_type = msgs[0].msg_type;
     snprintf(sw_t_conv_msg, sizeof sw_t_conv_msg, "%s", msgs[0].msg);
-    replies[0].reply = strdup(sw_t_conv_answer);
+    const char *answer = sw_t_conv_script ? sw_t_conv_script[call]
+                                          : sw_t_conv_answer;
+    if (answer == NULL) return -1;
+    replies[0].reply = strdup(answer);
     return 0;
 }
 
@@ -759,7 +771,7 @@ static void test_confirm_question(void) {
 
     sw_t_conv_calls = 0;
     sw_t_conv_answer = "n";
-    OK(!sw_ask_run_confirm(NO), "an n answer declines");
+    OK(!sw_ask_run_confirm("/no/such/dir/sw_tty", NO), "an n answer declines");
     OK(sw_t_conv_calls == 1 && sw_t_conv_nmsgs == 1,
        "one conversation call carrying one message: the question");
     OK(sw_t_conv_type == SUDO_CONV_PROMPT_ECHO_ON,
@@ -777,15 +789,52 @@ static void test_confirm_question(void) {
        "the question line holds no path, no labeled value, no second line");
 
     sw_t_conv_answer = "y";
-    OK(sw_ask_run_confirm(NO), "a y answer to the same question confirms");
+    OK(sw_ask_run_confirm("/no/such/dir/sw_tty", NO),
+       "a y answer to the same question confirms");
 
     /* Under a lone execute: line, which ends with no blank of its own, the
      * question opens with the one blank line that makes it a block. */
     sw_t_conv_answer = "n";
-    OK(!sw_ask_run_confirm(YES), "under a lone line, an n answer declines too");
+    OK(!sw_ask_run_confirm("/no/such/dir/sw_tty", YES),
+       "under a lone line, an n answer declines too");
     EQ(@(sw_t_conv_msg), @"\nsudowhat: run this command? [y/N] ",
        "under a lone line the question opens with its blank line");
 
+    /* An answer that is not one is not acted on: the next prompt is one
+     * `not an answer` line and the question again, without the blank line,
+     * and the next answer decides. Plain here: the tty path is no terminal. */
+    static const char *const unknown_then_y[] = { "x", "yes please", "y" };
+    sw_t_conv_script = unknown_then_y;
+    sw_t_conv_calls = 0;
+    OK(sw_ask_run_confirm("/no/such/dir/sw_tty", YES),
+       "after two answers that are not one, a y confirms");
+    OK(sw_t_conv_calls == 3, "the question is asked once per answer");
+    EQ(@(sw_t_conv_msg), @"not an answer\nsudowhat: run this command? [y/N] ",
+       "the re-ask is one not an answer line, then the question, no blank line");
+
+    EQ(@(sw_reask_prompt(YES)),
+       @"\033[33mnot an answer\033[0m\nsudowhat: run this command? [y/N] ",
+       "on a terminal the not an answer line is yellow, the question is not");
+
+    static const char *const unknown_then_n[] = { "x", "n" };
+    sw_t_conv_script = unknown_then_n;
+    sw_t_conv_calls = 0;
+    OK(!sw_ask_run_confirm("/no/such/dir/sw_tty", NO),
+       "after an answer that is not one, an n declines");
+
+    /* End of input never acts, even after an answer that was not one. */
+    static const char *const eof_only[] = { NULL };
+    sw_t_conv_script = eof_only;
+    sw_t_conv_calls = 0;
+    OK(!sw_ask_run_confirm("/no/such/dir/sw_tty", NO), "end of input declines");
+    OK(sw_t_conv_calls == 1, "and is not asked again");
+    static const char *const unknown_then_eof[] = { "x", NULL };
+    sw_t_conv_script = unknown_then_eof;
+    sw_t_conv_calls = 0;
+    OK(!sw_ask_run_confirm("/no/such/dir/sw_tty", NO),
+       "end of input after a re-ask declines too");
+
+    sw_t_conv_script = NULL;
     g_conversation = saved;
 }
 
