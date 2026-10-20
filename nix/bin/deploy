@@ -169,6 +169,29 @@ fi
 # that a sed s|..&..| form would need escaped. Only rewrite ref if one was found.
 subst="s{\\Q${pin_ref_kv}\\E}{ref=refs/tags/${target_tag}}g; s{\\Qrev=${pinned_rev}\\E}{rev=${target_rev}}g"
 [[ -n "${pin_ref_kv}" ]] || subst="s{\\Qrev=${pinned_rev}\\E}{rev=${target_rev}}g"
+# One command line under sudo, drawn the way terminal-output draws a command
+# line: the leading sudo bold (it marks where root begins), the program bold
+# blue, every token that starts with '-' bold blue (a lexical mark, never a
+# judgement about the flag), every other argument plain. Built from the argv
+# array itself, one %q-quoted token at a time, so the marks follow the parts
+# and the line stays the command that runs. Both programs here are bare
+# names, which take the bold blue whole.
+print_command() { # <program> [args...]
+  local tok q
+  printf -v q '%q' "$1"
+  printf '  %ssudo%s %s%s%s' "$C_B" "$C_OFF" "$C_BLU" "${q}" "$C_OFF"
+  shift
+  for tok in "$@"; do
+    printf -v q '%q' "${tok}"
+    if [[ "${q}" == -* ]]; then
+      printf ' %s%s%s' "$C_BLU" "${q}" "$C_OFF"
+    else
+      printf ' %s' "${q}"
+    fi
+  done
+  printf '\n'
+}
+
 PIN_CMD=(perl -i -pe "${subst}" -- "${FLAKE}")
 REBUILD_CMD=(darwin-rebuild switch --flake "$(dirname "${FLAKE}")")
 
@@ -178,8 +201,8 @@ REBUILD_CMD=(darwin-rebuild switch --flake "$(dirname "${FLAKE}")")
 # gate's blank line stands between them and it. The leading sudo already
 # says where root begins.
 print_header
-printf '  %ssudo' "$C_CYN"; printf ' %q' "${PIN_CMD[@]}"; printf '%s\n' "$C_OFF"
-printf '  %ssudo' "$C_CYN"; printf ' %q' "${REBUILD_CMD[@]}"; printf '%s\n' "$C_OFF"
+print_command "${PIN_CMD[@]}"
+print_command "${REBUILD_CMD[@]}"
 printf '\n'
 
 if (( DRY_RUN )); then

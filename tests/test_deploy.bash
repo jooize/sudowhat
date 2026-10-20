@@ -95,6 +95,14 @@ ok "the pinned row leaves the flake path out" lacks "${pinned}" "${flake_dir}"
 flake_row="$(line_of "${out}" 'flake:')"
 ok "the flake path ends a row of its own" test "${flake_row}" = "flake:   ${NIX_DARWIN_FLAKE}"
 ok "no label announces the command lines" lacks "$(cat -- "${out}")" "Will run as root"
+# Each argument is %q-quoted on its own, so the flake path keeps its space.
+flake_q="$(printf '%q' "${NIX_DARWIN_FLAKE}")"
+dir_q="$(printf '%q' "${flake_dir}")"
+pin_line="$(line_of "${out}" '  sudo perl ')"
+ok "the pin command line runs perl in place" test "${pin_line:0:21}" = "  sudo perl -i -pe s\\"
+ok "the pin command line ends with the flake path" ends_with "${pin_line}" " -- ${flake_q}"
+ok "the rebuild command line names the flake directory" \
+  grep -qxF -- "  sudo darwin-rebuild switch --flake ${dir_q}" "${out}"
 
 # --- the question ------------------------------------------------------------
 # Off a terminal there is nobody to ask: exit 2, and no question is printed.
@@ -142,6 +150,11 @@ if (( pty_ok )); then
   ok "an n answer aborts" lacks "${plain}" "stub sudo"
   ok "and says so in the decline shape" grep -qF -- "${DECLINE}" <<<"${plain}"
   ok "and the flake keeps its pin" grep -qF "rev=${old_rev}" "${NIX_DARWIN_FLAKE}"
+  # A command line on a terminal: sudo bold, the program and its flags bold
+  # blue, every other argument plain.
+  ok "the rebuild command line is drawn by role" grep -qF -- \
+    $'\033[1msudo\033[0m \033[1;34mdarwin-rebuild\033[0m switch \033[1;34m--flake\033[0m ' \
+    "${out}"
 
   # An answer that is not one is not acted on: one "not an answer" line,
   # the question again, and the next answer decides.
@@ -160,7 +173,8 @@ else
   for name in "on a terminal the question is asked" \
               "the question line holds no value" \
               "an n answer aborts" "and says so in the decline shape" \
-              "and the flake keeps its pin" "an unknown answer says it is not one" \
+              "and the flake keeps its pin" "the rebuild command line is drawn by role" \
+              "an unknown answer says it is not one" \
               "and asks again" "then the n declines" "NO_COLOR prints no escape byte"; do
     skip "${name}" "no pty here (script cannot open one; a sandboxed runner?)"
   done
