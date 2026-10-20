@@ -1,17 +1,22 @@
 //! display.rs — the pure, host-testable heart of the Linux audit plugin.
 //!
-//! It parses sudo's `key=value` context arrays and assembles the exact terminal
-//! block the macOS audit plugin emits (plugin/sudowhat_audit.m):
+//! It parses sudo's `key=value` context arrays and assembles the terminal block
+//! shown before authentication:
 //!
 //!   sudowhat: run as: <target user>
 //!   sudowhat: directory: <invoking cwd>       (omitted when cwd is absent)
 //!   sudowhat: input: <command as typed>
 //!
-//! The escaping/quoting is delegated to `escape_core` — the same crate the macOS
-//! plugin links as a staticlib — so the output is byte-for-byte identical on both
-//! platforms, and the anti-spoofing guarantees (every hidden character shown as
-//! its escape, a backslash escaped only where it would begin one) are
-//! inherited, not re-implemented here.
+//! What it shares with the macOS audit plugin (plugin/sudowhat_audit.m) is the
+//! rendering of each value: the escaping and quoting are delegated to
+//! `escape_core`, the same crate the macOS plugin links as a staticlib, so a
+//! value reads the same on both platforms and the anti-spoofing guarantees
+//! (every hidden character shown as its escape, a byte that is not valid UTF-8
+//! as `\xHH`, a backslash escaped only where it would begin one) are inherited,
+//! not re-implemented here. The layout is not shared: the macOS block pads its
+//! labels to a 12-column gutter, colors its values by role and adds a `PATH:`
+//! row, while this one puts one space after each label and bolds only the
+//! labels.
 //!
 //! Everything in this file is pure (no I/O, no FFI, no unsafe): lib.rs converts
 //! the raw C string arrays into byte slices and hands them here, and tty.rs does
@@ -94,7 +99,8 @@ fn command_line(argv: &[&[u8]]) -> Option<String> {
 /// Assemble the full display block, or `None` when there is nothing to show (no
 /// command word — e.g. `sudo -v`). `color` toggles the bold label emphasis; the
 /// caller derives it from [`color_allowed`], and tty.rs's `isatty()` is still the
-/// final say. Byte-for-byte identical to plugin/sudowhat_audit.m's block.
+/// final say. Each value is rendered as in plugin/sudowhat_audit.m's block (one
+/// escape_core); the frame around it is this file's own (see the module note).
 ///
 /// - `settings`  — sudo's `settings[]` (holds `runas_user` only when `-u` given).
 /// - `user_info` — sudo's `user_info[]` (holds the invoking `cwd`).

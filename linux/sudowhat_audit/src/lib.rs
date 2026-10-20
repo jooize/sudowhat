@@ -32,8 +32,8 @@
 //! This file is the thin FFI shell: it vendors the `struct audit_plugin` layout
 //! (plugin/sudo_plugin.h), reads sudo's raw `char * const[]` context arrays as
 //! byte slices, and delegates. The interesting logic is pure and host-testable in
-//! `display.rs` (assemble the block, byte-for-byte identical to the macOS plugin,
-//! via escape_core); the /dev/tty write lives in `tty.rs`.
+//! `display.rs` (assemble the block, its values rendered by escape_core as on
+//! macOS); the /dev/tty write lives in `tty.rs`.
 
 mod display;
 mod tty;
