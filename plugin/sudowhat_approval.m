@@ -323,11 +323,9 @@ static void set_errstr(const char **errstr, const char *fmt, ...) {
  * is the only escape sequence that can ever reach the terminal here, so there is
  * nothing to misconfigure, and the emphasis is cosmetic in the first place --
  * never a trust signal, since the anchor is the code matching the
- * system-rendered prompt (see write_verify_code_to_tty). Accepted imperfection:
- * escape_core's anomaly palette also spends bold magenta on control-byte
- * escapes, so a control-byte span inside a command value shares this colour.
- * That is rare, and a control byte in argv is itself an alarm the reader should
- * stop at, so the collision is accepted rather than designed around. */
+ * system-rendered prompt (see write_verify_code_to_tty). No command value
+ * shares the colour: escape_core marks a hidden character's escape in reverse
+ * red, and nothing else it draws is magenta. */
 #define SW_VERIFY_LABEL  "verify:"
 #define SW_VERIFY_GAP    "     "     /* pads "verify:" (7) out to the 12-col gutter */
 #define SW_VERIFY_TAIL   "(compare with the dialog)"
@@ -522,8 +520,8 @@ static void emit_verify_code(const char *ttyPath, const char *code,
  *   on  - (default) the resolved command line is highlighted by role: the first
  *         segment of the program's directory bold cyan, the rest of it plain,
  *         its basename bold blue, option flags bold blue, every other token
- *         plain, the quotes the escape core itself added dim, and
- *         escaped/anomalous spans in the fixed anomaly palette on top.
+ *         plain, the quotes the escape core itself added dim, and its fixed
+ *         marks on top (a hidden character's escape in reverse red).
  *   off - the resolved command line renders plain.
  *
  * ONE token governs BOTH command lines, input: and execute:, because a reader

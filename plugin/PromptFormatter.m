@@ -13,89 +13,79 @@
     return set;
 }
 
+/* The hidden list of the untrusted-text rules, verbatim: code points that draw
+ * nothing, draw as something else, or reorder the text after them. Twin of
+ * escape_core's is_hidden; keep the two in step. A plain space is not on it. */
+static BOOL sw_is_hidden(uint32_t u) {
+    return u <= 0x1F || (u >= 0x7F && u <= 0x9F) || u == 0xA0 || u == 0xAD
+        || u == 0x34F || u == 0x61C || (u >= 0x115F && u <= 0x1160)
+        || (u >= 0x17B4 && u <= 0x17B5) || (u >= 0x180B && u <= 0x180E)
+        || (u >= 0x2000 && u <= 0x200F) || (u >= 0x2028 && u <= 0x202F)
+        || (u >= 0x205F && u <= 0x206F) || u == 0x3000 || u == 0x3164
+        || (u >= 0xFE00 && u <= 0xFE0F) || u == 0xFEFF || u == 0xFFA0
+        || (u >= 0xFFF9 && u <= 0xFFFB) || (u >= 0xE0000 && u <= 0xE007F)
+        || (u >= 0xE0100 && u <= 0xE01EF);
+}
+
+static BOOL sw_is_hex_digit(uint32_t u) {
+    return (u >= '0' && u <= '9') || (u >= 'A' && u <= 'F')
+        || (u >= 'a' && u <= 'f');
+}
+
+/* Append the escape of one code point: a backslash, "u{", uppercase hex with
+ * no leading zeros, "}". The format holds no backslash itself; %C adds it. */
+static void sw_append_escape(NSMutableString *out, uint32_t u) {
+    [out appendFormat:@"%Cu{%X}", (unichar)'\\', (unsigned)u];
+}
+
 + (NSString *)escapeControlChars:(NSString *)s {
-    NSMutableString *out = [NSMutableString stringWithCapacity:s.length];
     NSUInteger len = s.length;
-    NSUInteger i = 0;
-    while (i < len) {
+
+    /* Code points first: a surrogate pair combines into its scalar value, so
+     * astral characters (emoji, tag characters) are judged whole. A lone
+     * surrogate stays as its own unit. */
+    NSMutableData *buf = [NSMutableData dataWithLength:(len + 1) * sizeof(uint32_t)];
+    uint32_t *cps = buf.mutableBytes;
+    NSUInteger n = 0;
+    for (NSUInteger i = 0; i < len; ) {
         unichar c = [s characterAtIndex:i];
-
-        /* Run of 3+ ASCII '.' is visually indistinguishable from a single
-         * U+2026 `…` in proportional fonts — it would impersonate our
-         * truncation marker. Escape every dot in the run. (Single '.' and
-         * the parent-dir reference '..' pass through unchanged; both are
-         * legitimate path content.) */
-        if (c == '.') {
-            NSUInteger j = i + 1;
-            while (j < len && [s characterAtIndex:j] == '.') j++;
-            NSUInteger runLen = j - i;
-            if (runLen >= 3) {
-                for (NSUInteger k = 0; k < runLen; k++) {
-                    [out appendString:@"\\u002e"];
-                }
-                i = j;
-                continue;
-            }
-            /* run of 1 or 2: fall through to literal emit */
-        }
-
-        if (c == '\\') {
-            /* Escape literal backslashes so the prompt is unambiguous
-             * about what the source bytes were. Without this, a literal
-             * two-char `\n` in argv would render identically to our
-             * escape for a real 0x0a newline, letting an attacker spoof
-             * the "this contained a newline" signal with plain text. */
-            [out appendString:@"\\\\"];
-        } else if (c == '\n') {
-            [out appendString:@"\\n"];
-        } else if (c == '\r') {
-            [out appendString:@"\\r"];
-        } else if (c == '\t') {
-            [out appendString:@"\\t"];
-        } else if (c == '\0') {
-            [out appendString:@"\\0"];
-        } else if (c < 0x20 || c == 0x7f) {
-            /* C0 controls and DEL not already handled above. */
-            [out appendFormat:@"\\x%02x", (unsigned)c];
-        } else if (c >= 0x80 && c <= 0x9f) {
-            /* C1 control range, including U+0085 NEL which some text
-             * renderers treat as a line break. */
-            [out appendFormat:@"\\u%04x", (unsigned)c];
-        } else if (c == 0x2028 || c == 0x2029) {
-            /* Unicode line / paragraph separators. NSString renderers
-             * routinely honour these as real line breaks. Escaping them
-             * is what makes a blank line a trustworthy structural marker
-             * in the rendered prompt — without this, a 63-byte
-             * TERM_PROGRAM (or any other shown string) could inject a
-             * fake paragraph break and impersonate prompt structure. */
-            [out appendFormat:@"\\u%04x", (unsigned)c];
-        } else if (c == 0x2026 || c == 0x22EF || c == 0x2024 || c == 0x2025) {
-            /* Ellipsis / dot-leader homoglyphs. U+2026 HORIZONTAL ELLIPSIS and
-             * U+22EF MIDLINE HORIZONTAL ELLIPSIS render as `…`; U+2024 ONE DOT
-             * LEADER and U+2025 TWO DOT LEADER render as dots that read as `…`
-             * when repeated. Escaping them keeps the rendered dots honest — no
-             * displayed value can mimic a run of real periods it does not have. */
-            [out appendFormat:@"\\u%04x", (unsigned)c];
-        } else if ((c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069)
-                   || c == 0x200E || c == 0x200F || c == 0x061C) {
-            /* Bidirectional formatting / override characters (Trojan Source,
-             * CVE-2021-42574): LRE/RLE/PDF/LRO/RLO, the isolates LRI/RLI/FSI/PDI,
-             * the marks LRM/RLM, and ALM. They visually REORDER surrounding text,
-             * so the glyphs on the sheet can read as a different, innocuous
-             * command than the bytes execve runs — single-quoting does not
-             * neutralize them. Escape so rendered order matches byte order. */
-            [out appendFormat:@"\\u%04x", (unsigned)c];
-        } else if (c == 0x200B || c == 0x200C || c == 0x200D
-                   || c == 0x2060 || c == 0xFEFF) {
-            /* Zero-width / invisible format characters (ZWSP, ZWNJ, ZWJ, WORD
-             * JOINER, ZWNBSP/BOM): no visible glyph, so they can hide bytes or
-             * splice tokens with nothing shown. Escape so nothing in a displayed
-             * value is invisible. */
-            [out appendFormat:@"\\u%04x", (unsigned)c];
+        if (CFStringIsSurrogateHighCharacter(c) && i + 1 < len
+            && CFStringIsSurrogateLowCharacter([s characterAtIndex:i + 1])) {
+            cps[n++] = (uint32_t)CFStringGetLongCharacterForSurrogatePair(
+                c, [s characterAtIndex:i + 1]);
+            i += 2;
         } else {
-            [out appendFormat:@"%C", c];
+            cps[n++] = c;
+            i += 1;
         }
-        i++;
+    }
+
+    NSMutableString *out = [NSMutableString stringWithCapacity:len];
+    for (NSUInteger k = 0; k < n; k++) {
+        uint32_t u = cps[k];
+        if (sw_is_hidden(u) || (u >= 0xD800 && u <= 0xDFFF)) {
+            /* Hidden: drawn as its escape, never raw and never dropped. A lone
+             * surrogate is not text at all (it would draw as a replacement
+             * glyph that hides which unit was there), so it shows escaped
+             * too; it cannot arrive from UTF-8, which is all escape_core
+             * sees. */
+            sw_append_escape(out, u);
+        } else if (u == '\\' && k + 2 < n
+                   && ((cps[k + 1] == 'u' && cps[k + 2] == '{')
+                       || (cps[k + 1] == 'x' && sw_is_hex_digit(cps[k + 2])))) {
+            /* A literal backslash that would read as the start of an escape
+             * (before "u{", or before "x" and a hex digit) shows as its own
+             * escape, so an escape on screen can only ever be one. Every other
+             * backslash is drawn as itself. */
+            sw_append_escape(out, '\\');
+        } else if (u > 0xFFFF) {
+            UniChar pair[2];
+            CFStringGetSurrogatePairForLongCharacter((UTF32Char)u, pair);
+            [out appendString:[NSString stringWithCharacters:pair length:2]];
+        } else {
+            unichar c = (unichar)u;
+            [out appendString:[NSString stringWithCharacters:&c length:1]];
+        }
     }
     return out;
 }
@@ -308,87 +298,6 @@
     [out appendFormat:@"%@\n\nRUN AS\n%@\n\n", header, userShown];
     if (pathShown) [out appendFormat:@"DIRECTORY\n%@\n\n", pathShown];
     [out appendFormat:@"EXECUTE\n%@\n\n%@\n\n%@", cmdShown, verifyLine, bottom];
-    return out;
-}
-
-/* Fixed SGR palette for the terminal echo (see colorizeEscaped: in the header).
- * Kept here, in one reviewed place, so the only escape bytes that can reach the
- * terminal are this closed set — the classifier below is their sole producer.
- * Every colour leads with "1;" (bold+colour) so it still carries where the
- * colour washes out; whitespace uses a grey background so a run of otherwise-
- * invisible spaces reads as a filled block while the bytes stay unchanged. */
-static NSString *const kSGRReset   = @"\033[0m";
-static NSString *const kSGRUnicode = @"\033[1;31m"; /* deceptive Unicode: \uNNNN   */
-static NSString *const kSGRControl = @"\033[1;35m"; /* control bytes: \n \r \t \0 \xNN */
-static NSString *const kSGRMeta    = @"\033[1;36m"; /* shell metachars: ' " ` and \\  */
-static NSString *const kSGRSpace   = @"\033[100m";  /* notable whitespace: grey background */
-
-+ (NSString *)colorizeEscaped:(NSString *)s {
-    if (s == nil) return s;
-    NSUInteger len = s.length;
-    NSMutableString *out = [NSMutableString stringWithCapacity:len + 16];
-    NSUInteger i = 0;
-    while (i < len) {
-        unichar c = [s characterAtIndex:i];
-
-        /* Backslash escapes emitted by escapeControlChars:. Every '\' it
-         * produces is followed by one of {\ n r t 0 x u}; quoteToken: adds only
-         * the shell idiom '\'' (a '\' before a single quote). We classify by the
-         * second char and wrap the whole fixed-width sequence as one unit — so a
-         * "\\" is consumed together and its second '\' is never re-read as the
-         * start of another escape. A '\' before anything else (the quote idiom,
-         * or an input that cannot arise from our escapers) is emitted plain. */
-        if (c == '\\' && i + 1 < len) {
-            unichar n = [s characterAtIndex:i + 1];
-            NSString *color = nil;
-            NSUInteger span = 0;
-            if (n == 'u') { color = kSGRUnicode; span = 6; }        /* \uNNNN */
-            else if (n == 'x') { color = kSGRControl; span = 4; }   /* \xNN   */
-            else if (n == 'n' || n == 'r' || n == 't' || n == '0') {
-                color = kSGRControl; span = 2;                      /* \n \r \t \0 */
-            } else if (n == '\\') { color = kSGRMeta; span = 2; }   /* literal '\' */
-            if (color != nil && i + span <= len) {
-                [out appendFormat:@"%@%@%@", color,
-                     [s substringWithRange:NSMakeRange(i, span)], kSGRReset];
-                i += span;
-                continue;
-            }
-            [out appendFormat:@"%C", c];   /* lone backslash (e.g. the '\'' idiom) */
-            i++;
-            continue;
-        }
-
-        /* Shell metacharacters that survive into the displayed string: our
-         * wrapping single-quotes, and any ' " ` inside a quoted token. One
-         * colour = "shell-significant character" (distinguishing our structural
-         * quotes from literal ones would need quote-state tracking; deferred). */
-        if (c == '\'' || c == '"' || c == '`') {
-            [out appendFormat:@"%@%C%@", kSGRMeta, c, kSGRReset];
-            i++;
-            continue;
-        }
-
-        /* Whitespace runs. Underline a run of spaces that is >=2 long or touches
-         * the start/end of the string — the invisible-padding cases (a trailing
-         * space on a path, a hidden double space). A single interior space is a
-         * normal separator and stays plain, so ordinary commands are unmarked. */
-        if (c == ' ') {
-            NSUInteger j = i + 1;
-            while (j < len && [s characterAtIndex:j] == ' ') j++;
-            NSUInteger runLen = j - i;
-            NSString *run = [s substringWithRange:NSMakeRange(i, runLen)];
-            if (runLen >= 2 || i == 0 || j == len) {
-                [out appendFormat:@"%@%@%@", kSGRSpace, run, kSGRReset];
-            } else {
-                [out appendString:run];
-            }
-            i = j;
-            continue;
-        }
-
-        [out appendFormat:@"%C", c];
-        i++;
-    }
     return out;
 }
 

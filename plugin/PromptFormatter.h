@@ -3,9 +3,10 @@
  * suitable for LAContext's localizedReason.
  *
  * Each argv token is shell-quoted if it contains anything outside a
- * conservative safe character set. Control characters (< 0x20, 0x7f) are
- * shown as \xNN escapes so an attacker can't smuggle hidden lines into the
- * visible prompt via embedded newlines or terminal escape sequences.
+ * conservative safe character set. Hidden characters (controls, bidi controls,
+ * zero-width and other invisible characters) show as escapes, so an attacker
+ * can't smuggle hidden lines into the visible prompt or reorder what it shows
+ * (see escapeControlChars: below).
  */
 
 #ifndef SUDOWHAT_PROMPT_FORMATTER_H
@@ -84,27 +85,16 @@ typedef struct {
 /* Exposed for unit tests. Public so a future test target can call it. */
 + (NSString *)quoteToken:(NSString *)token;
 
-/* Escape control / homoglyph / bidi / zero-width characters to visible \xNN or
- * \uNNNN text, so the glyphs shown can neither smuggle hidden lines nor visually
- * reorder (Trojan Source). Public so the plugin can escape the user/path values
- * it echoes to the terminal with the same rules the sheet uses. */
+/* Escape a value by the house untrusted-text rules, so the glyphs shown are
+ * exactly the characters that are there: a hidden-list code point (controls,
+ * bidi controls, zero-width and other invisible characters, unusual spaces,
+ * variation selectors, tags) shows as \u{HEX}, uppercase with no leading
+ * zeros, and a literal backslash that would begin an escape (before u{, or
+ * before x and a hex digit) as its own \u{5C}. Everything else is drawn as
+ * itself. No line break survives, so no value can fake the sheet's structure.
+ * Twin of escape_core's escape_bytes on valid UTF-8 (an NSString holds no
+ * invalid bytes); tests/test_escape_core.m holds the two in step. */
 + (NSString *)escapeControlChars:(NSString *)s;
-
-/* Wrap anomaly spans of an ALREADY-escaped string (the output of
- * escapeControlChars: / quoteToken: / fullCommandLineForCommandPath:) in a
- * fixed, reviewed set of SGR colour sequences, for the controlling-terminal
- * echo only. Semantic colours: deceptive Unicode escapes (\uNNNN) red,
- * control-byte escapes (\n \r \t \0 \xNN) magenta, shell metacharacters
- * (' " ` and the escaped backslash \\) cyan, and notable whitespace runs
- * shown on a grey background. Purely additive: stripping the SGR yields the exact input bytes
- * back (round-trip invariant), so it never alters what is shown, only what is
- * emphasised. The input must already be escaped (no raw control bytes, hence no
- * raw ESC), so no attacker byte can become an escape sequence; the only escape
- * bytes emitted are this fixed palette. Colour here is emphasis, never a trust
- * signal, so colouring attacker-influenced content is safe. The plugin calls
- * this only when colour is permitted (build knob + NO_COLOR/TERM gate + a live
- * isatty target). */
-+ (NSString *)colorizeEscaped:(NSString *)s;
 
 @end
 

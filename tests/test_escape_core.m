@@ -7,17 +7,17 @@
  * two places.
  *
  * Vectors are valid Unicode only (a lone surrogate cannot cross a UTF-8 C
- * string, so it is out of scope here; the ObjC-only surrogate passthrough is
- * covered in test_prompt_formatter.m). Invalid-UTF-8 handling deliberately
- * differs (Rust: U+FFFD; ObjC: drops the token) and is likewise not compared.
+ * string, so it is out of scope here; the ObjC-only lone-surrogate escape is
+ * covered in test_prompt_formatter.m). Invalid UTF-8 is not compared either:
+ * Rust escapes each failing byte, and an NSString cannot hold one (the Rust
+ * side is pinned in its own test module).
  *
  * The colouriser (sw_full_command_line_colored and its dim variant
  * sw_full_command_line_colored_dim, Rust-only -- the audit bundle cannot link
  * PromptFormatter) is guarded here too, against the same reference: strip the
  * SGR of either and the bytes must equal the plain line from BOTH renderers.
- * Neither has an ObjC twin to diverge from (colorizeEscaped: has no production
- * callers and is deliberately not kept in step on the role palette), but they
- * must never diverge from the plain line they decorate, nor from each other.
+ * Neither has an ObjC twin to diverge from, but they must never diverge from
+ * the plain line they decorate, nor from each other.
  */
 #import "PromptFormatter.h"
 #import "sw_test.h"
@@ -171,6 +171,21 @@ static NSString *stripSGR(NSString *s) {
 
 /* unichar -> length-1 NSString (reliable for NUL and other controls). */
 static NSString *uni(unichar c) { return [NSString stringWithCharacters:&c length:1]; }
+/* An astral code point as its surrogate pair. */
+static NSString *astral(UTF32Char u) {
+    UniChar pair[2];
+    CFStringGetSurrogatePairForLongCharacter(u, pair);
+    return [NSString stringWithCharacters:pair length:2];
+}
+/* The escape the display shows for a code point, built here rather than typed
+ * as a literal: U(@"202E") is a backslash, "u{", the hex, "}". H() is the same
+ * escape in the reserved reverse red. */
+static NSString *U(NSString *hex) {
+    return [NSString stringWithFormat:@"%Cu{%@}", (unichar)'\\', hex];
+}
+static NSString *H(NSString *hex) {
+    return [NSString stringWithFormat:@"\033[7;31m%@\033[0m", U(hex)];
+}
 static NSString *cat(NSString *a, NSString *b) {
     return [a stringByAppendingString:b];
 }
@@ -183,7 +198,8 @@ static NSArray<NSString *> *escapeVectors(void) {
         @"", @"abcXYZ012", @"a b c", @"+_/.:=@%,-", @"/bin/echo", @"hello world",
         @"a'b", @"can't", @"'", @"$HOME", @"a;b", @"#x", @"a&b", @"a|b", @"a>b",
         @"weird\"`$", @"  lead and  double  ",
-        @"\\", @"\\n", @"back\\slash",
+        @"\\", @"\\n", @"back\\slash", @"C:\\Users", @"\\u41", @"\\xg", @"\\x",
+        @"\\u{41}", @"\\x41", @"\\xff", @"\\\\u{41}", @"a\\u{", @"\\'",
         @".", @"..", @"...", @"....", @"a...b", @"a..b", @"a.b.c", @".....b",
         @"..a..", @"/tmp/../etc",
         @"😀", @"日本語", @"café", @"emoji 😀 in text",
@@ -199,18 +215,29 @@ static NSArray<NSString *> *escapeVectors(void) {
     [v addObject:cat(cat(@"a", uni(0x0a)), @"b")];
     [v addObject:cat(cat(@"a", uni(0x1b)), @"b")];
 
-    /* C1 / separators / ellipsis / bidi / zero-width, standalone and embedded */
+    /* The hidden list's ranges and points, their neighbours just outside,
+     * and lookalikes that are drawn as themselves; standalone and embedded. */
     unichar special[] = {
-        0x80, 0x85, 0x9f, 0x2028, 0x2029,
+        0x80, 0x85, 0x9f, 0xa0, 0xa1, 0xad, 0x34e, 0x34f, 0x350, 0x61c,
+        0x115f, 0x1160, 0x17b4, 0x17b5, 0x180b, 0x180e,
+        0x2000, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2010,
+        0x2027, 0x2028, 0x2029, 0x202a, 0x202e, 0x202f, 0x2030,
+        0x205e, 0x205f, 0x2060, 0x2066, 0x2069, 0x206f, 0x2070,
         0x2026, 0x22ef, 0x2024, 0x2025,
-        0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
-        0x2066, 0x2067, 0x2068, 0x2069,
-        0x200e, 0x200f, 0x061c,
-        0x200b, 0x200c, 0x200d, 0x2060, 0xfeff,
+        0x3000, 0x3164, 0xfe00, 0xfe0f, 0xfe10, 0xfeff, 0xffa0,
+        0xfff9, 0xfffb, 0xfffc,
     };
     for (size_t i = 0; i < sizeof(special) / sizeof(special[0]); i++) {
         [v addObject:uni(special[i])];
         [v addObject:cat(cat(@"x", uni(special[i])), @"y")];
+    }
+
+    /* tag characters and variation selectors past the BMP, and an emoji */
+    UTF32Char astrals[] = { 0xe0000, 0xe0041, 0xe007f, 0xe0080, 0xe0100, 0xe01ef,
+                            0xe01f0, 0x1f600 };
+    for (size_t i = 0; i < sizeof(astrals) / sizeof(astrals[0]); i++) {
+        [v addObject:astral(astrals[i])];
+        [v addObject:cat(cat(@"x", astral(astrals[i])), @"y")];
     }
 
     /* combining mark, RLO attack token, ellipsis in text */
@@ -342,19 +369,22 @@ static void test_colored_roles(void) {
  * exhaustive attribution oracle lives in the Rust test module; this is the
  * cross-language sighting of the same rule. */
 static void test_colored_quote_attribution(void) {
-    /* a'b -> 'a'\''b' : ours, ours, a plain backslash, the DATA's, ours, ours. */
+    /* a'b -> 'a'\''b' : ours, a, ours, a plain backslash, the DATA's quote,
+     * ours, b, ours. */
     EQ(rustColoredCmd(@"p", @[@"p", @"a'b"]),
        @"\033[1;34mp\033[0m \033[2m'\033[0ma\033[2m'\033[0m\\\033[1;36m'\033[0m"
        @"\033[2m'\033[0mb\033[2m'\033[0m",
        "our quotes dim, the argument's own quote lit");
 
-    /* The trap a regex lookbehind gets wrong: a literal backslash renders
-     * doubled, so \' becomes \\'\'' whose third char is OUR closing quote and
-     * IS preceded by a backslash. Only the left-to-right walk gets this right. */
+    /* The trap a re-parse gets wrong: \' renders '\'\''' , where the quote
+     * right after the first backslash is OUR closing quote, though a
+     * backslash precedes it. The colours are composed from the parts, so the
+     * attribution is right by construction. */
     NSString *trap = rustColoredCmd(@"p", @[@"p", @"\\'"]);
-    EQ(stripSGR(trap), @"p '\\\\'\\'''", "the doubled-backslash token round-trips");
-    OK([trap hasSuffix:@"\033[2m'\033[0m\033[2m'\033[0m"],
-       "the two closing quotes of the trap token are both ours");
+    EQ(stripSGR(trap), @"p '\\'\\'''", "the backslash-quote token round-trips");
+    EQ(trap, @"\033[1;34mp\033[0m \033[2m'\033[0m\\\033[2m'\033[0m\\\033[1;36m'\033[0m"
+             @"\033[2m'\033[0m\033[2m'\033[0m",
+       "only the data's quote is lit; the quote after the first backslash is ours");
 
     /* An empty token is entirely chrome: both quotes ours. */
     EQ(rustColoredCmd(@"p", @[@"p", @""]),
@@ -362,9 +392,9 @@ static void test_colored_quote_attribution(void) {
        "the empty token is all chrome, both quotes dim");
 }
 
-/* A hostile token spelled like one of our own display lines lands quoted, and
- * the quotes carry the metachar colour -- it reads as data, not as a real
- * sudowhat line. The anomaly palette is the one PromptFormatter already ships. */
+/* A hostile token spelled like one of our own display lines lands quoted, in
+ * our own dim quotes -- it reads as data, not as a real sudowhat line. A
+ * hidden code point's escape wears reverse red, the style reserved for it. */
 static void test_colored_hostile_and_anomalies(void) {
     NSString *hostile = rustColoredCmd(@"/bin/echo", @[@"echo", @"sudowhat: run as: evil"]);
     OK([hostile containsString:@"\033[2m'\033[0msudowhat:"],
@@ -375,11 +405,18 @@ static void test_colored_hostile_and_anomalies(void) {
        "hostile token is quoted, not structural");
 
     NSString *nl = rustColoredCmd(@"/bin/echo", @[@"echo", cat(cat(@"a", uni(0x0a)), @"b")]);
-    OK([nl containsString:@"\033[1;35m\\n\033[0m"], "control escape is magenta");
+    OK([nl containsString:H(@"A")], "a line feed's escape is reverse red");
 
     NSString *bidi = rustColoredCmd(@"/bin/echo", @[@"echo", cat(uni(0x202e), @"x")]);
-    OK([bidi containsString:@"\033[1;31m\\u202e\033[0m"],
-       "deceptive Unicode escape is red");
+    OK([bidi containsString:H(@"202E")], "a bidi override's escape is reverse red");
+
+    /* A kept escape -- a backslash that would begin an escape -- is shown as
+     * exactly what it is, with no style of its own. */
+    NSString *kept = rustColoredCmd(@"/bin/echo", @[@"echo", @"\\x41"]);
+    EQ(kept, ([NSString stringWithFormat:
+                  @"\033[1;36m/bin\033[0m/\033[1;34mecho\033[0m \033[2m'\033[0m%@x41\033[2m'\033[0m",
+                  U(@"5C")]),
+       "a self-escaped backslash is unstyled");
 
     /* Notable whitespace is marked in the PROGRAM token, where invisible
      * padding changes what execve gets -- and nowhere else. An argument's
@@ -410,11 +447,11 @@ static void test_colored_dim_variant(void) {
        "flags take the dim base too, not their bold blue");
 
     NSString *nl = rustColoredDimCmd(@"/bin/echo", @[@"echo", cat(cat(@"a", uni(0x0a)), @"b")]);
-    OK([nl containsString:@"\033[1;35m\\n\033[0m"],
-       "control escape keeps full-strength magenta over the dim base");
+    OK([nl containsString:H(@"A")],
+       "a line feed's escape keeps full-strength reverse red over the dim base");
     NSString *bidi = rustColoredDimCmd(@"/bin/echo", @[@"echo", cat(uni(0x202e), @"x")]);
-    OK([bidi containsString:@"\033[1;31m\\u202e\033[0m"],
-       "deceptive Unicode escape keeps full-strength red over the dim base");
+    OK([bidi containsString:H(@"202E")],
+       "a bidi override's escape keeps full-strength reverse red over the dim base");
     NSString *pad = rustColoredDimCmd(@"/tmp/my  tool", @[]);
     OK([pad containsString:@"\033[100m  \033[0m"],
        "a doubled space in the program token keeps its grey background over "
@@ -427,8 +464,13 @@ static void test_colored_dim_variant(void) {
 /* A couple of explicit sanity checks so a totally broken Rust build fails
  * loudly, not just silently matching a broken ObjC side. */
 static void test_explicit_values(void) {
-    EQ(rustEscape(uni(0x0a)), @"\\n", "rust escapes newline to \\n");
-    EQ(rustEscape(@"..."), @"\\u002e\\u002e\\u002e", "rust escapes 3-dot run");
+    EQ(rustEscape(uni(0x0a)), U(@"A"), "rust escapes a line feed as its code point");
+    EQ(esc(uni(0x0a)), U(@"A"), "objc escapes a line feed as its code point");
+    EQ(rustEscape(@"\\x41"), [U(@"5C") stringByAppendingString:@"x41"],
+       "rust escapes a backslash that would begin an escape");
+    EQ(rustEscape(astral(0xe0041)), U(@"E0041"), "rust escapes a tag character");
+    EQ(esc(astral(0xe0041)), U(@"E0041"), "objc escapes a tag character");
+    EQ(rustEscape(@"..."), @"...", "rust draws a run of dots as itself");
     EQ(rustQuote(@"a b"), @"'a b'", "rust quotes a spaced token");
     EQ(rustFullCmd(@"/bin/echo", @[@"echo", @"a b"]), @"/bin/echo 'a b'",
        "rust full command quotes + dedups");

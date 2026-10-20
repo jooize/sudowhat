@@ -155,7 +155,8 @@ pub struct AuditPlugin {
 
 /// Convert a raw NUL-terminated `char * const[]` (starting at `start`) into owned
 /// lossy-UTF-8 Strings. A null array, or `start < 0`, yields an empty vec.
-/// Invalid UTF-8 degrades to U+FFFD (like escape_core), never a panic.
+/// Invalid UTF-8 degrades to U+FFFD here, before escape_core sees it (its byte
+/// API would show each failing byte as an escape instead), never a panic.
 ///
 /// # Safety
 /// `arr` must be null or a valid NUL-terminated array of valid C strings.

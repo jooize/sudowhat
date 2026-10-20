@@ -137,7 +137,7 @@ static const char *find_kv(char * const arr[], const char *key) {
 
 /* Escape a C string via the Rust core (sw_escape_control) and return it as an
  * NSString, or nil on failure. Two-call sizing: probe for the length, allocate,
- * fill. The Rust core replaces invalid UTF-8 with U+FFFD, so this never rejects
+ * fill. The Rust core escapes invalid UTF-8 byte by byte, so this never rejects
  * a value; it only returns nil on an allocation failure. */
 static NSString *sw_audit_escape(const char *input) {
     if (input == NULL) return @"";
@@ -440,9 +440,9 @@ static NSString *sw_audit_color_path_list(NSString *escaped) {
 /* Attention colour on an unexpected target. root is what `sudo` means with no
  * -u, so it is the expected value and earns no emphasis; anything else is the
  * case worth catching an eye. Plain yellow, not bold: it says "look" without
- * competing with the bold labels, and it stays clear of the anomaly palette
- * escape_core owns (1;31m, 1;35m, 1;36m, 100m). Yellow means exactly this one
- * thing anywhere in the block. */
+ * competing with the bold labels, and it stays clear of the marks escape_core
+ * owns (7;31m, 1;36m, 100m). Yellow means exactly this one thing anywhere in
+ * the block. */
 static NSString *sw_audit_color_user(NSString *user) {
     if ([user isEqualToString:@"root"]) return user;
     return [NSString stringWithFormat:@"\033[33m%@\033[0m", user];

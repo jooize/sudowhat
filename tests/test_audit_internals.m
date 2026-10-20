@@ -33,6 +33,16 @@
 /* Drop every SGR sequence, leaving the bytes the terminal actually shows.
  * Deliberately dumb (ESC '[' ... 'm'): the colouriser emits nothing else, and a
  * stricter parser would hide a regression that emitted something else. */
+/* The escape the display shows for a code point, built here rather than typed
+ * as a literal: U(@"202E") is a backslash, "u{", the hex, "}". H() is the same
+ * escape in the reserved reverse red. */
+static NSString *U(NSString *hex) {
+    return [NSString stringWithFormat:@"%Cu{%@}", (unichar)'\\', hex];
+}
+static NSString *H(NSString *hex) {
+    return [NSString stringWithFormat:@"\033[7;31m%@\033[0m", U(hex)];
+}
+
 static NSString *stripSGR(NSString *s) {
     if (s == nil) return nil;
     NSMutableString *o = [NSMutableString stringWithCapacity:s.length];
@@ -121,18 +131,19 @@ static void test_command_line_colored(void) {
     OK([color rangeOfString:@"\033[1;34m"].location == NSNotFound,
        "no flag blue on the input: line");
 
-    /* The anomaly palette is untouched by the dim base -- that is the point of
-     * the dim base: against it, the anomalies are the only colour on the row. */
+    /* The marks are untouched by the dim base -- that is the point of the dim
+     * base: against it, a hidden character's escape is the only colour on the
+     * row. */
     char *anom[] = { (char *)"sudo", (char *)"/bin/echo",
                      (char *)"a\nb", (char *)"x  y", NULL };
     NSString *a = sw_audit_command_line(anom, 1, YES);
-    OK([a rangeOfString:@"\033[1;35m\\n\033[0m"].location != NSNotFound,
-       "control escape keeps full-strength magenta over the dim base");
+    OK([a rangeOfString:H(@"A")].location != NSNotFound,
+       "a line feed's escape keeps full-strength reverse red over the dim base");
     /* The whitespace mark is scoped to the program token -- the path that will
      * execve -- so an argument's doubled space carries no grey background. */
     OK([a rangeOfString:@"\033[100m"].location == NSNotFound,
        "an argument's doubled space carries no grey background");
-    EQ(stripSGR(a), @"/bin/echo 'a\\nb' 'x  y'",
+    EQ(stripSGR(a), ([NSString stringWithFormat:@"/bin/echo 'a%@b' 'x  y'", U(@"A")]),
        "the anomaly line still strips back to the plain line");
 
     /* and the mark does appear where it belongs, at full strength over the
@@ -229,9 +240,10 @@ static void test_frame_value_colour(void) {
     EQ(stripSGR(sw_audit_color_dir(@"/a b/c d")), @"/a b/c d",
        "a spacey cwd gains no quotes: colour is layout, never content");
 
-    /* The frame palette stays clear of escape_core's anomaly colours, so a
-     * highlighted directory can never be mistaken for a flagged anomaly. */
-    NSArray<NSString *> *reserved = @[ @"\033[1;31m", @"\033[1;35m", @"\033[100m" ];
+    /* The frame palette stays clear of escape_core's reserved marks, so a
+     * highlighted directory can never be mistaken for a hidden character or
+     * invisible padding. */
+    NSArray<NSString *> *reserved = @[ @"\033[7;31m", @"\033[100m" ];
     NSString *row = sw_audit_row(@"directory:", sw_audit_color_dir(@"/home/alice"), YES);
     for (NSString *r in reserved) {
         OK([row rangeOfString:r].location == NSNotFound,
@@ -261,10 +273,10 @@ static void test_path_list_colour(void) {
        "the root as an entry is all head");
 
     /* Escaped hostile bytes stay text, and colour never changes a byte. */
-    NSString *hostile = @"/a\\n/b:/c\\u202ed";
+    NSString *hostile = [NSString stringWithFormat:@"/a%@/b:/c%@d", U(@"A"), U(@"202E")];
     EQ(stripSGR(sw_audit_color_path_list(hostile)), hostile,
        "the coloured value strips back to the escaped plain value");
-    NSArray<NSString *> *reserved = @[ @"\033[1;31m", @"\033[1;35m", @"\033[100m" ];
+    NSArray<NSString *> *reserved = @[ @"\033[7;31m", @"\033[100m" ];
     NSString *row = sw_audit_row(@"PATH:", sw_audit_color_path_list(hostile), YES);
     for (NSString *r in reserved) {
         OK([row rangeOfString:r].location == NSNotFound,
@@ -364,7 +376,7 @@ static void test_path_row_value(void) {
     char *hostile[] = { (char *)"TERM=xterm",
                         (char *)"PATH=/a\n/b:/c\u202Ed", NULL };
     NSString *h = sw_audit_path_row_value(bare, 1, hostile);
-    EQ(h, @"/a\\n/b:/c\\u202ed",
+    EQ(h, ([NSString stringWithFormat:@"/a%@/b:/c%@d", U(@"A"), U(@"202E")]),
        "control byte and bidi override are escaped to text");
     OK([h rangeOfString:@"\n"].location == NSNotFound,
        "no raw newline survives into the row");

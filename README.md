@@ -70,11 +70,13 @@ whatever it decided to run.
 
 With sudowhat, the system-trusted Touch ID dialog displays the
 resolved command path and arguments — the same bytes sudo will pass to
-`execve` — *before* you authorize. Argv tokens are shell-quoted; backslashes
-and control characters are escaped (named: `\n`, `\r`, `\t`, `\0`, `\\`; or
-hex: `\xNN`, `\uNNNN`) so the rendered dialog is unambiguous about its source
-bytes. An attacker cannot smuggle hidden lines into the dialog, nor can a
-literal `\n` in argv pose as a real newline.
+`execve` — *before* you authorize. Argv tokens are shell-quoted, and every
+character that draws nothing, draws as something else, or reorders the text
+after it (controls, bidi controls, zero-width and other invisible characters)
+shows as its code point, `\u{HEX}`, so the rendered dialog is unambiguous
+about its source bytes. A literal backslash is escaped only where it would
+read as the start of an escape. An attacker cannot smuggle hidden lines into
+the dialog, nor can literal text in argv pose as an escape.
 
 ## What you get
 
@@ -313,7 +315,7 @@ lives (`/run`, `/nix` and `/usr` against `/Users`).
 | `execute:` | the program's first segment bold cyan, the rest of its directory plain, its name bold blue; flags bold blue; everything else plain |
 
 On `input:` and `execute:`, escapes for suspicious bytes stand out in their own
-colors: deceptive Unicode red, control bytes magenta, shell metacharacters bold
+colors: a hidden character's escape reverse red, shell metacharacters bold
 cyan, and odd spacing in the program path on a grey background. Quotes that
 sudowhat added are dim. Color never changes a byte: without it, every row reads
 the same. `NO_COLOR`, `TERM=dumb`, or output that isn't a terminal turn it off.

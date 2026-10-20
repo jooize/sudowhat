@@ -269,8 +269,8 @@ drops the padding rather than aligning against a column of one. The `execute:`
 value is **highlighted by role** so the token worth reading is not buried in
 the wrap: the first segment of the program's directory in bold cyan, the rest
 of it plain, its basename bold blue, option flags bold blue, every other token plain, the quotes sudowhat
-itself added dim. Anomalous spans take the palette above them: deceptive
-Unicode escapes red, control-byte escapes magenta, shell metacharacters cyan,
+itself added dim. Marked spans take their own style above them: a hidden
+character's escape reverse red, shell metacharacters cyan,
 and notable whitespace runs (leading, trailing, or doubled spaces) on a grey
 background **inside the program token only**. That last mark is scoped to the
 thing that will execute, because that is where invisible padding changes the

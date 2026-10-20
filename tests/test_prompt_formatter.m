@@ -2,13 +2,10 @@
  * Adversarial unit tests for SudoWhatPromptFormatter.
  *
  * This class is the anti-spoofing boundary: it shell-quotes argv tokens and
- * escapes control / homoglyph characters so the bytes shown in the Touch ID
- * sheet cannot fake structure (hidden newlines, fake truncation markers,
- * doubled-up escapes). These tests try hard to break those guarantees.
- *
- * escapeControlChars: is private to the .m; we redeclare it in a category so
- * the test can call it without changing production code (the method exists at
- * runtime). quoteToken: and formatWith...: are public in the header.
+ * escapes hidden characters (the untrusted-text hidden list) so the bytes
+ * shown in the Touch ID sheet cannot fake structure (hidden line breaks,
+ * reordered text, an escape that is not one). These tests try hard to break
+ * those guarantees.
  */
 #import "PromptFormatter.h"
 #import "sw_test.h"
@@ -62,91 +59,91 @@ static NSUInteger charcount(NSString *s, unichar target) {
     for (NSUInteger i = 0; i < s.length; i++) if ([s characterAtIndex:i] == target) n++;
     return n;
 }
-static NSString *color(NSString *s) { return [SudoWhatPromptFormatter colorizeEscaped:s]; }
-/* Strip CSI SGR sequences (ESC '[' ... 'm') so we can assert the round-trip
- * invariant: colorizeEscaped adds only colour, never changes the bytes. */
-static NSString *strip_sgr(NSString *s) {
-    NSMutableString *o = [NSMutableString string];
-    NSUInteger i = 0, len = s.length;
-    while (i < len) {
-        unichar c = [s characterAtIndex:i];
-        if (c == 0x1b && i + 1 < len && [s characterAtIndex:i + 1] == '[') {
-            i += 2;
-            while (i < len && [s characterAtIndex:i] != 'm') i++;
-            if (i < len) i++;   /* skip the terminating 'm' */
-            continue;
-        }
-        [o appendFormat:@"%C", c];
-        i++;
+/* The escape the sheet shows for a code point, built here rather than typed
+ * as a literal: U(@"202E") is a backslash, "u{", the hex, "}". */
+static NSString *U(NSString *hex) {
+    return [NSString stringWithFormat:@"%Cu{%@}", (unichar)'\\', hex];
+}
+static NSString *astral(UTF32Char u) {
+    UniChar pair[2];
+    CFStringGetSurrogatePairForLongCharacter(u, pair);
+    return [NSString stringWithCharacters:pair length:2];
+}
+
+static void test_escape_form(void) {
+    /* Every hidden character shows as backslash, u{, uppercase hex with no
+     * leading zeros, }. No named escapes: a line feed is its code point. */
+    EQ(esc(uni(0x0a)), U(@"A"), "line feed -> its code point");
+    EQ(esc(uni(0x0d)), U(@"D"), "carriage return -> its code point");
+    EQ(esc(uni(0x09)), U(@"9"), "tab -> its code point");
+    EQ(esc(uni(0x00)), U(@"0"), "NUL -> its code point");
+    EQ(esc(uni(0x1b)), U(@"1B"), "ESC -> uppercase hex");
+    EQ(esc(uni(0x7f)), U(@"7F"), "DEL");
+    EQ(esc(([NSString stringWithFormat:@"a%@b", uni(0x0a)])),
+       ([NSString stringWithFormat:@"a%@b", U(@"A")]), "escape between letters");
+}
+
+static void test_escape_backslash(void) {
+    /* An escape on screen can only be one: a literal backslash that would read
+     * as the start of an escape (before u{, or before x and a hex digit) shows
+     * as its own escape; every other backslash is drawn as itself. */
+    NSString *bs = U(@"5C");
+    EQ(esc(@"\\"), @"\\", "a lone backslash is itself");
+    EQ(esc(@"\\n"), @"\\n", "backslash-n is itself");
+    EQ(esc(@"C:\\Users"), @"C:\\Users", "a path backslash is itself");
+    EQ(esc(@"\\u41"), @"\\u41", "backslash-u without a brace is itself");
+    EQ(esc(@"\\xg"), @"\\xg", "backslash-x without a hex digit is itself");
+    EQ(esc(@"\\x"), @"\\x", "a trailing backslash-x is itself");
+    EQ(esc(@"\\u{41}"), ([NSString stringWithFormat:@"%@u{41}", bs]),
+       "backslash before u{ is escaped");
+    EQ(esc(@"\\x41"), ([NSString stringWithFormat:@"%@x41", bs]),
+       "backslash before x and a hex digit is escaped");
+    EQ(esc(@"\\xff"), ([NSString stringWithFormat:@"%@xff", bs]),
+       "lowercase hex digits count too");
+    /* A literal backslash-n can no longer pass for a line feed. */
+    OK(![esc(@"\\n") isEqualToString:esc(uni(0x0a))],
+       "literal backslash-n distinguishable from a real line feed");
+}
+
+static void test_escape_hidden_list(void) {
+    /* Both ends of every range and each single point on the hidden list. */
+    struct { UTF32Char cp; NSString *hex; } pts[] = {
+        {0x80, @"80"}, {0x85, @"85"}, {0x9f, @"9F"}, {0xa0, @"A0"}, {0xad, @"AD"},
+        {0x34f, @"34F"}, {0x61c, @"61C"}, {0x115f, @"115F"}, {0x1160, @"1160"},
+        {0x17b4, @"17B4"}, {0x17b5, @"17B5"}, {0x180b, @"180B"}, {0x180e, @"180E"},
+        {0x2000, @"2000"}, {0x200b, @"200B"}, {0x200f, @"200F"},
+        {0x2028, @"2028"}, {0x2029, @"2029"}, {0x202e, @"202E"}, {0x202f, @"202F"},
+        {0x205f, @"205F"}, {0x2060, @"2060"}, {0x2066, @"2066"}, {0x206f, @"206F"},
+        {0x3000, @"3000"}, {0x3164, @"3164"}, {0xfe00, @"FE00"}, {0xfe0f, @"FE0F"},
+        {0xfeff, @"FEFF"}, {0xffa0, @"FFA0"}, {0xfff9, @"FFF9"}, {0xfffb, @"FFFB"},
+        {0xe0000, @"E0000"}, {0xe0041, @"E0041"}, {0xe007f, @"E007F"},
+        {0xe0100, @"E0100"}, {0xe01ef, @"E01EF"},
+    };
+    for (size_t i = 0; i < sizeof(pts) / sizeof(pts[0]); i++) {
+        NSString *in = pts[i].cp > 0xffff ? astral(pts[i].cp) : uni((unichar)pts[i].cp);
+        EQ(esc(in), U(pts[i].hex), "a hidden-list code point is escaped");
     }
-    return o;
-}
-
-static void test_escape_named(void) {
-    /* The five named escapes. */
-    EQ(esc(uni(0x0a)), @"\\n", "esc newline -> backslash-n");
-    EQ(esc(uni(0x0d)), @"\\r", "esc CR -> backslash-r");
-    EQ(esc(uni(0x09)), @"\\t", "esc tab -> backslash-t");
-    EQ(esc(uni(0x00)), @"\\0", "esc NUL -> backslash-0");
-    EQ(esc(@"\\"),     @"\\\\", "esc backslash -> double backslash");
-}
-
-static void test_escape_antispoof_backslash(void) {
-    /* The core anti-spoof property (README:30): a literal two-char "\n"
-     * (backslash, 'n') must NOT render the same as a real 0x0a newline. */
-    NSString *literalBackslashN = esc(@"\\n");   /* input: backslash, n */
-    NSString *realNewline       = esc(uni(0x0a));
-    EQ(literalBackslashN, @"\\\\n", "literal backslash-n escapes to \\\\n");
-    EQ(realNewline,       @"\\n",   "real newline escapes to \\n");
-    OK(![literalBackslashN isEqualToString:realNewline],
-       "literal backslash-n distinguishable from real newline");
-}
-
-static void test_escape_hex_c0_del(void) {
-    EQ(esc(uni(0x07)), @"\\x07", "esc BEL -> \\x07");
-    EQ(esc(uni(0x01)), @"\\x01", "esc SOH -> \\x01");
-    EQ(esc(uni(0x1b)), @"\\x1b", "esc ESC -> \\x1b (lowercase hex)");
-    EQ(esc(uni(0x1f)), @"\\x1f", "esc 0x1f -> \\x1f");
-    EQ(esc(uni(0x7f)), @"\\x7f", "esc DEL -> \\x7f");
-}
-
-static void test_escape_c1_and_separators(void) {
-    EQ(esc(uni(0x80)), @"\\u0080", "esc C1 0x80 -> \\u0080");
-    EQ(esc(uni(0x85)), @"\\u0085", "esc NEL -> \\u0085");
-    EQ(esc(uni(0x9f)), @"\\u009f", "esc 0x9f -> \\u009f");
-    EQ(esc(uni(0x2028)), @"\\u2028", "esc LINE SEPARATOR -> \\u2028");
-    EQ(esc(uni(0x2029)), @"\\u2029", "esc PARA SEPARATOR -> \\u2029");
-}
-
-static void test_escape_ellipsis_homoglyphs(void) {
-    EQ(esc(uni(0x2026)), @"\\u2026", "esc U+2026 ellipsis -> \\u2026");
-    EQ(esc(uni(0x22ef)), @"\\u22ef", "esc U+22EF midline ellipsis -> \\u22ef");
-    EQ(esc(uni(0x2024)), @"\\u2024", "esc U+2024 one-dot leader -> \\u2024");
-    EQ(esc(uni(0x2025)), @"\\u2025", "esc U+2025 two-dot leader -> \\u2025");
-    /* three one-dot-leaders read as `…` but are escaped, so cannot mimic it */
-    EQ(esc(([NSString stringWithFormat:@"%@%@%@", uni(0x2024), uni(0x2024), uni(0x2024)])),
-       @"\\u2024\\u2024\\u2024", "esc run of one-dot leaders");
-    /* mixed with text */
-    EQ(esc(([NSString stringWithFormat:@"a%@b", uni(0x2026)])), @"a\\u2026b",
-       "esc ellipsis between letters");
+    /* Just outside the list, and lookalikes: drawn as themselves. */
+    UTF32Char outside[] = { 0x7e, 0xa1, 0xac, 0x34e, 0x2010, 0x2030, 0x205e,
+                            0x2070, 0xfe10, 0xfffc, 0x2026, 0x22ef, 0x2024,
+                            0xe0080, 0xe01f0 };
+    for (size_t i = 0; i < sizeof(outside) / sizeof(outside[0]); i++) {
+        NSString *in = outside[i] > 0xffff ? astral(outside[i]) : uni((unichar)outside[i]);
+        EQ(esc(in), in, "a code point off the hidden list is itself");
+    }
+    EQ(esc(@"..."), @"...", "a run of dots is itself (a lookalike, out of scope)");
 }
 
 static void test_escape_bidi(void) {
     /* Trojan Source (CVE-2021-42574): bidi overrides visually reorder text so
      * the glyphs on the sheet can read as a different command than runs. Every
      * one must be escaped, even inside a single-quoted token. */
-    EQ(esc(uni(0x202A)), @"\\u202a", "esc LRE -> \\u202a");
-    EQ(esc(uni(0x202B)), @"\\u202b", "esc RLE -> \\u202b");
-    EQ(esc(uni(0x202C)), @"\\u202c", "esc PDF -> \\u202c");
-    EQ(esc(uni(0x202D)), @"\\u202d", "esc LRO -> \\u202d");
-    EQ(esc(uni(0x202E)), @"\\u202e", "esc RLO -> \\u202e");
-    EQ(esc(uni(0x2066)), @"\\u2066", "esc LRI -> \\u2066");
-    EQ(esc(uni(0x2067)), @"\\u2067", "esc RLI -> \\u2067");
-    EQ(esc(uni(0x2068)), @"\\u2068", "esc FSI -> \\u2068");
-    EQ(esc(uni(0x2069)), @"\\u2069", "esc PDI -> \\u2069");
-    EQ(esc(uni(0x200E)), @"\\u200e", "esc LRM -> \\u200e");
-    EQ(esc(uni(0x200F)), @"\\u200f", "esc RLM -> \\u200f");
-    EQ(esc(uni(0x061C)), @"\\u061c", "esc ALM -> \\u061c");
+    EQ(esc(uni(0x202A)), U(@"202A"), "esc LRE");
+    EQ(esc(uni(0x202E)), U(@"202E"), "esc RLO");
+    EQ(esc(uni(0x2066)), U(@"2066"), "esc LRI");
+    EQ(esc(uni(0x2069)), U(@"2069"), "esc PDI");
+    EQ(esc(uni(0x200E)), U(@"200E"), "esc LRM");
+    EQ(esc(uni(0x061C)), U(@"61C"), "esc ALM");
     /* the canonical attack token still carries the raw override nowhere */
     NSString *rlo = [NSString stringWithFormat:@"/etc/%@fdp.ssm", uni(0x202E)];
     OK(charcount(esc(rlo), 0x202E) == 0, "no raw RLO survives escaping");
@@ -155,43 +152,28 @@ static void test_escape_bidi(void) {
 }
 
 static void test_escape_zero_width(void) {
-    EQ(esc(uni(0x200B)), @"\\u200b", "esc ZWSP -> \\u200b");
-    EQ(esc(uni(0x200C)), @"\\u200c", "esc ZWNJ -> \\u200c");
-    EQ(esc(uni(0x200D)), @"\\u200d", "esc ZWJ -> \\u200d");
-    EQ(esc(uni(0x2060)), @"\\u2060", "esc WORD JOINER -> \\u2060");
-    EQ(esc(uni(0xFEFF)), @"\\ufeff", "esc ZWNBSP/BOM -> \\ufeff");
-}
-
-static void test_escape_dot_runs(void) {
-    EQ(esc(@"."),    @".",  "single dot passes through");
-    EQ(esc(@".."),   @"..", "two dots (parent dir) pass through");
-    EQ(esc(@"..."),  @"\\u002e\\u002e\\u002e", "three dots all escaped");
-    EQ(esc(@"...."), @"\\u002e\\u002e\\u002e\\u002e", "four dots all escaped");
-    EQ(esc(@"a...b"), @"a\\u002e\\u002e\\u002eb", "interior 3-dot run escaped");
-    EQ(esc(@"a..b"),  @"a..b", "interior 2-dot run passes");
-    EQ(esc(@"a.b.c"), @"a.b.c", "scattered single dots pass");
-    EQ(esc(@".....b"), @"\\u002e\\u002e\\u002e\\u002e\\u002eb", "five-dot run escaped");
-}
-
-static void test_escape_dot_run_transitions(void) {
-    /* Dot-run handling must hand off cleanly to normal escaping for the char
-     * that ends the run. */
-    EQ(esc(([NSString stringWithFormat:@"...%@", uni(0x0a)])),
-       @"\\u002e\\u002e\\u002e\\n", "3-dot run then newline");
-    EQ(esc(([NSString stringWithFormat:@"%@...", uni(0x09)])),
-       @"\\t\\u002e\\u002e\\u002e", "tab then 3-dot run");
-    EQ(esc(@"a...b...c"), @"a\\u002e\\u002e\\u002eb\\u002e\\u002e\\u002ec",
-       "two separate 3-dot runs both escaped");
-    EQ(esc(@"..a.."), @"..a..", "2-dot runs around a letter pass");
+    EQ(esc(uni(0x200B)), U(@"200B"), "esc ZWSP");
+    EQ(esc(uni(0x200C)), U(@"200C"), "esc ZWNJ");
+    EQ(esc(uni(0x200D)), U(@"200D"), "esc ZWJ");
+    EQ(esc(uni(0x2060)), U(@"2060"), "esc WORD JOINER");
+    EQ(esc(uni(0xFEFF)), U(@"FEFF"), "esc ZWNBSP/BOM");
+    /* A variation selector after a character draws nothing but can carry
+     * data, so it shows too, astral ones included. */
+    EQ(esc(([NSString stringWithFormat:@"a%@", uni(0xFE0F)])),
+       ([NSString stringWithFormat:@"a%@", U(@"FE0F")]), "esc VS16 after a letter");
+    EQ(esc(([NSString stringWithFormat:@"a%@", astral(0xE0100)])),
+       ([NSString stringWithFormat:@"a%@", U(@"E0100")]), "esc VS17 after a letter");
 }
 
 static void test_escape_lone_surrogate(void) {
-    /* A lone (unpaired) surrogate is invalid Unicode; the formatter passes it
-     * through (renders as a replacement glyph downstream). Documenting the
-     * behavior: it must not crash or be mistaken for an escape. */
-    NSString *hi = uni(0xD800), *lo = uni(0xDC00);
-    EQ(esc(hi), hi, "lone high surrogate passes through");
-    EQ(esc(lo), lo, "lone low surrogate passes through");
+    /* A lone (unpaired) surrogate is not text: drawn raw it would become a
+     * replacement glyph that hides which unit was there, so it shows as its
+     * escape. It must not crash, and it never pairs with its neighbours. */
+    EQ(esc(uni(0xD800)), U(@"D800"), "lone high surrogate is escaped");
+    EQ(esc(uni(0xDC00)), U(@"DC00"), "lone low surrogate is escaped");
+    EQ(esc(([NSString stringWithFormat:@"%@a", uni(0xD83D)])),
+       ([NSString stringWithFormat:@"%@a", U(@"D83D")]),
+       "a high surrogate before a letter stays lone");
 }
 
 static void test_escape_passthrough(void) {
@@ -236,14 +218,15 @@ static void test_quote_embedded_single_quote(void) {
 }
 
 static void test_quote_control_chars_get_quoted(void) {
-    /* A control char escapes to a backslash sequence; backslash is unsafe,
+    /* A hidden character escapes to a backslash sequence; backslash is unsafe,
      * so the token gets single-quoted with the escape shown literally. */
-    EQ(q(uni(0x09)),  @"'\\t'",  "tab token -> '\\t'");
-    EQ(q(uni(0x0a)),  @"'\\n'",  "newline token -> '\\n'");
-    EQ(q(uni(0x07)),  @"'\\x07'","bell token -> '\\x07'");
-    EQ(q(@"\\"),      @"'\\\\'", "backslash token -> '\\\\'");
-    EQ(q(([NSString stringWithFormat:@"a%@b", uni(0x0a)])), @"'a\\nb'",
-       "newline inside word -> 'a\\nb' (no real break)");
+    EQ(q(uni(0x09)), ([NSString stringWithFormat:@"'%@'", U(@"9")]), "tab token");
+    EQ(q(uni(0x0a)), ([NSString stringWithFormat:@"'%@'", U(@"A")]), "line feed token");
+    EQ(q(uni(0x07)), ([NSString stringWithFormat:@"'%@'", U(@"7")]), "bell token");
+    EQ(q(@"\\"),     @"'\\'", "a backslash token is quoted, the backslash itself");
+    EQ(q(([NSString stringWithFormat:@"a%@b", uni(0x0a)])),
+       ([NSString stringWithFormat:@"'a%@b'", U(@"A")]),
+       "line feed inside a word (no real break)");
 }
 
 /* ---- formatWith: layout, dedup, caps, all-or-nothing overflow, budget ---- */
@@ -387,7 +370,8 @@ static void test_format_antiinjection_newline_count(void) {
     NSString *out3 = fmt(@"/bin/echo", @"root", nil, @"AB12",
                          @[@"echo", evil3], SWPromptStyleSystemSheet);
     OK(nlcount(out3) == 10, "argv cannot forge an extra labelled field");
-    OK([out3 containsString:@"EXECUTE\\n/bin/sh"], "the label text itself is not censored");
+    OK([out3 containsString:([NSString stringWithFormat:@"EXECUTE%@/bin/sh", U(@"A")])],
+       "the label text itself is not censored");
     /* the real label is the only one preceded by a blank line: exactly one
      * "\n\nEXECUTE\n" occurs, no matter what the argv spells. */
     NSUInteger realLabels = 0;
@@ -401,15 +385,16 @@ static void test_format_antiinjection_newline_count(void) {
     OK(realLabels == 1, "exactly one blank-line-anchored EXECUTE label");
 }
 
-static void test_format_ellipsis_in_arg_escaped(void) {
-    /* No part of the prompt uses a bare U+2026 any more (all-or-nothing dropped
-     * the ellipsis marker), so an argv token's real U+2026 must render as
-     * … text and leave ZERO bare ellipses in the output. */
+static void test_format_ellipsis_in_arg_drawn(void) {
+    /* No part of the prompt uses U+2026 as a marker (all-or-nothing dropped
+     * the ellipsis marker for "(see terminal)"), so an argv token's real
+     * U+2026 is a lookalike with nothing to impersonate: drawn as itself, and
+     * the only ellipsis in the prompt is the argument's own. */
     NSString *arg = [NSString stringWithFormat:@"x%@y", uni(0x2026)];
     NSString *out = fmt(@"/bin/echo", @"root", nil, @"AB12",
                         @[@"echo", arg], SWPromptStyleSystemSheet);
-    OK([out containsString:@"x\\u2026y"], "arg ellipsis shown as \\u2026 text");
-    OK(charcount(out, 0x2026) == 0, "no bare ellipsis anywhere in the prompt");
+    OK([out containsString:arg], "arg ellipsis drawn as itself");
+    OK(charcount(out, 0x2026) == 1, "the argument's ellipsis is the only one");
 }
 
 static void test_format_length_invariant(void) {
@@ -496,8 +481,8 @@ static void test_fullcmd_escapes_controls(void) {
      * inject no real control byte (no cursor moves, no ANSI). */
     NSString *evil = [NSString stringWithFormat:@"a%@b%@c", uni(0x0a), uni(0x1b)];
     NSString *out = fullcmd(@"/bin/echo", @[@"echo", evil]);
-    OK([out containsString:@"\\n"],   "newline in arg rendered as \\n text");
-    OK([out containsString:@"\\x1b"], "ESC in arg rendered as \\x1b text");
+    OK([out containsString:U(@"A")],  "line feed in arg rendered as escape text");
+    OK([out containsString:U(@"1B")], "ESC in arg rendered as escape text");
     OK(charcount(out, 0x0a) == 0, "no real newline byte in the full command");
     OK(charcount(out, 0x1b) == 0, "no real ESC byte in the full command");
 }
@@ -536,75 +521,13 @@ static void test_wastruncated_flag(void) {
     OK(out2 != nil, "overflow:NULL is tolerated");
 }
 
-/* ---- colorizeEscaped: (terminal echo emphasis) ---- */
-
-static void test_color_roundtrip(void) {
-    /* The security-load-bearing invariant: stripping the SGR must yield the
-     * exact escaped input back, for every category, so colour can never alter
-     * the bytes shown — only what is emphasised. */
-    NSString *inputs[] = {
-        @"/usr/bin/git status",
-        esc(@"a\nb\tc"),                 /* control escapes */
-        esc(uni(0x202E)),                /* ‮ bidi override */
-        q(@"a b"),                       /* quoted token: 'a b' */
-        q(@"weird\"`$"),                 /* metachars inside a quoted token */
-        @"  lead and  double  ",         /* leading / double / trailing runs */
-        esc(@"back\\slash"),             /* literal backslash -> \\ */
-        q(@"it's"),                      /* the '\'' quote idiom */
-    };
-    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
-        EQ(strip_sgr(color(inputs[i])), inputs[i], "colorize round-trips to input");
-    }
-}
-
-static void test_color_categories(void) {
-    /* Deceptive Unicode escape \uNNNN -> red (1;31). */
-    OK([color(esc(uni(0x200B))) containsString:@"\033[1;31m\\u200b\033[0m"],
-       "\\uNNNN wrapped red");
-    /* Control-byte escapes -> magenta (1;35). */
-    OK([color(esc(@"\n")) containsString:@"\033[1;35m\\n\033[0m"],
-       "\\n wrapped magenta");
-    OK([color(esc(uni(0x01))) containsString:@"\033[1;35m\\x01\033[0m"],
-       "\\xNN wrapped magenta");
-    /* Shell metacharacters -> cyan (1;36). */
-    EQ(color(@"'"), @"\033[1;36m'\033[0m", "single quote wrapped cyan");
-    EQ(color(@"`"), @"\033[1;36m`\033[0m", "backtick wrapped cyan");
-    EQ(color(@"\""), @"\033[1;36m\"\033[0m", "double quote wrapped cyan");
-    /* Escaped literal backslash \\ -> cyan, consumed as ONE unit so its second
-     * '\' is not re-read as the start of a new escape. */
-    EQ(color(esc(@"\\")), @"\033[1;36m\\\\\033[0m", "\\\\ wrapped cyan as one unit");
-    /* The '\'' idiom's lone backslash renders plain; round-trip proves it. */
-    EQ(strip_sgr(color(q(@"it's"))), q(@"it's"), "quote idiom round-trips");
-}
-
-static void test_color_whitespace(void) {
-    /* Single interior space stays plain, so ordinary commands are unmarked. */
-    EQ(color(@"a b"), @"a b", "single interior space is not underlined");
-    /* A run of 2+ spaces is highlighted (grey background). */
-    OK([color(@"a  b") containsString:@"\033[100m  \033[0m"], "double space highlighted");
-    /* Leading and trailing single spaces are the invisible-padding cases. */
-    OK([color(@" x") hasPrefix:@"\033[100m \033[0m"], "leading space highlighted");
-    OK([color(@"x ") hasSuffix:@"\033[100m \033[0m"], "trailing space highlighted");
-}
-
-static void test_color_nil_empty_clean(void) {
-    OK(color(nil) == nil, "nil passes through");
-    EQ(color(@""), @"", "empty passes through");
-    /* No anomalies, only single-space separators -> byte-identical (no SGR). */
-    EQ(color(@"/usr/bin/git status"), @"/usr/bin/git status", "clean command unchanged");
-}
-
 int main(void) {
     @autoreleasepool {
-        test_escape_named();
-        test_escape_antispoof_backslash();
-        test_escape_hex_c0_del();
-        test_escape_c1_and_separators();
-        test_escape_ellipsis_homoglyphs();
+        test_escape_form();
+        test_escape_backslash();
+        test_escape_hidden_list();
         test_escape_bidi();
         test_escape_zero_width();
-        test_escape_dot_runs();
-        test_escape_dot_run_transitions();
         test_escape_lone_surrogate();
         test_escape_passthrough();
 
@@ -624,7 +547,7 @@ int main(void) {
         test_format_path_overflow();
         test_format_command_overflow();
         test_format_antiinjection_newline_count();
-        test_format_ellipsis_in_arg_escaped();
+        test_format_ellipsis_in_arg_drawn();
         test_format_length_invariant();
         test_format_no_marker_when_it_fits();
         test_format_surrogate_boundary();
@@ -634,11 +557,6 @@ int main(void) {
         test_fullcmd_escapes_controls();
         test_fullcmd_untruncated();
         test_wastruncated_flag();
-
-        test_color_roundtrip();
-        test_color_categories();
-        test_color_whitespace();
-        test_color_nil_empty_clean();
 
         SW_SUMMARY("PromptFormatter");
     }

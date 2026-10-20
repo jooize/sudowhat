@@ -174,24 +174,25 @@ in {
         - `on` (the default) highlights `execute:` by role — the first
           segment of the program's directory in bold cyan and the rest plain,
           its basename bold blue, option flags bold blue, every other token
-          plain — and wraps anomaly spans in
-          a fixed, reviewed palette on top:
-          deceptive Unicode escapes (`\uNNNN` — bidi, zero-width, homoglyphs)
-          in red, control-byte escapes (`\n \r \t \0 \xNN`) in magenta, shell
-          metacharacters (`'` `"` `` ` `` and the escaped backslash) in cyan,
-          and notable whitespace runs (leading, trailing, or doubled spaces)
-          shown on a grey background IN THE PROGRAM TOKEN ONLY -- the path that
-          will execve, where invisible padding changes what runs. Argument
-          tokens do not take that mark: a script passed as one argument would
-          turn every escaped newline's indentation into a grey block, and those
-          bytes render escaped and quoted either way.
+          plain — and lays a fixed, reviewed set of marks on top: the escape
+          of a hidden character (`\u{HEX}`: a control, a bidi control, a
+          zero-width or other invisible character) in reverse red, the style
+          reserved for it; the data's own shell metacharacters (a `'` the
+          argument holds, `"`, `` ` ``) in bold cyan; and notable whitespace
+          runs (leading, trailing, or doubled spaces) on a grey background IN
+          THE PROGRAM TOKEN ONLY -- the path that will execve, where invisible
+          padding changes what runs. Argument tokens do not take that mark: a
+          script passed as one argument would turn every escaped line feed's
+          indentation into a grey block, and those bytes render escaped and
+          quoted either way. Other escapes (an invalid byte `\xHH`, a
+          backslash escaped as its own `\u{5C}`) carry no style of their own.
 
-          The `input:` value takes the same anomaly palette over a QUIET base:
-          its routine tokens — program directory, flags and values alike —
-          render dim and the program's basename bold dim, so the
-          pre-resolution line reads under the resolved one and an anomaly
-          span is the only coloured thing on that row. `input:` quiet,
-          `execute:` loud, anomalies at full strength on both. Both lines come
+          The `input:` value takes the same marks over a QUIET base: its
+          routine tokens — program directory, flags and values alike — render
+          dim and the program's basename bold dim, so the pre-resolution line
+          reads under the resolved one and a mark is the only coloured thing
+          on that row. `input:` quiet, `execute:` loud, marks at full strength
+          on both. Both lines come
           out of one shared walk over one token list — the weights are two base
           palettes, not two renderers — so they can never disagree on a token.
 

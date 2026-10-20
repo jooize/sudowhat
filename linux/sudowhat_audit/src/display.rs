@@ -9,8 +9,9 @@
 //!
 //! The escaping/quoting is delegated to `escape_core` — the same crate the macOS
 //! plugin links as a staticlib — so the output is byte-for-byte identical on both
-//! platforms, and the anti-spoofing guarantees (control/bidi/zero-width/homoglyph
-//! neutralised, literal `\` doubled) are inherited, not re-implemented here.
+//! platforms, and the anti-spoofing guarantees (every hidden character shown as
+//! its escape, a backslash escaped only where it would begin one) are
+//! inherited, not re-implemented here.
 //!
 //! Everything in this file is pure (no I/O, no FFI, no unsafe): lib.rs converts
 //! the raw C string arrays into Rust slices and hands them here, and tty.rs does
@@ -63,9 +64,9 @@ pub fn color_allowed(envp: &[&str]) -> bool {
     }
 }
 
-/// Escape a single value through the shared core (control/homoglyph/bidi/
-/// zero-width → visible ASCII escapes). Used for the user and directory lines,
-/// which are not shell tokens.
+/// Escape a single value through the shared core (every hidden character →
+/// its visible escape). Used for the user and directory lines, which are not
+/// shell tokens.
 fn escape(s: &str) -> String {
     let mut out = String::new();
     escape_core::escape_control(s, &mut out);
@@ -231,10 +232,20 @@ mod tests {
         );
     }
 
+    // Hidden characters and expected escapes are built in code, never typed as
+    // a literal escape: `ch(0x202E)` is the character itself, `esc_of("202E")`
+    // the escape the display shows for it.
+    fn ch(u: u32) -> String {
+        char::from_u32(u).expect("a scalar value").to_string()
+    }
+    fn esc_of(hex: &str) -> String {
+        format!("{}u{{{}}}", '\\', hex)
+    }
+
     #[test]
     fn control_char_is_escaped_literally() {
-        // a real newline in an argument must render as the two chars \n, never a
-        // raw byte that could inject terminal output.
+        // a real line feed in an argument renders as its escape, never a raw
+        // byte that could inject terminal output.
         let b = build_block(
             &[],
             &["uid=1000", "cwd=/x"],
@@ -244,7 +255,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             b,
-            "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo 'a\\nb'\n"
+            format!(
+                "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo 'a{}b'\n",
+                esc_of("A")
+            )
         );
         // exactly one real newline per display line, and only at the ends
         assert_eq!(b.matches('\n').count(), 3);
@@ -252,36 +266,37 @@ mod tests {
 
     #[test]
     fn unicode_bidi_spoof_is_escaped() {
-        // U+202E RIGHT-TO-LEFT OVERRIDE (Trojan Source) is neutralised to the
-        // visible ASCII escape backslash-u-2-0-2-e.
+        // U+202E RIGHT-TO-LEFT OVERRIDE (Trojan Source) shows as its escape.
+        let evil = format!("{}evil", ch(0x202E));
         let b = build_block(
             &[],
             &["uid=1000", "cwd=/x"],
-            &["/bin/echo", "\u{202e}evil"],
+            &["/bin/echo", &evil],
             false,
         )
         .unwrap();
         assert_eq!(
             b,
-            "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo '\\u202eevil'\n"
+            format!(
+                "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: /bin/echo '{}evil'\n",
+                esc_of("202E")
+            )
         );
-        // no raw bidi override byte survives into the output
-        assert!(!b.contains('\u{202e}'));
+        // no raw bidi override survives into the output
+        assert!(!b.contains(&ch(0x202E)));
     }
 
     #[test]
     fn spoofed_directory_is_escaped() {
-        // a homoglyph ellipsis in the cwd is neutralised on the directory line.
-        let b = build_block(
-            &[],
-            &["uid=1000", "cwd=/home/\u{2026}"],
-            &["/bin/id"],
-            false,
-        )
-        .unwrap();
+        // a zero-width space in the cwd shows on the directory line.
+        let cwd = format!("cwd=/home/a{}b", ch(0x200B));
+        let b = build_block(&[], &["uid=1000", &cwd], &["/bin/id"], false).unwrap();
         assert_eq!(
             b,
-            "sudowhat: run as: root\nsudowhat: directory: /home/\\u2026\nsudowhat: input: /bin/id\n"
+            format!(
+                "sudowhat: run as: root\nsudowhat: directory: /home/a{}b\nsudowhat: input: /bin/id\n",
+                esc_of("200B")
+            )
         );
     }
 

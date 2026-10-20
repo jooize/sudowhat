@@ -3,9 +3,10 @@
  *
  * Hand-written (no cbindgen) so the header is reviewed and the build stays
  * deterministic. Must stay in sync with the #[no_mangle] signatures in
- * src/lib.rs. The audit bundle (plugin/sudowhat_audit.m) is the only in-tree
- * caller; tests/test_escape_core.m links the same functions to assert they
- * escape byte-for-byte identically to the ObjC SudoWhatPromptFormatter.
+ * src/lib.rs. Both bundles (plugin/sudowhat_audit.m, plugin/sudowhat_approval.m)
+ * link it; tests/test_escape_core.m links the same functions to assert they
+ * escape byte-for-byte identically to the ObjC SudoWhatPromptFormatter on
+ * valid UTF-8.
  *
  * Buffer contract (every function below):
  *   - *needed is ALWAYS set to the full output length in bytes (excluding the
@@ -16,8 +17,12 @@
  *     caller may allocate *needed + 1 bytes and call again.
  *   Probe for the size by calling once with out=NULL, out_cap=0.
  *
- * Invalid UTF-8 in the input is replaced with U+FFFD, never rejected: a display
- * path degrades to a visible replacement glyph rather than hiding the command.
+ * Input is raw bytes, never rejected. The escape rules are the house
+ * untrusted-text rules: a hidden-list code point shows as \u{HEX} (uppercase,
+ * no leading zeros), a byte that is not valid UTF-8 as \xHH after every valid
+ * sequence has decoded, and a literal backslash only where it would begin an
+ * escape (before u{, or before x and a hex digit) as its own \u{5C}. Every
+ * other character is drawn as itself.
  */
 
 #ifndef SUDOWHAT_ESCAPE_CORE_H
@@ -33,8 +38,7 @@ extern "C" {
 #define SW_ESCAPE_OK        0
 #define SW_ESCAPE_TRUNCATED 1
 
-/* Escape control / homoglyph / bidi / zero-width characters to visible \xNN /
- * \uNNNN text. */
+/* Escape one value by the rules above. Unstyled. */
 int sw_escape_control(const uint8_t *input, size_t input_len,
                       uint8_t *out, size_t out_cap, size_t *needed);
 
@@ -53,9 +57,10 @@ int sw_full_command_line(const uint8_t *path, size_t path_len,
 /* The same line as sw_full_command_line, with SGR colour layered on by role:
  * the first segment of the program's directory bold cyan, the rest of the
  * directory plain, its basename bold blue, option flags bold blue, every other
- * token plain, the quotes the renderer itself added dim, and anomalous spans
- * (deceptive Unicode, control-byte escapes, shell metacharacters, notable
- * whitespace runs) in the fixed anomaly palette on top. The flag mark is openly
+ * token plain, the quotes the renderer itself added dim, and the marked spans
+ * on top: each hidden code point's escape in reverse red, the data's shell
+ * metacharacters bold cyan, notable whitespace runs in the program token on a
+ * grey background. Kept escapes take their token's base. The flag mark is openly
  * lexical (a rendered token starting with '-'), so it colours every flag alike
  * rather than guessing which one matters, and a token that needed quoting
  * renders '...' and never borrows the look. Still ONE logical line - nothing is
@@ -75,13 +80,13 @@ int sw_full_command_line_colored(const uint8_t *path, size_t path_len,
 
 /* The same line again, rendered by the same walk with a flat dim base: every
  * routine token - program dirname, flags, values - takes dim instead of its
- * role colour, the program basename takes bold dim, and the anomaly spans keep
- * the full-strength palette above. Identical parameters and buffer contract,
+ * role colour, the program basename takes bold dim, and the marked spans keep
+ * full strength as above. Identical parameters and buffer contract,
  * and the same round-trip invariant: strip the SGR and the bytes are
  * sw_full_command_line's.
  *
  * The audit plugin's input: line uses this one, so the pre-resolution line
- * reads quiet under the resolved execute: line and its anomaly spans pop
+ * reads quiet under the resolved execute: line and its marked spans pop
  * harder against the dim base. The caller MUST fall back to
  * sw_full_command_line on anything but SW_ESCAPE_OK, exactly as above. */
 int sw_full_command_line_colored_dim(const uint8_t *path, size_t path_len,
