@@ -367,8 +367,8 @@ static int format_verify_line(char *buf, size_t bufsz, const char *code,
  * is cosmetic, so reading it from the (spoofable) captured submit_envp is safe:
  * the most an attacker gains by lying is the wrong emphasis, never a security
  * effect — the trust anchor is the code matching the Touch ID sheet, which is
- * system-rendered and cannot be colored. Off when NO_COLOR is present at any
- * value (no-color.org) or TERM is absent/empty/"dumb". The authoritative gate
+ * system-rendered and cannot be colored. Off when NO_COLOR is set to a
+ * non-empty value (no-color.org) or TERM is absent/empty/"dumb". The authoritative gate
  * is isatty() at the write site, so a redirect or the stderr fallback always
  * stays plain. */
 static BOOL sw_color_allowed(void) {
@@ -1522,12 +1522,12 @@ static int sudowhat_open(unsigned int version,
         snprintf(g_inv.term, sizeof(g_inv.term), "%s", term);
         g_inv.have_term = 1;
     }
-    /* NO_COLOR (no-color.org): present at ANY value — including empty — means
+    /* NO_COLOR (no-color.org): present and not empty, at any value, means
      * the user opted out of ANSI emphasis on the verify-code tty echo. Same
      * spoofable env class as TERM above; only the echo's color depends on it.
-     * find_kv returns non-NULL for "NO_COLOR=" (empty value), so presence — not
-     * truthiness — is the test, exactly as the standard specifies. */
-    g_inv.no_color = (find_kv(submit_envp, "NO_COLOR") != NULL);
+     * find_kv returns "" for "NO_COLOR=", which the standard counts as unset. */
+    const char *noColor = find_kv(submit_envp, "NO_COLOR");
+    g_inv.no_color = (noColor != NULL && noColor[0] != '\0');
     return 1;
 }
 

@@ -279,7 +279,7 @@ static void test_verify_line_format_and_color(void) {
     OK(sw_color_allowed(), "color allowed for a normal TERM with NO_COLOR unset");
 
     g_inv.no_color = 1;
-    OK(!sw_color_allowed(), "NO_COLOR (any value) disables color");
+    OK(!sw_color_allowed(), "a non-empty NO_COLOR disables color");
 
     g_inv = (sw_invoking_ctx){ .have_term = 1 };
     snprintf(g_inv.term, sizeof g_inv.term, "%s", "dumb");

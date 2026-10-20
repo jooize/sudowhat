@@ -58,12 +58,12 @@ pub fn parse_uid(s: &[u8]) -> u64 {
 }
 
 /// Whether ANSI emphasis is permitted for the display, mirroring the macOS
-/// `sw_audit_color_allowed`: off when `NO_COLOR` is present at any value
-/// (no-color.org) or `TERM` is absent / empty / "dumb". Cosmetic only — the
-/// authoritative final gate is the `isatty()` check in tty.rs, so a redirect or
-/// a non-tty always renders plain regardless of this.
+/// `sw_audit_color_allowed`: off when `NO_COLOR` is set to a non-empty value
+/// (no-color.org: an empty value counts as unset) or `TERM` is absent / empty /
+/// "dumb". Cosmetic only — the authoritative final gate is the `isatty()` check
+/// in tty.rs, so a redirect or a non-tty always renders plain regardless of this.
 pub fn color_allowed(envp: &[&[u8]]) -> bool {
-    if find_kv(envp, "NO_COLOR").is_some() {
+    if find_kv(envp, "NO_COLOR").is_some_and(|v| !v.is_empty()) {
         return false;
     }
     match find_kv(envp, "TERM") {
@@ -190,8 +190,8 @@ mod tests {
         assert!(!color_allowed(&b(&["TERM=dumb"])));
         assert!(!color_allowed(&b(&["TERM="])));
         assert!(!color_allowed(&[])); // no TERM at all
-        assert!(!color_allowed(&b(&["NO_COLOR=", "TERM=xterm"]))); // NO_COLOR wins
-        assert!(!color_allowed(&b(&["NO_COLOR=1", "TERM=xterm"])));
+        assert!(color_allowed(&b(&["NO_COLOR=", "TERM=xterm"]))); // empty = unset
+        assert!(!color_allowed(&b(&["NO_COLOR=1", "TERM=xterm"]))); // NO_COLOR wins
     }
 
     #[test]

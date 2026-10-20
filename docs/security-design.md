@@ -391,7 +391,7 @@ terminal (bold rather than a color, so it survives any terminal theme), but
 this is emphasis only, never a trust cue: any process that can write the
 terminal can forge the same bytes, so the anchor stays the code matching the
 dialog (which is system-rendered and cannot be colored). Set `NO_COLOR` (any
-value, per [no-color.org](https://no-color.org)) or run with an unset or `dumb`
+non-empty value, per [no-color.org](https://no-color.org)) or run with an unset or `dumb`
 `TERM` to disable it; the echo is always plain when the destination is not a
 real terminal.
 

@@ -66,7 +66,7 @@ static void test_color_allowed(void) {
     OK(sw_audit_color_allowed(normal), "color allowed for a normal TERM");
 
     char *noColor[] = { (char *)"NO_COLOR=", (char *)"TERM=xterm-256color", NULL };
-    OK(!sw_audit_color_allowed(noColor), "NO_COLOR at any value disables color");
+    OK(sw_audit_color_allowed(noColor), "an empty NO_COLOR counts as unset");
 
     char *noColor1[] = { (char *)"NO_COLOR=1", (char *)"TERM=xterm", NULL };
     OK(!sw_audit_color_allowed(noColor1), "NO_COLOR=1 disables color");

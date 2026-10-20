@@ -329,11 +329,13 @@ static void sw_audit_write_tty(const char *ttyPath, NSString *block) {
  * so reading the (spoofable) captured submit_envp is safe: the worst a liar
  * gains is the wrong emphasis, never a security effect (the trust anchor is the
  * verify code matching the system-rendered sheet, which cannot be coloured).
- * Off when NO_COLOR is present at any value (no-color.org) or TERM is
- * absent/empty/"dumb". isatty() in sw_audit_write_tty is the authoritative
- * final gate, so a redirect or non-tty always renders plain regardless. */
+ * Off when NO_COLOR is set to a non-empty value (no-color.org: empty counts
+ * as unset) or TERM is absent/empty/"dumb". isatty() in sw_audit_write_tty is
+ * the authoritative final gate, so a redirect or non-tty always renders plain
+ * regardless. */
 static BOOL sw_audit_color_allowed(char * const envp[]) {
-    if (find_kv(envp, "NO_COLOR") != NULL) return NO;
+    const char *noColor = find_kv(envp, "NO_COLOR");
+    if (noColor != NULL && noColor[0] != '\0') return NO;
     const char *term = find_kv(envp, "TERM");
     if (term == NULL || term[0] == '\0') return NO;
     if (strcmp(term, "dumb") == 0) return NO;
