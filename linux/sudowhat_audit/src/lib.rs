@@ -23,14 +23,15 @@
 //! tamper-evidence (docs/design-terminal-mode.md). This plugin is display =
 //! disclosure, never authentication: if it is absent or misconfigured it simply
 //! shows nothing and can never weaken auth. Accordingly it FAILS SOFT — any
-//! problem (no tty, no command, bad UTF-8) means "show nothing", and open()
-//! always returns 1 (loaded), never -1 (a display convenience must not DoS sudo).
+//! problem (no tty, no command) means "show nothing", and open() always returns
+//! 1 (loaded), never -1 (a display convenience must not DoS sudo). Bytes that
+//! are not valid UTF-8 are not a problem: they are shown, escaped as `\xHH`.
 //!
 //! ## Structure
 //!
 //! This file is the thin FFI shell: it vendors the `struct audit_plugin` layout
-//! (plugin/sudo_plugin.h), converts sudo's raw `char * const[]` context arrays
-//! into Rust, and delegates. The interesting logic is pure and host-testable in
+//! (plugin/sudo_plugin.h), reads sudo's raw `char * const[]` context arrays as
+//! byte slices, and delegates. The interesting logic is pure and host-testable in
 //! `display.rs` (assemble the block, byte-for-byte identical to the macOS plugin,
 //! via escape_core); the /dev/tty write lives in `tty.rs`.
 
@@ -153,14 +154,17 @@ pub struct AuditPlugin {
 
 // --- context-array helpers ---------------------------------------------------
 
-/// Convert a raw NUL-terminated `char * const[]` (starting at `start`) into owned
-/// lossy-UTF-8 Strings. A null array, or `start < 0`, yields an empty vec.
-/// Invalid UTF-8 degrades to U+FFFD here, before escape_core sees it (its byte
-/// API would show each failing byte as an escape instead), never a panic.
+/// Read a raw NUL-terminated `char * const[]` (starting at `start`) as the byte
+/// slices of its C strings, unchanged. A null array, or `start < 0`, yields an
+/// empty vec. No decoding happens here: escape_core renders the bytes, showing
+/// each one that is not valid UTF-8 as `\xHH`, the same as the macOS plugins,
+/// where a lossy decode would have turned it into U+FFFD and hidden which byte
+/// was there.
 ///
 /// # Safety
-/// `arr` must be null or a valid NUL-terminated array of valid C strings.
-unsafe fn collect(arr: *const *const c_char, start: c_int) -> Vec<String> {
+/// `arr` must be null or a valid NUL-terminated array of valid C strings that
+/// outlive `'a` (sudo's arrays, valid for the whole open() call).
+unsafe fn collect<'a>(arr: *const *const c_char, start: c_int) -> Vec<&'a [u8]> {
     let mut v = Vec::new();
     if arr.is_null() || start < 0 {
         return v;
@@ -173,9 +177,9 @@ unsafe fn collect(arr: *const *const c_char, start: c_int) -> Vec<String> {
         if p.is_null() {
             break;
         }
-        // SAFETY: p is a valid C string per the caller's guarantee.
-        let bytes = unsafe { CStr::from_ptr(p) }.to_bytes();
-        v.push(String::from_utf8_lossy(bytes).into_owned());
+        // SAFETY: p is a valid C string that outlives 'a, per the caller's
+        // guarantee.
+        v.push(unsafe { CStr::from_ptr(p) }.to_bytes());
         i += 1;
     }
     v
@@ -210,8 +214,7 @@ unsafe extern "C" fn sudowhat_audit_open(
     }
 
     // SAFETY: sudo passes NUL-terminated arrays of C strings for these.
-    let user_info_v = unsafe { collect(user_info, 0) };
-    let user_info_r: Vec<&str> = user_info_v.iter().map(String::as_str).collect();
+    let user_info_r = unsafe { collect(user_info, 0) };
 
     // Root exemption, matching the macOS plugin: a uid-0 caller is not
     // escalating, and root contexts generally have no controlling tty anyway.
@@ -226,19 +229,16 @@ unsafe extern "C" fn sudowhat_audit_open(
     }
 
     // SAFETY: as above.
-    let settings_v = unsafe { collect(settings, 0) };
-    let settings_r: Vec<&str> = settings_v.iter().map(String::as_str).collect();
+    let settings_r = unsafe { collect(settings, 0) };
 
     // The command as typed: submit_argv[submit_optind..].
     // SAFETY: as above; collect() honours submit_optind and the array's NUL.
-    let argv_v = unsafe { collect(submit_argv, submit_optind) };
-    let argv_r: Vec<&str> = argv_v.iter().map(String::as_str).collect();
+    let argv_r = unsafe { collect(submit_argv, submit_optind) };
 
     // Colour is cosmetic; reading the (spoofable) envp is safe — the worst a
     // liar gains is the wrong emphasis. tty.rs's isatty() is the final gate.
     // SAFETY: as above.
-    let envp_v = unsafe { collect(submit_envp, 0) };
-    let envp_r: Vec<&str> = envp_v.iter().map(String::as_str).collect();
+    let envp_r = unsafe { collect(submit_envp, 0) };
     let color = display::color_allowed(&envp_r);
 
     if let Some(block) = display::build_block(&settings_r, &user_info_r, &argv_r, color) {
