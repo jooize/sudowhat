@@ -1407,4 +1407,115 @@ mod tests {
         assert_eq!(rc, SW_ESCAPE_OK);
         assert_eq!(&buf[..got], b"\x1b[2m/bin/\x1b[0m\x1b[1;2mecho\x1b[0m");
     }
+
+    #[test]
+    fn ffi_colored_two_call_sizing() {
+        let path = b"/bin/echo";
+        let a0 = b"echo";
+        let argv: [*const u8; 1] = [a0.as_ptr()];
+        let lens: [usize; 1] = [a0.len()];
+
+        let mut needed = 0usize;
+        let rc = sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            std::ptr::null_mut(), 0, &mut needed,
+        );
+        assert_eq!(rc, SW_ESCAPE_TRUNCATED);
+
+        let mut buf = vec![0u8; needed + 1];
+        let mut got = 0usize;
+        let rc = sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            buf.as_mut_ptr(), buf.len(), &mut got,
+        );
+        assert_eq!(rc, SW_ESCAPE_OK);
+        assert_eq!(buf[got], 0);
+        assert_eq!(&buf[..got], b"\x1b[1;36m/bin\x1b[0m/\x1b[1;34mecho\x1b[0m");
+    }
+
+    #[test]
+    fn ffi_colored_null_argv_and_invalid_utf8() {
+        // null argv -> path-only line, no panic.
+        let path = b"/bin/ls";
+        let mut needed = 0usize;
+        sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            std::ptr::null(), std::ptr::null(), 3,
+            std::ptr::null_mut(), 0, &mut needed,
+        );
+        let mut buf = vec![0u8; needed + 1];
+        let mut got = 0usize;
+        let rc = sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            std::ptr::null(), std::ptr::null(), 3,
+            buf.as_mut_ptr(), buf.len(), &mut got,
+        );
+        assert_eq!(rc, SW_ESCAPE_OK);
+        assert_eq!(&buf[..got], b"\x1b[1;36m/bin\x1b[0m/\x1b[1;34mls\x1b[0m");
+
+        // An invalid UTF-8 byte in a token shows as its kept escape, never a
+        // panic, and the coloured line still strips back to the plain one.
+        let bad = [b'a', 0xFF, b'b'];
+        let argv: [*const u8; 1] = [bad.as_ptr()];
+        let lens: [usize; 1] = [bad.len()];
+        let mut needed = 0usize;
+        sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            std::ptr::null_mut(), 0, &mut needed,
+        );
+        let mut buf = vec![0u8; needed + 1];
+        let mut got = 0usize;
+        let rc = sw_full_command_line_colored(
+            path.as_ptr(), path.len(),
+            argv.as_ptr(), lens.as_ptr(), 1,
+            buf.as_mut_ptr(), buf.len(), &mut got,
+        );
+        assert_eq!(rc, SW_ESCAPE_OK);
+        let s = std::str::from_utf8(&buf[..got]).unwrap();
+        let mut plain = String::new();
+        full_command_line_bytes(path, &[&bad], &mut plain);
+        assert_eq!(strip_sgr(s), plain);
+        assert_eq!(plain, format!("/bin/ls 'a{}xFFb'", '\\'));
+    }
+
+    #[test]
+    fn ffi_colored_matches_plain_after_stripping() {
+        // The FFI trio, not just the Rust functions: the entry points the
+        // plugins pick between must agree byte for byte modulo SGR.
+        let path = b"/usr/bin/git";
+        let toks: [&[u8]; 3] = [b"git", b"commit", b"--amend"];
+        let argv: Vec<*const u8> = toks.iter().map(|t| t.as_ptr()).collect();
+        let lens: Vec<usize> = toks.iter().map(|t| t.len()).collect();
+
+        let render = |f: unsafe extern "C" fn(
+            *const u8, usize, *const *const u8, *const usize, usize,
+            *mut u8, usize, *mut usize,
+        ) -> c_int| {
+            let mut needed = 0usize;
+            unsafe {
+                f(path.as_ptr(), path.len(), argv.as_ptr(), lens.as_ptr(), toks.len(),
+                  std::ptr::null_mut(), 0, &mut needed);
+            }
+            let mut buf = vec![0u8; needed + 1];
+            let mut got = 0usize;
+            let rc = unsafe {
+                f(path.as_ptr(), path.len(), argv.as_ptr(), lens.as_ptr(), toks.len(),
+                  buf.as_mut_ptr(), buf.len(), &mut got)
+            };
+            assert_eq!(rc, SW_ESCAPE_OK);
+            String::from_utf8(buf[..got].to_vec()).unwrap()
+        };
+
+        let plain = render(sw_full_command_line);
+        let color = render(sw_full_command_line_colored);
+        let dim = render(sw_full_command_line_colored_dim);
+        assert_eq!(strip_sgr(&color), plain);
+        assert_ne!(color, plain);
+        assert_eq!(strip_sgr(&dim), plain);
+        assert_ne!(dim, plain);
+        assert_ne!(dim, color);
+    }
 }
