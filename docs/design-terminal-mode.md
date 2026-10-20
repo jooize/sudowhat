@@ -207,6 +207,21 @@ plain cyan, basename bold cyan); it is now sudowhat's own, shared with the
 The role colour is the base for a token; an anomaly span drops it, takes its own
 colour, and the role resumes after.
 
+*[2026-10-20 — the escapes follow the house untrusted-text rules, which retires
+the two anomaly rows above and the backslash in the metacharacter row. Every
+code point on the hidden list (controls, bidi controls, zero-width and other
+invisible characters, unusual spaces, variation selectors, tags) shows as
+`\u{HEX}`, uppercase with no leading zeros, and wears reverse red (`7;31`), the
+one style reserved for it. A byte that is not valid UTF-8 shows as `\xHH` after
+every valid sequence has decoded, and a literal backslash is escaped, as its own
+`\u{5C}`, only where it would begin an escape (before `u{`, or before `x` and a
+hex digit). Those kept escapes carry no style of their own and take their
+token's base. Named escapes, doubled backslashes and the dot-run and ellipsis
+escapes are gone: lookalikes are out of scope for escaping. The colouriser no
+longer re-parses the rendered line; each token is rendered once as marked parts.
+The frame's reserved marks are now `7;31` and `100`, and bold magenta is the
+verify code's alone, so the collision accepted further down no longer exists.]*
+
 *[2026-08-27 — the two lines render at different weights. The table above is the
 `execute:` line. The `input:` line renders through the same walk with a flat dim
 base under every routine token (`sw_full_command_line_colored_dim`) — see the
