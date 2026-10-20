@@ -43,9 +43,9 @@ else
   C_OFF=; C_B=; C_DIM=; C_GRN=; C_YEL=; C_CYN=; C_BLU=
 fi
 if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
-  E_OFF=$'\033[0m'; E_B=$'\033[1m'; E_DIM=$'\033[2m'; E_RED=$'\033[31m'
+  E_OFF=$'\033[0m'; E_DIM=$'\033[2m'; E_RED=$'\033[31m'
 else
-  E_OFF=; E_B=; E_DIM=; E_RED=
+  E_OFF=; E_DIM=; E_RED=
 fi
 
 YES=0 DRY_RUN=0
@@ -74,8 +74,8 @@ cd "${repo_root}" || exit 1
 # misrepresent what is actually running.
 if ! git diff --quiet || ! git diff --cached --quiet; then
   {
-    printf '%s\xe2\x9c\x97 error: working tree is dirty -- uncommitted changes are in no release tag.%s\n' \
-      "$E_RED$E_B" "$E_OFF"
+    printf '%s\xe2\x9c\x97 error: working tree is dirty -- uncommitted changes are in no release tag%s\n' \
+      "$E_RED" "$E_OFF"
     printf '%s         commit and tag a release, or stash, before deploying:%s\n' "$E_DIM" "$E_OFF"
     # --untracked-files=no: list only what actually tripped the refusal (tracked,
     # staged-or-unstaged modifications). Untracked files do not affect the tagged
@@ -90,7 +90,7 @@ head="$(git rev-parse HEAD)"
 # Deploy target = latest release tag reachable from HEAD (highest semver).
 target_tag="$(git tag --merged HEAD 2>/dev/null | grep -E '^v[0-9]' | sort -V | tail -n1 || true)"
 [[ -n "${target_tag}" ]] || {
-  printf '%s\xe2\x9c\x97 error: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first.%s\n' \
+  printf '%s\xe2\x9c\x97 error: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first%s\n' \
     "$E_RED" "$E_OFF" >&2
   exit 1
 }
@@ -163,7 +163,7 @@ fi
 # rows, and a refusal prints none (terminal-output). --dry-run asks nothing,
 # and --yes has answered already.
 if (( ! DRY_RUN && ! YES )) && [[ ! -t 0 ]]; then
-  printf '%s\xe2\x9c\x97 error: no tty for confirmation -- pass --yes to proceed non-interactively.%s\n' \
+  printf '%s\xe2\x9c\x97 error: no tty for confirmation -- pass --yes to proceed non-interactively%s\n' \
     "$E_RED" "$E_OFF" >&2
   exit 2
 fi

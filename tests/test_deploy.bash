@@ -138,6 +138,14 @@ printf '{ }\n' >"${nopin_flake}"
 ok "an error naming the flake ends with its path" \
   grep -qxF -- "${CROSS} error: no sudowhat input pin in the flake: ${nopin_flake}" "${out}"
 
+# A dirty tree refuses in the same shape: plain red, no trailing period.
+printf '# dirty\n' >>"${repo}/nix/package.nix"
+(cd -- "${repo}" && /bin/bash "${DEPLOY}" --dry-run) >"${out}" 2>&1 || true
+git -C "${repo}" checkout -q -- nix/package.nix
+ok "a dirty tree is an error verdict with no trailing period" test \
+  "$(head -n1 -- "${out}")" = \
+  "${CROSS} error: working tree is dirty -- uncommitted changes are in no release tag"
+
 # deploy-plan shows a pin it cannot find as a state that is not normal: the
 # verdict and one word on the row, the reason on a dim line under it.
 (cd -- "${repo}" && NIX_DARWIN_FLAKE="${nopin_flake}" /bin/bash "${DEPLOY_PLAN}") \
