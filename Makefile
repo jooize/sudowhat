@@ -22,7 +22,7 @@ SUDOWHAT_TEAM_ID ?= -
 SUDOWHAT_AUDIT_DISPLAY ?= on
 SUDOWHAT_VALID_AUDIT_DISPLAY := on off
 ifeq ($(filter $(SUDOWHAT_AUDIT_DISPLAY),$(SUDOWHAT_VALID_AUDIT_DISPLAY)),)
-  $(warning sudowhat: unknown SUDOWHAT_AUDIT_DISPLAY '$(SUDOWHAT_AUDIT_DISPLAY)', falling back to on)
+  $(warning sudowhat: unknown SUDOWHAT_AUDIT_DISPLAY (falling back to on): $(SUDOWHAT_AUDIT_DISPLAY))
   override SUDOWHAT_AUDIT_DISPLAY := on
 endif
 
@@ -47,7 +47,7 @@ endif
 SUDOWHAT_ECHO_COLOR ?= on
 SUDOWHAT_VALID_ECHO_COLOR := off on
 ifeq ($(filter $(SUDOWHAT_ECHO_COLOR),$(SUDOWHAT_VALID_ECHO_COLOR)),)
-  $(warning sudowhat: unknown SUDOWHAT_ECHO_COLOR '$(SUDOWHAT_ECHO_COLOR)', falling back to on)
+  $(warning sudowhat: unknown SUDOWHAT_ECHO_COLOR (falling back to on): $(SUDOWHAT_ECHO_COLOR))
   override SUDOWHAT_ECHO_COLOR := on
 endif
 
@@ -61,7 +61,7 @@ endif
 SUDOWHAT_POLICY_DEFERENCE ?= on
 SUDOWHAT_VALID_DEFERENCE := on off
 ifeq ($(filter $(SUDOWHAT_POLICY_DEFERENCE),$(SUDOWHAT_VALID_DEFERENCE)),)
-  $(warning sudowhat: unknown SUDOWHAT_POLICY_DEFERENCE '$(SUDOWHAT_POLICY_DEFERENCE)', falling back to on)
+  $(warning sudowhat: unknown SUDOWHAT_POLICY_DEFERENCE (falling back to on): $(SUDOWHAT_POLICY_DEFERENCE))
   override SUDOWHAT_POLICY_DEFERENCE := on
 endif
 
@@ -79,7 +79,7 @@ endif
 SUDOWHAT_EXEC_CONFIRM ?= off
 SUDOWHAT_VALID_EXEC_CONFIRM := on off
 ifeq ($(filter $(SUDOWHAT_EXEC_CONFIRM),$(SUDOWHAT_VALID_EXEC_CONFIRM)),)
-  $(warning sudowhat: unknown SUDOWHAT_EXEC_CONFIRM '$(SUDOWHAT_EXEC_CONFIRM)', falling back to off)
+  $(warning sudowhat: unknown SUDOWHAT_EXEC_CONFIRM (falling back to off): $(SUDOWHAT_EXEC_CONFIRM))
   override SUDOWHAT_EXEC_CONFIRM := off
 endif
 
@@ -98,7 +98,7 @@ endif
 SUDOWHAT_EXEC_DISPLAY ?= on
 SUDOWHAT_VALID_EXEC_DISPLAY := on off
 ifeq ($(filter $(SUDOWHAT_EXEC_DISPLAY),$(SUDOWHAT_VALID_EXEC_DISPLAY)),)
-  $(warning sudowhat: unknown SUDOWHAT_EXEC_DISPLAY '$(SUDOWHAT_EXEC_DISPLAY)', falling back to on)
+  $(warning sudowhat: unknown SUDOWHAT_EXEC_DISPLAY (falling back to on): $(SUDOWHAT_EXEC_DISPLAY))
   override SUDOWHAT_EXEC_DISPLAY := on
 endif
 

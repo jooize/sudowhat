@@ -141,8 +141,8 @@ print_header() {
     "$C_DIM" "${pin_ref_kv:-ref=?}" "$C_OFF"
   printf '%sflake:%s   %s%s%s\n' "$C_B" "$C_OFF" "$C_CYN" "${FLAKE}" "$C_OFF"
   if [[ -n "${tag_version}" && "${target_tag}" != "v${tag_version}" ]]; then
-    printf '%sWARNING: nix/package.nix at the target tag declares version %s%s\n' \
-      "$C_YEL$C_B" "${tag_version}" "$C_OFF"
+    printf '%swarning: nix/package.nix at the target tag declares version %s%s\n' \
+      "$C_YEL" "${tag_version}" "$C_OFF"
   fi
   printf '\n'
 }
