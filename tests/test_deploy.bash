@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# test_deploy.bash - the screen nix/bin/deploy shows before it asks.
+# test_deploy.bash - the screen nix/bin/deploy shows before it asks, and the
+# verdict and error lines it and nix/bin/deploy-plan print.
 #
 # Runs the real script against a scratch git repo and a scratch flake, so
 # nothing outside a mktemp dir is read or written. A stub `sudo` sits first
@@ -16,6 +17,9 @@ shopt -s nullglob
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY="${here}/../nix/bin/deploy"
+DEPLOY_PLAN="${here}/../nix/bin/deploy-plan"
+# The verdict glyphs, U+2713 and U+2717, as their UTF-8 bytes.
+CHECK=$'\xe2\x9c\x93' CROSS=$'\xe2\x9c\x97'
 
 N=0 PASS=0 FAIL=0 SKIP=0
 SKIPPED=()
@@ -104,11 +108,43 @@ ok "the pin command line ends with the flake path" ends_with "${pin_line}" " -- 
 ok "the rebuild command line names the flake directory" \
   grep -qxF -- "  sudo darwin-rebuild switch --flake ${dir_q}" "${out}"
 
+# --- verdicts and refusals --------------------------------------------------
+# A pin already at the target is a verdict with its glyph, in both scripts.
+sync_flake="${tmp}/sync/flake.nix"
+mkdir -p -- "${tmp}/sync"
+printf '  sudowhat.url = "git+file:///x/sudowhat?ref=refs/tags/v1.2.3&rev=%s";\n' \
+  "${rev}" >"${sync_flake}"
+rc=0
+(cd -- "${repo}" && NIX_DARWIN_FLAKE="${sync_flake}" /bin/bash "${DEPLOY}") \
+  </dev/null >"${out}" 2>&1 || rc=$?
+ok "a pin at the target exits 0" test "${rc}" -eq 0
+ok "and says so as a verdict" grep -qxF -- "${CHECK} already in sync" "${out}"
+rc=0
+(cd -- "${repo}" && NIX_DARWIN_FLAKE="${sync_flake}" /bin/bash "${DEPLOY_PLAN}") \
+  >"${out}" 2>&1 || rc=$?
+ok "deploy-plan says the same" grep -qxF -- "${CHECK} already in sync" "${out}"
+
+# Every error leads with its glyph; one that names a path ends with it.
+rc=0
+(cd -- "${repo}" && /bin/bash "${DEPLOY}" --bogus) >"${out}" 2>&1 || rc=$?
+ok "an unknown argument exits 1" test "${rc}" -eq 1
+ok "and is an error verdict ending with the argument" \
+  test "$(head -n1 -- "${out}")" = "${CROSS} error: unknown argument: --bogus"
+nopin_flake="${tmp}/nopin/flake.nix"
+mkdir -p -- "${tmp}/nopin"
+printf '{ }\n' >"${nopin_flake}"
+(cd -- "${repo}" && NIX_DARWIN_FLAKE="${nopin_flake}" /bin/bash "${DEPLOY}") \
+  </dev/null >"${out}" 2>&1 || true
+ok "an error naming the flake ends with its path" \
+  grep -qxF -- "${CROSS} error: no sudowhat input pin in the flake: ${nopin_flake}" "${out}"
+
 # --- the question ------------------------------------------------------------
 # Off a terminal there is nobody to ask: exit 2, and no question is printed.
 rc=0
 (cd -- "${repo}" && /bin/bash "${DEPLOY}") </dev/null >"${out}" 2>&1 || rc=$?
 ok "off a terminal it declines with exit 2" test "${rc}" -eq 2
+ok "and the refusal is an error verdict" \
+  grep -qF -- "${CROSS} error: no tty for confirmation" "${out}"
 ok "off a terminal it prints no question" lacks "$(cat -- "${out}")" "[y/N]"
 # A refusal prints no rows: neither the header nor the command lines.
 ok "off a terminal it prints no header row" lacks "$(cat -- "${out}")" "HEAD:"

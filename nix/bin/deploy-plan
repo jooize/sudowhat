@@ -15,7 +15,9 @@ shopt -s nullglob
 # Color per stream, each gated on the fd it is written to: C_* for stdout,
 # E_* for stderr (the errors), so piping or redirecting one stream keeps it
 # free of escape bytes without stripping the other. NO_COLOR
-# (https://no-color.org) turns both off.
+# (https://no-color.org) turns both off. Each error is a verdict: red, led by
+# its glyph, U+2717, written as its UTF-8 bytes (\xe2\x9c\x97) in the printf
+# formats like the U+2713 verdict.
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_OFF=$'\033[0m'; C_B=$'\033[1m'; C_DIM=$'\033[2m'
   C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_CYN=$'\033[36m'
@@ -50,7 +52,7 @@ FLAKE="${NIX_DARWIN_FLAKE:-/etc/nix-darwin/flake.nix}"
 REPO_MATCH='sudowhat?ref='   # identifies this repo's input line in the flake
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-  printf '%serror: not inside a git repository%s\n' "$E_RED" "$E_OFF" >&2
+  printf '%s\xe2\x9c\x97 error: not inside a git repository%s\n' "$E_RED" "$E_OFF" >&2
   exit 1
 }
 cd "${repo_root}" || exit 1
@@ -60,7 +62,7 @@ head="$(git rev-parse HEAD)"
 # Deploy target = latest release tag reachable from HEAD (highest semver).
 target_tag="$(git tag --merged HEAD 2>/dev/null | grep -E '^v[0-9]' | sort -V | tail -n1 || true)"
 if [[ -z "${target_tag}" ]]; then
-  printf '%serror: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first%s\n' \
+  printf '%s\xe2\x9c\x97 error: no release tag (vX.Y.Z) reachable from HEAD -- tag a release first%s\n' \
     "$E_RED" "$E_OFF" >&2
   exit 1
 fi
@@ -132,7 +134,7 @@ fi
 printf '\n'
 
 if [[ -n "${pinned_rev}" && "${pinned_rev}" == "${target_rev}" ]]; then
-  printf '%sAlready in sync. Nothing to deploy.%s\n' "$C_GRN$C_B" "$C_OFF"
+  printf '%s\xe2\x9c\x93 already in sync%s\n' "$C_GRN" "$C_OFF"
   exit 0
 fi
 
