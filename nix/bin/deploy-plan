@@ -79,7 +79,9 @@ fi
 
 pinned_rev=""
 pinned_ref=""
+flake_readable=0
 if [[ -r "${FLAKE}" ]]; then
+  flake_readable=1
   pin_line="$(grep -F "${REPO_MATCH}" "${FLAKE}" 2>/dev/null | head -n1 || true)"
   if [[ -n "${pin_line}" ]]; then
     pinned_rev="$(printf '%s\n' "${pin_line}" | grep -oE 'rev=[0-9a-f]{40}' | head -n1 | cut -d= -f2 || true)"
@@ -114,8 +116,20 @@ if [[ -n "${pinned_rev}" ]]; then
     "$C_B" "$C_OFF" "$C_CYN" "${pinned_rev:0:10}" "$C_OFF" \
     "$C_DIM" "${pinned_ref:-?}" "$C_OFF"
 else
-  printf '%spinned:%s  %sunreadable (set NIX_DARWIN_FLAKE to name another flake)%s\n' \
-    "$C_B" "$C_OFF" "$C_RED" "$C_OFF"
+  # No pin to show is a state that is not normal, so the row takes the
+  # house shape for one: a verdict, its glyph and one word in red, and the
+  # reason on a dim line under it, starting in the value column. The reason
+  # names no value: the flake path is on the flake: row below.
+  if (( flake_readable )); then
+    pin_state='not found'
+    pin_reason='no sudowhat input with a rev= pin in the flake'
+  else
+    pin_state='unreadable'
+    pin_reason='cannot read the flake (set NIX_DARWIN_FLAKE to name another)'
+  fi
+  printf '%spinned:%s  %s\xe2\x9c\x97 %s%s\n' \
+    "$C_B" "$C_OFF" "$C_RED" "${pin_state}" "$C_OFF"
+  printf '         %s%s%s\n' "$C_DIM" "${pin_reason}" "$C_OFF"
 fi
 printf '%sflake:%s   %s%s%s\n' "$C_B" "$C_OFF" "$C_CYN" "${FLAKE}" "$C_OFF"
 

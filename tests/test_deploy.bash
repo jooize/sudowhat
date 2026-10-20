@@ -138,6 +138,19 @@ printf '{ }\n' >"${nopin_flake}"
 ok "an error naming the flake ends with its path" \
   grep -qxF -- "${CROSS} error: no sudowhat input pin in the flake: ${nopin_flake}" "${out}"
 
+# deploy-plan shows a pin it cannot find as a state that is not normal: the
+# verdict and one word on the row, the reason on a dim line under it.
+(cd -- "${repo}" && NIX_DARWIN_FLAKE="${nopin_flake}" /bin/bash "${DEPLOY_PLAN}") \
+  >"${out}" 2>&1 || true
+ok "deploy-plan marks a flake with no pin" \
+  grep -qxF -- "pinned:  ${CROSS} not found" "${out}"
+ok "and gives the reason under the row" \
+  grep -qxF -- "         no sudowhat input with a rev= pin in the flake" "${out}"
+(cd -- "${repo}" && NIX_DARWIN_FLAKE="${tmp}/missing/flake.nix" /bin/bash "${DEPLOY_PLAN}") \
+  >"${out}" 2>&1 || true
+ok "deploy-plan marks a flake it cannot read" \
+  grep -qxF -- "pinned:  ${CROSS} unreadable" "${out}"
+
 # --- the question ------------------------------------------------------------
 # Off a terminal there is nobody to ask: exit 2, and no question is printed.
 rc=0
