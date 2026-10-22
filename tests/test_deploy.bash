@@ -200,24 +200,46 @@ only_colours() { # <the printf's argument line>
 q_args="$(grep -A1 -F "run the lines above? [" "${DEPLOY}" | tail -n1 || true)"
 ok "the question's printf takes only colour arguments" only_colours "${q_args}"
 
-# On a terminal: answer n, then read the question line back. The line starts
-# with the question; after it the terminal may show the echoed answer, or the
-# decline line when the typed-ahead answer was echoed before the question.
+# On a terminal, through expect: each answer is typed only once the question
+# is on screen, as a person types it, so it echoes on the question line. Fed
+# from a pipe, script(1) writes every answer and its end-of-input ^D at once:
+# the first read could see the ^D and decline before any answer was read,
+# and an answer echoed ahead of the question moves the lines after it.
 QUESTION="run the lines above? [y/N] "
 DECLINE="aborted; flake pin unchanged"
 bare_question() { # <the line holding [y/N]>
   [[ "$1" == "${QUESTION}"* ]] || return 1
   case "${1#"${QUESTION}"}" in
-    ''|n|"${DECLINE}") return 0 ;;
+    ''|n) return 0 ;;
   esac
   return 1
 }
+cat >"${tmp}/answer.exp" <<'EOF'
+# answer.exp ANSWER...: run the deploy screen, typing each answer once the
+# question is on screen. Exits as the screen did; 90 when a question never
+# came, 91 when the screen ended before it.
+set timeout 20
+spawn -noecho /bin/bash $env(DEPLOY)
+foreach a $argv {
+  expect {
+    -ex "run the lines above? \[" { send -- "$a\r" }
+    timeout { exit 90 }
+    eof { exit 91 }
+  }
+}
+expect eof
+catch wait result
+exit [lindex $result 3]
+EOF
+deploy_tty() { # <answer>...
+  (cd -- "${repo}" && DEPLOY="${DEPLOY}" /usr/bin/expect -f "${tmp}/answer.exp" "$@")
+}
 pty_ok=0
-script -q /dev/null /usr/bin/true </dev/null >/dev/null 2>&1 && pty_ok=1
+[[ -x /usr/bin/expect ]] &&
+  script -q /dev/null /usr/bin/true </dev/null >/dev/null 2>&1 && pty_ok=1
 if (( pty_ok )); then
   rc=0
-  (cd -- "${repo}" && printf 'n\n' | script -q /dev/null /bin/bash "${DEPLOY}") \
-    >"${out}" 2>&1 || rc=$?
+  deploy_tty n >"${out}" 2>&1 || rc=$?
   plain="$(sed -e $'s/\033\\[[0-9;]*m//g' -e $'s/\r$//' -- "${out}")"
   q="$(printf '%s\n' "${plain}" | grep -F '[y/N]' || true)"
   ok "on a terminal the question is asked" test -n "${q}"
@@ -233,16 +255,14 @@ if (( pty_ok )); then
 
   # An answer that is not one is not acted on: one "not an answer" line,
   # the question again, and the next answer decides.
-  (cd -- "${repo}" && printf 'x\nn\n' | script -q /dev/null /bin/bash "${DEPLOY}") \
-    >"${out}" 2>&1 || true
+  deploy_tty x n >"${out}" 2>&1 || true
   plain="$(sed -e $'s/\033\\[[0-9;]*m//g' -e $'s/\r$//' -- "${out}")"
   ok "an unknown answer says it is not one" grep -qx 'not an answer' <<<"${plain}"
   ok "and asks again" test "$(grep -cF '[y/N]' <<<"${plain}")" -eq 2
   ok "then the n declines" grep -qF -- "${DECLINE}" <<<"${plain}"
 
   # NO_COLOR keeps every escape byte off the terminal.
-  (cd -- "${repo}" && printf 'n\n' | NO_COLOR=1 script -q /dev/null /bin/bash "${DEPLOY}") \
-    >"${out}" 2>&1 || true
+  NO_COLOR=1 deploy_tty n >"${out}" 2>&1 || true
   ok "NO_COLOR prints no escape byte" lacks "$(cat -- "${out}")" $'\033'
 else
   for name in "on a terminal the question is asked" \
@@ -251,7 +271,7 @@ else
               "and the flake keeps its pin" "the rebuild command line is drawn by role" \
               "an unknown answer says it is not one" \
               "and asks again" "then the n declines" "NO_COLOR prints no escape byte"; do
-    skip "${name}" "no pty here (script cannot open one; a sandboxed runner?)"
+    skip "${name}" "no pty or no /usr/bin/expect here; a sandboxed runner?"
   done
 fi
 
