@@ -400,38 +400,28 @@ static void test_sheet_style_for(void) {
        "later macOS stays on SystemHeadline");
 }
 
-/* A solo line with the target user brings its own run as: row, since none sits
- * above it to say whose rights the command runs with. The name gets the row to
- * itself: its length is not ours to choose, so nothing may follow it. */
+/* A solo line with the target user names it in its label, since no run as:
+ * row sits above it to say whose rights the command runs with. One line, and
+ * no blank line after it: a lone line is not a table. */
 static void test_exec_line_solo_runas(void) {
     const char *path = "/bin/cat";
     char *argv[] = { (char *)"cat", (char *)"--", (char *)"/tmp/f", NULL };
 
     EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "jooize", NO, NO),
-       @"sudowhat: run as:     jooize\n"
-        "sudowhat: execute:    /bin/cat -- /tmp/f\n\n",
-       "solo line brings a run as: row, both in the shared gutter, then a blank");
+       @"sudowhat: execute as jooize: /bin/cat -- /tmp/f\n",
+       "solo line names the user in its label, one line, no blank after");
     EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "root", NO, NO),
-       @"sudowhat: run as:     root\n"
-        "sudowhat: execute:    /bin/cat -- /tmp/f\n\n",
-       "root is named too: the rows never leave the user implied");
-
-    /* The user ends its row: the line holding it holds nothing after it. */
-    NSArray<NSString *> *rows = [sw_format_exec_line(path, argv, SW_EXEC_SOLO,
-                                                     "jooize", NO, NO)
-                                    componentsSeparatedByString:@"\n"];
-    OK([rows[0] hasSuffix:@"jooize"] &&
-       [rows[1] rangeOfString:@"jooize"].location == NSNotFound,
-       "the user name ends its own row, and the command row does not hold it");
+       @"sudowhat: execute as root: /bin/cat -- /tmp/f\n",
+       "root is named too: the line never leaves the user implied");
 
     /* Styled: the label bold, the user styled like the audit block's run as:
      * value -- plain for root, yellow otherwise -- and outside the bold. */
-    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, "jooize", YES, NO)
-           hasPrefix:@"sudowhat: \033[1mrun as:\033[0m     \033[33mjooize\033[0m\n"
-                      "sudowhat: \033[1mexecute:\033[0m    "],
-       "styled: bold labels, yellow non-root user");
-    OK([sw_format_exec_line(path, argv, SW_EXEC_SOLO, "root", YES, NO)
-           hasPrefix:@"sudowhat: \033[1mrun as:\033[0m     root\n"],
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "jooize", YES, NO),
+       @"sudowhat: \033[1mexecute as\033[0m \033[33mjooize\033[0m"
+        "\033[1m:\033[0m /bin/cat -- /tmp/f\n",
+       "styled: bold label and colon, yellow non-root user");
+    EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "root", YES, NO),
+       @"sudowhat: \033[1mexecute as\033[0m root\033[1m:\033[0m /bin/cat -- /tmp/f\n",
        "styled: root stays plain, as in the audit block's run as: row");
 
     /* The name is escaped like every other value: a control byte cannot reach
@@ -439,15 +429,14 @@ static void test_exec_line_solo_runas(void) {
     NSString *hostile = sw_format_exec_line(path, argv, SW_EXEC_SOLO,
                                             "ev\nil\033[2J", NO, NO);
     OK([hostile rangeOfString:@"\033"].location == NSNotFound &&
-       [hostile componentsSeparatedByString:@"\n"].count == 4,
-       "a control byte in the name is escaped: two rows, a blank, no raw escape");
+       [hostile componentsSeparatedByString:@"\n"].count == 2,
+       "a control byte in the name is escaped: one line, no raw escape");
 
-    /* A name that is not valid UTF-8 keeps its row, the byte shown as \xHH:
-     * the name once decoded to an NSString, and the nil dropped the row. */
+    /* A name that is not valid UTF-8 is still named, the byte shown as \xHH:
+     * the name once decoded to an NSString, and the nil dropped it. */
     EQ(sw_format_exec_line(path, argv, SW_EXEC_SOLO, "u\xff", NO, NO),
-       @"sudowhat: run as:     u\\xFF\n"
-        "sudowhat: execute:    /bin/cat -- /tmp/f\n\n",
-       "a user name with an invalid byte keeps its run as: row");
+       @"sudowhat: execute as u\\xFF: /bin/cat -- /tmp/f\n",
+       "a user name with an invalid byte is still named");
 
     /* Only the solo frame names the user; a grouped line has run as: above. */
     EQ(sw_format_exec_line(path, argv, SW_EXEC_GROUPED, "jooize", NO, NO),

@@ -102,6 +102,18 @@ row is still on screen above the prompt, and a row already on screen is not
 printed again. With `execConfirm = "on"`, its question opens with the blank
 line that makes the question a block of its own.
 
+**Delta (2026-10-23): the root bypass is one line again.** The two-row
+form above is replaced by the 2026-09-30 one, as a lone line with no blank
+line after it:
+
+    sudowhat: execute as root: /run/current-system/sw/bin/pinned deploy
+
+The 2026-10-20 reason misread the rule. A value ends its line when someone
+else chose it, so text after it could be faked by the value itself. The target
+user is not such a value: sudo resolved it from the account database, which
+only an administrator changes, so it is a field from a fixed set and may sit
+mid-line. One line keeps the root bypass the lone line it is.
+
 **Delta (2026-08-27): `echoColor` governs the `execute:` value too.** The
 build-time colour token was originally passed to the audit bundle alone, so
 `echoColor = "off"` silenced `input:`'s role colouring while `execute:` kept

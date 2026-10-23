@@ -575,14 +575,9 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
 #define SW_EXEC_PREFIX_SOLO_STYLED \
     "sudowhat: \033[1m" SW_EXEC_LABEL "\033[0m "
 
-/* The run as: row a solo line brings along when it names the target user (see
- * sw_format_exec_line): the audit block's own label, in the same 12-col gutter,
- * so the pair reads as the same table the audit block starts. */
-#define SW_RUNAS_LABEL "run as:"
-#define SW_RUNAS_GAP   "     "  /* pads "run as:" (7) out to the 12-col gutter */
-#define SW_RUNAS_PREFIX "sudowhat: " SW_RUNAS_LABEL SW_RUNAS_GAP
-#define SW_RUNAS_PREFIX_STYLED \
-    "sudowhat: \033[1m" SW_RUNAS_LABEL "\033[0m" SW_RUNAS_GAP
+/* The solo frame's label when it names the target user: "execute as <user>:"
+ * (see sw_format_exec_line). */
+#define SW_EXEC_AS_LABEL "execute as"
 
 /* Which of those two frames an emit site asks for.
  *
@@ -600,9 +595,8 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
  *     input: block precedes it, and verify: is raised only on the console
  *     biometric path, which the root bypass returns before reaching. Nothing
  *     on screen says whose rights the command runs with, so this site passes
- *     the target user and the line brings a run as: row along: run as: then
- *     execute:, a two-row table in the shared gutter, closed by one blank line
- *     like the grouped table;
+ *     the target user and the line names it in its label: one lone line,
+ *     "execute as <user>: <command>", with no blank line after it;
  *   - the terminal-password step-aside when sudo ran authentication for this
  *     invocation (the pam_sudowhat marker is present): sudo's own prompt sits
  *     between the audit block and this line, so it no longer belongs to that
@@ -794,13 +788,14 @@ static const char *sw_runas_name(char * const command_info[]) {
  *
  * runas names the target user, and only the solo frame shows it: the root
  * bypass passes it, as no run as: row is on screen there (the audit bundle
- * exempts a root caller), so the line prints that row itself, directly above
- * execute:. The name gets a row of its own
- * because its length is not ours to choose: a value like that ends its line,
- * so nothing (least of all the command) may follow it. It is escaped and
+ * exempts a root caller), so the line says whose rights the command runs with
+ * itself -- "execute as jooize: <command>", one line. The name may sit
+ * mid-line because it is not a value someone else chose: sudo resolved it
+ * from the account database, which only an administrator changes, so it is a
+ * field from a fixed set (terminal-output), unlike the command after it. It is escaped and
  * styled exactly as the audit block's run as: value: plain for root, yellow
  * otherwise, outside the label's bold. A grouped line ignores it, and a solo
- * line without one keeps the bare "execute:" line.
+ * line without one keeps the bare "execute:" label.
  *
  * Returns nil when there is no path or the renderers produced nothing, which
  * makes "show nothing" a plain nil check at the write site rather than a
@@ -819,10 +814,13 @@ static NSString *sw_format_exec_line(const char *path,
         if (frameColor && ![user isEqualToString:@"root"]) {
             user = [NSString stringWithFormat:@"\033[33m%@\033[0m", user];
         }
-        /* Two rows make a table, so it closes with one blank line. */
-        return [NSString stringWithFormat:@"%s%@\n%s%@\n\n",
-                frameColor ? SW_RUNAS_PREFIX_STYLED : SW_RUNAS_PREFIX, user,
-                frameColor ? SW_EXEC_PREFIX_STYLED : SW_EXEC_PREFIX, value];
+        /* A lone line: no gutter, and no blank line after it. */
+        return [NSString stringWithFormat:@"%s%@%s%@\n",
+                frameColor ? "sudowhat: \033[1m" SW_EXEC_AS_LABEL "\033[0m "
+                           : "sudowhat: " SW_EXEC_AS_LABEL " ",
+                user,
+                frameColor ? "\033[1m:\033[0m " : ": ",
+                value];
     }
     const char *prefix;
     if (layout == SW_EXEC_SOLO) {
@@ -1660,7 +1658,7 @@ static int sudowhat_check(char * const command_info[],
              * SW_EXEC_SOLO for exactly that reason: no input: block above it
              * (audit exempts uid 0) and no verify: line (biometric is
              * console-only, and this branch returns before it), so no run as:
-             * row precedes it and the line brings its own -- see
+             * row precedes it and the line names the user itself -- see
              * sw_exec_layout. */
             emit_exec_line("/dev/tty", commandC, run_argv, SW_EXEC_SOLO,
                            sw_runas_name(command_info), sw_color_allowed());

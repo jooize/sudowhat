@@ -94,8 +94,8 @@ the dialog, nor can literal text in argv pose as an escape.
   `PATH` will resolve, and `execute:` (what sudo resolved). If an attacker's
   binary sits earlier in `PATH` than the real one, the hijack shows up as
   `input:` and `execute:` simply disagreeing. When root calls sudo there is
-  no such block, so `execute:` brings its own `run as:` row, directly above
-  it. After sudo's own password prompt, `execute:` stands alone: the block's
+  no such block, so the line names the user itself, `execute as root:`.
+  After sudo's own password prompt, `execute:` stands alone: the block's
   `run as:` row is still on screen above the prompt.
 - **Console-only biometric**: an SSH or headless caller is never shown a
   dialog on your screen. It gets sudo's native password on its own terminal,
