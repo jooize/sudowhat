@@ -114,6 +114,17 @@ user is not such a value: sudo resolved it from the account database, which
 only an administrator changes, so it is a field from a fixed set and may sit
 mid-line. One line keeps the root bypass the lone line it is.
 
+**Delta (2026-10-24): every solo line names the user.** The line after
+sudo's own password prompt takes the same shape:
+
+    Password:
+    sudowhat: execute as root: /run/current-system/sw/bin/pinned deploy
+
+The `run as:` row is still above, but it can be far up by then, past a
+wrapped `PATH:` row or a failed attempt. A name in the label is not a second
+row, so it does not print a row again. Both lines outside the table now read
+the same, and a missing name never has to mean something.
+
 **Delta (2026-08-27): `echoColor` governs the `execute:` value too.** The
 build-time colour token was originally passed to the audit bundle alone, so
 `echoColor = "off"` silenced `input:`'s role colouring while `execute:` kept

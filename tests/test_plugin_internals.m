@@ -869,7 +869,7 @@ static void test_confirm_run_shows_before_asking(void) {
     sw_t_conv_calls = 0;
     sw_t_conv_answer = "y";
     int rc = sw_confirm_run("/no/such/dir/sw_tty", "/bin/ls", argv,
-                            SW_EXEC_GROUPED, &err);
+                            SW_EXEC_GROUPED, "root", &err);
     NSString *refusal = err ? @(err) : nil;
     int calls_unshown = sw_t_conv_calls;
 
@@ -880,10 +880,22 @@ static void test_confirm_run_shows_before_asking(void) {
     sw_t_conv_calls = 0;
     err = NULL;
     int rc_shown = (fd >= 0)
-        ? sw_confirm_run(path, "/bin/ls", argv, SW_EXEC_GROUPED, &err) : -2;
+        ? sw_confirm_run(path, "/bin/ls", argv, SW_EXEC_GROUPED, "root", &err) : -2;
     int calls_shown = sw_t_conv_calls;
     NSString *shown = (fd >= 0) ? sw_read_utf8(path) : nil;
     if (fd >= 0) unlink(path);
+
+    /* After sudo's password prompt the line is solo and names the user. */
+    char spath[256];
+    sw_tmpl(spath, sizeof spath, "confirm-solo");
+    int sfd = mkstemp(spath);
+    if (sfd >= 0) close(sfd);
+    sw_t_conv_calls = 0;
+    err = NULL;
+    int rc_solo = (sfd >= 0)
+        ? sw_confirm_run(spath, "/bin/ls", argv, SW_EXEC_SOLO, "root", &err) : -2;
+    NSString *shown_solo = (sfd >= 0) ? sw_read_utf8(spath) : nil;
+    if (sfd >= 0) unlink(spath);
 
     fflush(stderr);
     dup2(saved_err, STDERR_FILENO);
@@ -900,6 +912,9 @@ static void test_confirm_run_shows_before_asking(void) {
     EQ(shown, @"sudowhat: execute:    /bin/ls\n\n",
        "with the line shown, the execute: row is written first");
     OK(rc_shown == 1 && calls_shown == 1, "then the question is asked and y allows");
+    EQ(shown_solo, @"sudowhat: execute as root: /bin/ls\n",
+       "after a password prompt the solo line names the user");
+    OK(rc_solo == 1, "and the question still asks and y allows");
 }
 
 /* The PRE-AUTH block (user/directory/input) moved to the audit plugin

@@ -53,7 +53,7 @@ sudowhat: directory:  /etc/nginx        <- the invoking cwd (user_info["cwd"])
 sudowhat: input:      systemctl restart nginx  <- as typed (see "resolved path" below)
 sudowhat: PATH:       /usr/local/bin:/usr/bin:/bin  <- caller's PATH; bare names only
 Password: ****                          <- sudo's native PAM, on the terminal
-sudowhat: execute: /run/.../systemctl restart nginx   <- resolved last-look (shipped v0.13.0); alone: run as: is still on screen above
+sudowhat: execute as root: /run/.../systemctl restart nginx   <- resolved last-look (shipped v0.13.0); alone, so it names the user
 <runs>
 ```
 

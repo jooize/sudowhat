@@ -594,17 +594,16 @@ enum { sw_echo_color_mode = SW_ACOL_SEL(SW_ECHO_COLOR) };
  *   - the root bypass: PROVABLY alone -- the audit plugin exempts uid 0, so no
  *     input: block precedes it, and verify: is raised only on the console
  *     biometric path, which the root bypass returns before reaching. Nothing
- *     on screen says whose rights the command runs with, so this site passes
- *     the target user and the line names it in its label: one lone line,
- *     "execute as <user>: <command>", with no blank line after it;
+ *     on screen says whose rights the command runs with;
  *   - the terminal-password step-aside when sudo ran authentication for this
  *     invocation (the pam_sudowhat marker is present): sudo's own prompt sits
  *     between the audit block and this line, so it no longer belongs to that
- *     table (see sw_step_aside_layout). The block's run as: row is still on
- *     screen above the prompt, and a row already on screen is not printed
- *     again (terminal-output), so this site passes no user.
- * Given no user, the solo line is a lone line: the gutter is dropped and no
- * blank line follows, since a column aligns siblings, and with none a label
+ *     table (see sw_step_aside_layout). The block's run as: row may be far up
+ *     the screen by now, past a wrapped PATH: row or a failed attempt.
+ * Both sites pass the target user, so every solo line has one shape and says
+ * whose rights the command runs with: "execute as <user>: <command>".
+ * The solo line is a lone line: the gutter is dropped and no blank line
+ * follows, since a column aligns siblings, and with none a label
  * floating four spaces from its value reads as a rendering bug rather than as
  * alignment, while a blank line after a single line splits nothing. Same
  * unpadded shape the Linux port prints for a lone line.
@@ -786,15 +785,14 @@ static const char *sw_runas_name(char * const command_info[]) {
  * Within one layout both frame branches lay out the SAME field widths, so the
  * plain line is the styled one with every escape sequence removed.
  *
- * runas names the target user, and only the solo frame shows it: the root
- * bypass passes it, as no run as: row is on screen there (the audit bundle
- * exempts a root caller), so the line says whose rights the command runs with
- * itself -- "execute as jooize: <command>", one line. The name may sit
- * mid-line because it is not a value someone else chose: sudo resolved it
+ * runas names the target user, and only the solo frame shows it: a solo line
+ * stands outside the audit block's table, so it says whose rights the command
+ * runs with itself -- "execute as jooize: <command>", one line. The name may
+ * sit mid-line because it is not a value someone else chose: sudo resolved it
  * from the account database, which only an administrator changes, so it is a
- * field from a fixed set (terminal-output), unlike the command after it. It is escaped and
- * styled exactly as the audit block's run as: value: plain for root, yellow
- * otherwise, outside the label's bold. A grouped line ignores it, and a solo
+ * field from a fixed set (terminal-output), unlike the command after it. It is
+ * escaped and styled exactly as the audit block's run as: value: plain for
+ * root, yellow otherwise, outside the label's bold. A grouped line ignores it, and a solo
  * line without one keeps the bare "execute:" label.
  *
  * Returns nil when there is no path or the renderers produced nothing, which
@@ -1287,7 +1285,7 @@ static BOOL sw_ask_run_confirm(const char *ttyPath, BOOL blankFirst) {
  * the file that was there when the question was posed. */
 static int sw_confirm_run(const char *ttyPath, const char *commandC,
                           char * const run_argv[], sw_exec_layout layout,
-                          const char **errstr) {
+                          const char *runas, const char **errstr) {
     /* Pre-prompt pin -- same pattern, same reasons, as the console path's (3a).
      * O_CLOEXEC so the fd does not leak into the execed program. */
     int preFd = open(commandC, O_RDONLY | O_CLOEXEC);
@@ -1311,7 +1309,7 @@ static int sw_confirm_run(const char *ttyPath, const char *commandC,
      * A line that did not reach the terminal whole fails closed, for the
      * reason sw_step_aside_allow refuses a missing command key: a y/N under
      * a command the human was never shown would approve what nobody saw. */
-    if (!write_exec_line_to_tty(ttyPath, commandC, run_argv, layout, NULL,
+    if (!write_exec_line_to_tty(ttyPath, commandC, run_argv, layout, runas,
                                 sw_color_allowed())) {
         close(preFd);
         set_errstr(errstr, "sudowhat: cannot show the command on the terminal; "
@@ -1378,8 +1376,8 @@ static int sw_confirm_run(const char *ttyPath, const char *commandC,
  * markerPresent means sudo ran its authentication stack for this invocation,
  * and a factor collected on the terminal leaves its prompt ("Password:")
  * between the audit block and this line, so it no longer belongs to that table
- * and stands alone -> SOLO, with no run as: row of its own: the block's row is
- * still on screen above the prompt. With the marker absent (NOPASSWD, a live
+ * and stands alone -> SOLO, naming the target user in its label (see
+ * sw_exec_layout). With the marker absent (NOPASSWD, a live
  * timestamp cache), nothing was asked, so the line lands directly under the
  * audit block as its last row -> GROUPED.
  *
@@ -1392,7 +1390,8 @@ static sw_exec_layout sw_step_aside_layout(BOOL markerPresent) {
 }
 
 static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
-                               BOOL markerPresent, const char **errstr) {
+                               const char *runas, BOOL markerPresent,
+                               const char **errstr) {
     BOOL confirmOn = (sw_exec_confirm_mode == SW_EC_on);
     BOOL haveTty = confirmOn ? sw_have_controlling_tty("/dev/tty") : NO;
     BOOL integrityInstalled =
@@ -1402,7 +1401,7 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
     if (!sw_confirm_decision(confirmOn, haveTty, markerPresent,
                              integrityInstalled)) {
         emit_exec_line("/dev/tty", commandC, run_argv,
-                       sw_step_aside_layout(markerPresent), NULL,
+                       sw_step_aside_layout(markerPresent), runas,
                        sw_color_allowed());
         return 1;
     }
@@ -1417,7 +1416,7 @@ static int sw_step_aside_allow(const char *commandC, char * const run_argv[],
     }
 
     return sw_confirm_run("/dev/tty", commandC, run_argv,
-                          sw_step_aside_layout(markerPresent), errstr);
+                          sw_step_aside_layout(markerPresent), runas, errstr);
 }
 
 static int sudowhat_open(unsigned int version,
@@ -1706,6 +1705,7 @@ static int sudowhat_check(char * const command_info[],
                  * tells it.
                  * See sw_step_aside_allow. */
                 int verdict = sw_step_aside_allow(commandC, run_argv,
+                                                  sw_runas_name(command_info),
                                                   markerPresent, errstr);
                 if (verdict != 1) return verdict;
                 syslog(LOG_AUTHPRIV | LOG_NOTICE,
