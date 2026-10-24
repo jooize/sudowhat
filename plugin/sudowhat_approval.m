@@ -1715,9 +1715,10 @@ static int sudowhat_check(char * const command_info[],
                        g_inv.have_tty ? g_inv.tty : "unknown");
                 return 1;
             }
-            set_errstr(errstr, "sudowhat: not in active GUI session "
-                               "(invoking uid %u is not the console user)",
-                       g_inv.uid);
+            /* Name the session, not the uid: a same-uid SSH session lands
+             * here too, and its uid IS the console user's. */
+            set_errstr(errstr, "sudowhat: not in the console's GUI login "
+                               "session (nonConsole = deny)");
             return 0;
         }
 
