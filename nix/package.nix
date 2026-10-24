@@ -39,7 +39,7 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "sudowhat";
-  version = "0.19.1";
+  version = "0.19.2";
 
   src = lib.cleanSource ../.;
 
