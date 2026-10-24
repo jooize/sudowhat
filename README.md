@@ -359,29 +359,37 @@ does *not* do, is in [docs/security-design.md](docs/security-design.md).
 
 ## Console vs. non-console callers
 
-sudowhat decides *where* a caller may authenticate by its security session (a
-local GUI login versus a remote or headless one), not by uid. A caller running
-as the same user as the console login but over SSH is still treated as
-non-console.
+sudowhat decides *where* a caller may authenticate from two facts, not from
+the uid alone. A caller is **console** only when both hold:
 
-| Caller | `nonConsole = "password"` (default) | `nonConsole = "deny"` |
-|---|---|---|
-| Local console (GUI) user | Touch ID dialog showing the command¹ | Touch ID dialog showing the command¹ |
-| Interactive remote session (e.g. SSH) | Password / smartcard on the caller's own terminal; no dialog on the console | Denied without a dialog |
-| Unattended job (launchd / cron, no GUI) | Runs if a sudoers rule authorizes it (e.g. `NOPASSWD`); no dialog on the console | Denied without a dialog |
-| Root (uid 0) | Allowed, logged to the auth log | Allowed, logged to the auth log |
+- its security session is a local GUI login (not SSH, not a daemon), and
+- its user is the one at the screen right now.
+
+Every other caller is **non-console**, including an SSH session running as
+the very user who is logged in at the screen.
+
+| Caller | Classified | `nonConsole = "password"` (default) | `nonConsole = "deny"` |
+|---|---|---|---|
+| A terminal in your GUI login, and anything started from it (tmux, scripts, editors) | console | Touch ID dialog showing the command¹ | Touch ID dialog showing the command¹ |
+| An SSH session, and tools that start over SSH (mosh) | non-console | Password or smartcard on the caller's own terminal | Refused, no prompt |
+| An unattended job running as a user (LaunchDaemon, cron) | non-console | Runs only under a sudoers rule that waives authentication (`NOPASSWD`); otherwise fails, since nobody can type a password | Refused, even under a `NOPASSWD` rule |
+| Another account on this Mac that is not at the screen (fast user switching) | non-console | Password on its own terminal | Refused, no prompt |
+| Root (uid 0) | exempt | Allowed, logged to the auth log | Allowed, logged to the auth log |
 
 ¹ Skipped when sudoers waived authentication for the command (policy
 deference, on by default), so the command just runs, still disclosed on the
 terminal.
 
-A non-console caller is **never** shown a Touch ID
-dialog, which would render on the console user's screen; that impossibility is
-structural and not configurable
-([why](docs/security-design.md#non-console-defense-ssh-automation)).
+While nobody is logged in at the screen (the login window), there is no
+console user, so every non-root caller is non-console. Under `deny`, that means
+a Mac whose GUI login is stuck cannot be repaired with sudo over SSH.
+
+A non-console caller is **never** shown a Touch ID dialog, which would render
+on the console user's screen; that impossibility is structural and not
+configurable ([why](docs/security-design.md#non-console-defense-ssh-automation)).
 `nonConsole` grants no authority on its own: sudoers still decides who may run
-what. A background process inside your local GUI login shares that login's
-session and is classified as console; see
+what. Two cases sit inside your GUI login and are therefore console, a
+background process and someone sharing your screen; see
 [Known limitations](#known-limitations).
 
 ## What gets installed
@@ -524,8 +532,13 @@ form:
 - **`sudo bash`, interactive editors.** Approving a shell opens unbounded
   post-approval risk, inherent to all sudo-likes; sudowhat shows what is being
   launched but cannot constrain what happens inside it.
-- **GUI session detached.** Fast-user-switched-out sessions fail the biometric
-  call; the plugin denies, fail-closed.
+- **Screen sharing happens inside your GUI login.** Someone controlling your
+  screen remotely (Screen Sharing, Remote Management) types into the same
+  login you do, so their sudo is console and they see the same dialog. Touch
+  ID still needs a finger on this Mac, but when it is unavailable (lid closed,
+  no watch) the dialog asks for the password. `nonConsole = "deny"` does not
+  cover this case: keep screen sharing off, or limited to people you would let
+  type at your keyboard.
 - **Generic icon in the dialog.** macOS takes the dialog icon from the calling
   process (`sudo`, no app bundle), and `LAContext` has no override API. Fixing
   it would need a helper `.app` and IPC, the agent design this project
@@ -545,7 +558,7 @@ sudo -k && sudo /bin/echo hello                  # happy path
 sudo -k && sudo /bin/echo hello                  # cancel; expect "sudowhat: authorization denied"
 sudo -k && sudo /bin/echo $'hidden\nsudoers'    # control chars escape literally
 sudo /bin/echo first; sudo /bin/echo second      # no auth caching; two dialogs
-ssh localhost 'sudo -n /bin/echo from-ssh' 2>&1 # SSH attacker guard
+ssh localhost 'sudo -n /bin/echo from-ssh' 2>&1 # SSH session: no dialog on the screen; refused under deny
 sudo -k && sudo sudo /bin/echo nested-root      # inner sudo (caller=root) exempt: one dialog, then logged bypass
 sudo make uninstall                              # stock sudo behavior restored
 ```

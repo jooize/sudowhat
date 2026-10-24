@@ -143,8 +143,10 @@ the caller's own device, a daemon design this project rejected.)
 So a non-console caller authenticates, if at all, through sudo's own machinery
 on its own session. By default (`nonConsole = "password"`) that is sudo's
 native password / smartcard factor: stock sudo behaviour, kept intact. Set
-`nonConsole = "deny"` to refuse non-console callers entirely (a stolen password
-alone then can't escalate remotely, at the cost of remote / headless sudo).
+`nonConsole = "deny"` to refuse non-console callers entirely (a password alone
+then can't escalate over SSH or from a background job, at the cost of remote /
+headless sudo; screen sharing works inside the GUI login, so it is console and
+not covered).
 This split separates *local-GUI* callers from *remote/headless* ones; it does
 **not** separate the human from another process inside the same GUI login (a
 background gui-domain agent is treated as console; see
@@ -414,9 +416,13 @@ unbounded post-approval risk. This is inherent to all sudo-likes; sudowhat
 shows the program being launched so the user can refuse, but cannot constrain
 what happens inside it.
 
-**GUI session detached.** `LAContext.evaluatePolicy` may fail when the user's
-GUI session has been fast-user-switched out. The plugin denies in that case,
-fail-closed by design.
+**Screen sharing is console.** A remote viewer (Screen Sharing, Remote
+Management) acts inside the console user's own GUI login, so the session
+guard classifies their sudo as console and the dialog renders on the shared
+screen. Touch ID still needs a finger on the Mac; with no usable biometric
+the system password dialog appears, which the viewer can answer. A
+fast-user-switched-out account, by contrast, fails the screen-owner check and
+is non-console: it never reaches `LAContext`.
 
 **Generic icon on the Watch / companion confirmation.** macOS sources the icon
 shown in the Touch ID prompt and the Apple Watch confirmation notification from

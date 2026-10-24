@@ -39,11 +39,13 @@ in {
           the approval plugin steps aside for them once sudo has authenticated
           them. This is stock sudo behaviour for remote callers, kept intact —
           sudowhat adds trustworthy console Touch ID without taking it away.
-        - `deny`: the console-only variant is installed. Only the local,
-          physically present console (GUI) user may sudo; every non-console
-          caller is denied without a prompt. Choose this to harden the machine
-          so a stolen password alone cannot escalate remotely — at the cost of
-          breaking remote / headless sudo (root-context automation stays exempt).
+        - `deny`: the console-only variant is installed. Only the user logged
+          in at the screen may sudo; every non-console caller is denied without
+          a prompt, even under a `NOPASSWD` rule. Choose this so a password
+          alone cannot escalate over SSH or from a background job — at the cost
+          of breaking remote / headless sudo (root-context automation stays
+          exempt). Screen sharing is not covered: it works inside the GUI login,
+          so it is console.
 
         Neither value grants new authority: sudoers still decides who may run
         what. The classification is by the caller's security session (local GUI
