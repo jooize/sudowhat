@@ -4,8 +4,8 @@
 //! shown before authentication:
 //!
 //!   sudowhat: run as: <target user>
-//!   sudowhat: directory: <invoking cwd>       (omitted when cwd is absent)
-//!   sudowhat: input: <command as typed>
+//!   sudowhat: directory: <start directory>    (see `dir_line`)
+//!   sudowhat: input: <command as typed>       (omitted for a bare -s / -i)
 //!
 //! What it shares with the macOS audit plugin (plugin/sudowhat_audit.m) is the
 //! rendering of each value: the escaping and quoting are delegated to
@@ -96,8 +96,46 @@ fn command_line(argv: &[&[u8]]) -> Option<String> {
     Some(out)
 }
 
+/// Whether a sudo setting carries the boolean true. sudo writes "true" for a flag
+/// it set and leaves the key out otherwise (sudo_plugin(5)); anything else,
+/// including a key this sudo does not send, reads as false. Twin of the ObjC
+/// `sw_audit_setting_true`.
+fn setting_true(settings: &[&[u8]], key: &str) -> bool {
+    find_kv(settings, key) == Some(&b"true"[..])
+}
+
+/// Whether sudo will start a shell: `-s` sets run_shell, `-i` sets login_shell,
+/// and `-i` with no command also sets implied_shell. sudo rejects `-s` / `-i`
+/// together with `-v`, `-k`, `-l` and `-e` before any plugin opens. Twin of the
+/// ObjC `sw_audit_runs_shell`.
+fn runs_shell(settings: &[&[u8]]) -> bool {
+    setting_true(settings, "run_shell")
+        || setting_true(settings, "login_shell")
+        || setting_true(settings, "implied_shell")
+}
+
+/// The directory line's value, or `None` when the line must not print. Twin of
+/// the ObjC `sw_audit_dir_row_value`: `-D DIR` (settings `cmnd_cwd`) as typed,
+/// since sudo starts there or refuses; no line under `-i` without `-D`, since
+/// the login shell starts in the target user's home, a policy-side lookup this
+/// plugin does not repeat; otherwise the invoking cwd from user_info
+/// (command_info["cwd"] does not exist yet at audit open()).
+fn dir_line(settings: &[&[u8]], user_info: &[&[u8]]) -> Option<String> {
+    let dir = match find_kv(settings, "cmnd_cwd") {
+        Some(d) if !d.is_empty() => d,
+        _ if setting_true(settings, "login_shell") => return None,
+        _ => find_kv(user_info, "cwd")?,
+    };
+    if dir.is_empty() {
+        return None;
+    }
+    Some(escape(dir))
+}
+
 /// Assemble the full display block, or `None` when there is nothing to show (no
-/// command word — e.g. `sudo -v`). `color` toggles the bold label emphasis; the
+/// command word and no shell — e.g. `sudo -v`). A bare `sudo -s` / `sudo -i`
+/// still prints run as: and directory:, with no input: line, because the shell
+/// is what runs. `color` toggles the bold label emphasis; the
 /// caller derives it from [`color_allowed`], and tty.rs's `isatty()` is still the
 /// final say. Each value is rendered as in plugin/sudowhat_audit.m's block (one
 /// escape_core); the frame around it is this file's own (see the module note).
@@ -112,11 +150,13 @@ pub fn build_block(
     color: bool,
 ) -> Option<String> {
     // The command as typed is the star of the display; without one there is
-    // nothing to preview, so show nothing.
-    let command = command_line(argv)?;
-    if command.is_empty() {
-        return None;
-    }
+    // nothing to preview, so show nothing, unless sudo will start a shell.
+    let command = match command_line(argv) {
+        Some(c) if c.is_empty() => return None,
+        Some(c) => Some(c),
+        None if runs_shell(settings) => None,
+        None => return None,
+    };
 
     // Target user: sudo puts runas_user in settings[] only when -u was given;
     // otherwise the default target is root.
@@ -125,13 +165,9 @@ pub fn build_block(
         _ => "root".to_string(),
     };
 
-    // Directory shown is the invoking cwd where execve will run — the honest
-    // pre-resolution value from user_info (command_info["cwd"] does not exist
-    // yet at audit open()). Absent → omit the Directory line.
-    let dir_line = match find_kv(user_info, "cwd") {
-        Some(c) if !c.is_empty() => Some(escape(c)),
-        _ => None,
-    };
+    // Where the command starts, as known before resolution (see `dir_line`).
+    // None → omit the directory line.
+    let dir_line = dir_line(settings, user_info);
 
     // Bold the label words purely for readability (our own fixed bytes, never
     // user input). Restores the emphasis the pre-v0.10.0 macOS path applied.
@@ -142,7 +178,9 @@ pub fn build_block(
     if let Some(d) = &dir_line {
         block.push_str(&format!("sudowhat: {lb}directory:{lo} {d}\n"));
     }
-    block.push_str(&format!("sudowhat: {lb}input:{lo} {command}\n"));
+    if let Some(c) = &command {
+        block.push_str(&format!("sudowhat: {lb}input:{lo} {c}\n"));
+    }
     Some(block)
 }
 
@@ -363,5 +401,71 @@ mod tests {
     #[test]
     fn no_command_word_is_none() {
         assert!(bb(&[], &["uid=1000", "cwd=/x"], &[], false).is_none());
+        // `sudo -v`: settings carry no shell flag.
+        assert!(bb(&["update_ticket=true"], &["uid=1000", "cwd=/x"], &[], false).is_none());
+        // Only the exact value sudo writes counts.
+        assert!(bb(&["run_shell=false"], &["uid=1000", "cwd=/x"], &[], false).is_none());
+        assert!(bb(&["run_shell=1"], &["uid=1000", "cwd=/x"], &[], false).is_none());
+        assert!(bb(&["run_shell_x=true"], &["uid=1000", "cwd=/x"], &[], false).is_none());
+    }
+
+    #[test]
+    fn bare_shell_shows_run_as_and_directory() {
+        // `sudo -s`: no input line, the invoking cwd stays.
+        let b = bb(&["run_shell=true"], &["uid=1000", "cwd=/x"], &[], false).unwrap();
+        assert_eq!(b, "sudowhat: run as: root\nsudowhat: directory: /x\n");
+        // `sudo -u postgres -s`
+        let b = bb(
+            &["runas_user=postgres", "run_shell=true"],
+            &["uid=1000", "cwd=/x"],
+            &[],
+            false,
+        )
+        .unwrap();
+        assert_eq!(b, "sudowhat: run as: postgres\nsudowhat: directory: /x\n");
+        // `sudo -i`: the login shell starts in the target's home, so no
+        // directory line.
+        let b = bb(
+            &["login_shell=true", "implied_shell=true"],
+            &["uid=1000", "cwd=/x"],
+            &[],
+            false,
+        )
+        .unwrap();
+        assert_eq!(b, "sudowhat: run as: root\n");
+    }
+
+    #[test]
+    fn directory_follows_d_and_i() {
+        let ui = ["uid=1000", "cwd=/x"];
+        // `sudo -D /etc/nginx systemctl reload nginx`
+        let b = bb(&["cmnd_cwd=/etc/nginx"], &ui, &["systemctl"], false).unwrap();
+        assert_eq!(
+            b,
+            "sudowhat: run as: root\nsudowhat: directory: /etc/nginx\nsudowhat: input: systemctl\n"
+        );
+        // `sudo -i id`: a command under -i still starts in the target's home.
+        let b = bb(&["login_shell=true"], &ui, &["id"], false).unwrap();
+        assert_eq!(b, "sudowhat: run as: root\nsudowhat: input: id\n");
+        // `sudo -i -D /tmp`
+        let b = bb(&["login_shell=true", "cmnd_cwd=/tmp"], &ui, &[], false).unwrap();
+        assert_eq!(b, "sudowhat: run as: root\nsudowhat: directory: /tmp\n");
+        // An empty cmnd_cwd falls back to the invoking cwd.
+        let b = bb(&["cmnd_cwd="], &ui, &["id"], false).unwrap();
+        assert_eq!(
+            b,
+            "sudowhat: run as: root\nsudowhat: directory: /x\nsudowhat: input: id\n"
+        );
+        // A hostile -D reaches the terminal as text.
+        let d = format!("cmnd_cwd=/a\nb{}c", ch(0x202E));
+        let b = bb(&[&d], &ui, &["id"], false).unwrap();
+        assert_eq!(
+            b,
+            format!(
+                "sudowhat: run as: root\nsudowhat: directory: /a{}b{}c\nsudowhat: input: id\n",
+                esc_of("A"),
+                esc_of("202E")
+            )
+        );
     }
 }

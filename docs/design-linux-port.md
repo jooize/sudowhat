@@ -92,8 +92,8 @@ writes `/etc/sudo.conf`.
   mirrors `docs/design-terminal-mode.md`'s *"Linux gets the UX, not the
   tamper-evidence"*). An attacker with root can swap the plugin; that is a fact
   to document, not a flaw to fix.
-- The plugin **fails soft**: any problem (no tty, no command, bad UTF-8) → show
-  nothing, never break sudo. `open()` returns `1` (loaded) always, never `-1`
+- The plugin **fails soft**: any problem (no tty, nothing to run, bad UTF-8) →
+  show nothing, never break sudo. `open()` returns `1` (loaded) always, never `-1`
   (a display convenience must not DoS sudo). Unknown API generation → `0`
   (decline cleanly).
 

@@ -463,7 +463,7 @@ perm-check the plugin `.so`; it is protected by ordinary permissions on its
 root-owned install path, which the installer enforces and verifies. There is
 **no code-signing anchor and no tamper-evidence** on Linux: an attacker with
 root can swap the plugin. Linux gets the UX, not the tamper-evidence. The
-plugin fails soft (no terminal, no command, or bad input shows nothing and
+plugin fails soft (no terminal, nothing to run, or bad input shows nothing and
 never breaks sudo), every token is shell-quoted and control-character escaped,
 output goes to `/dev/tty` only, and the root invoker is exempt.
 
