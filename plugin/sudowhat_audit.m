@@ -4,7 +4,7 @@
  * The owner of the PRE-AUTH terminal block. sudo calls an audit plugin's open()
  * before any other plugin API function -- in particular before the policy
  * plugin's check_policy, where PAM collects the password — so this plugin prints
- *   user / directory / input [/ path]
+ *   user / directory [/ input] [/ path]
  * to the controlling terminal FIRST, on every path: the local console (before
  * the approval plugin's verify code + Touch ID sheet) and the non-console / SSH
  * case (before sudo's native PAM `Password:`). That closes the gap where a
@@ -56,7 +56,7 @@
  * the Makefile). Same fail-closed token machinery as the approval plugin's
  * knobs: a bare token names a fixed mode baked into the signed bundle.
  *
- *   on  - (default) show user / directory / input [/ path] on the controlling
+ *   on  - (default) show user / directory [/ input] [/ path] on the controlling
  *         terminal.
  *   off - never display (the bundle loads but its open() shows nothing).
  *
@@ -286,6 +286,65 @@ static NSString *sw_audit_path_row_value(char * const submit_argv[],
 
     NSString *value = sw_audit_escape(path);
     if (value.length == 0) return nil;   /* alloc failure -> no row */
+    return value;
+}
+
+/* Whether anything follows sudo's options: submit_argv from submit_optind on
+ * is the command as typed, and an empty tail means there is none (`sudo -v`,
+ * `sudo -s`). */
+static BOOL sw_audit_has_command_word(char * const submit_argv[],
+                                      int submit_optind) {
+    return submit_argv != NULL && submit_optind >= 0
+        && submit_argv[submit_optind] != NULL;
+}
+
+/* Whether a sudo setting carries the boolean true. sudo writes "true" for a
+ * flag it set and leaves the key out otherwise (sudo_plugin(5)). Anything else,
+ * including a key missing because this sudo predates it, reads as false, which
+ * leaves the display exactly as it was. */
+static BOOL sw_audit_setting_true(char * const settings[], const char *key) {
+    const char *v = find_kv(settings, key);
+    return v != NULL && strcmp(v, "true") == 0;
+}
+
+/* Whether sudo will start a shell: -s sets run_shell, -i sets login_shell, and
+ * -i with no command also sets implied_shell. With no command word after the
+ * options, the shell is what runs, as the target user, so run as: and
+ * directory: are still worth showing although there is no input: to show.
+ * sudo rejects -s and -i together with -v, -k, -l and -e before any plugin
+ * opens, so those reach open() with none of the three set and stay silent. */
+static BOOL sw_audit_runs_shell(char * const settings[]) {
+    return sw_audit_setting_true(settings, "run_shell")
+        || sw_audit_setting_true(settings, "login_shell")
+        || sw_audit_setting_true(settings, "implied_shell");
+}
+
+/* The directory: row's value, or nil when the row must not print. It names
+ * where the command will start, as far as that is known before resolution:
+ *
+ *   - -D DIR (settings cmnd_cwd): sudo starts the command there or refuses
+ *     outright (sudoers has to allow -D), so the value as typed is the answer;
+ *   - -i without -D: sudo starts the login shell in the target user's home, a
+ *     policy-side lookup this plugin does not repeat (it resolves nothing). The
+ *     invoking cwd would be wrong, so there is no row; the approval sheet's
+ *     directory line carries the real one;
+ *   - otherwise the invoking cwd (user_info cwd), which the command inherits.
+ *     command_info["cwd"] does not exist yet at audit open().
+ *
+ * A sudoers runcwd default can still move the start directory. That is a policy
+ * value too, shown on the sheet. Absent or empty, or an escape allocation
+ * failure -> nil, never a broken row. */
+static NSString *sw_audit_dir_row_value(char * const settings[],
+                                        char * const user_info[]) {
+    const char *dir = find_kv(settings, "cmnd_cwd");
+    if (dir == NULL || dir[0] == '\0') {
+        if (sw_audit_setting_true(settings, "login_shell")) return nil;
+        dir = find_kv(user_info, "cwd");
+    }
+    if (dir == NULL || dir[0] == '\0') return nil;
+
+    NSString *value = sw_audit_escape(dir);
+    if (value.length == 0) return nil;
     return value;
 }
 
@@ -523,13 +582,21 @@ static int sudowhat_audit_open(unsigned int version,
          * shadowed bare name shows up as input/execute divergence, with no
          * heuristic needed).
          *
-         * No command word -> the invocation is not something to preview (e.g.
-         * `sudo -v`); show nothing. Highlighted by role on one logical line (the
-         * terminal soft-wraps it); a colouriser failure degrades to the same
-         * line in plain. */
-        NSString *commandLine = sw_audit_command_line(submit_argv, submit_optind,
-                                                      colorCommand);
-        if (commandLine.length == 0) return 1;
+         * No command word -> show nothing, unless sudo will start a shell (-s,
+         * -i): then the shell is what runs, so the block still prints run as:
+         * and directory:, with no input: row because nothing was typed, and the
+         * approval plugin's execute: line names the shell. Any other invocation
+         * without a command word (`sudo -v`) is not something to preview.
+         * Highlighted by role on one logical line (the terminal soft-wraps it);
+         * a colouriser failure degrades to the same line in plain. */
+        NSString *commandLine = nil;
+        if (sw_audit_has_command_word(submit_argv, submit_optind)) {
+            commandLine = sw_audit_command_line(submit_argv, submit_optind,
+                                                colorCommand);
+            if (commandLine.length == 0) return 1;
+        } else if (!sw_audit_runs_shell(settings)) {
+            return 1;
+        }
 
         /* Target user: sudo puts runas_user in settings[] only when -u was given;
          * otherwise the default target is root. Mirrors the approval plugin's
@@ -538,16 +605,15 @@ static int sudowhat_audit_open(unsigned int version,
         NSString *userLine = (runas && runas[0] != '\0')
             ? sw_audit_escape(runas) : @"root";
 
-        /* Directory shown is the invoking cwd where execve will run (matches the
-         * approval sheet's Directory line, the cwd, not a binary path).
-         * command_info["cwd"] does not exist yet at audit open(); user_info's cwd
-         * is the honest pre-resolution value. Absent -> omit the Directory line. */
-        const char *cwd = find_kv(user_info, "cwd");
-        NSString *dirLine = (cwd && cwd[0] != '\0') ? sw_audit_escape(cwd) : nil;
+        /* Where the command starts, as known before resolution (see
+         * sw_audit_dir_row_value): -D as typed, no row for -i, else the
+         * invoking cwd. Matches the approval sheet's directory line in the
+         * common case. nil -> omit the directory: row. */
+        NSString *dirLine = sw_audit_dir_row_value(settings, user_info);
 
-        if (userLine == nil || commandLine == nil) return 1;   /* alloc failure */
+        if (userLine == nil) return 1;   /* alloc failure */
 
-        /* Assemble the block: user / directory / input [/ path]. Labels are
+        /* Assemble the block: user / directory [/ input] [/ path]. Labels are
          * bolded purely for readability (our own fixed bytes, never user input
          * -- the values are escape_core-escaped), and the values carry the
          * emphasis their meaning earns: the target user yellow when it is not
@@ -567,7 +633,9 @@ static int sudowhat_audit_open(unsigned int version,
             NSString *dirValue = color ? sw_audit_color_dir(dirLine) : dirLine;
             [block appendString:sw_audit_row(@"directory:", dirValue, color)];
         }
-        [block appendString:sw_audit_row(@"input:", commandLine, color)];
+        if (commandLine != nil) {
+            [block appendString:sw_audit_row(@"input:", commandLine, color)];
+        }
 
         /* PATH: sits directly after input: because it QUALIFIES that row: it is
          * the environment that decides how the bare name just shown will

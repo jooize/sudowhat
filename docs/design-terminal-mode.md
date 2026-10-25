@@ -69,6 +69,21 @@ which mode it is in; the redundancy on biometric consoles is accepted. Full
 rationale in the D8 delta in `docs/design-resolved-exec.md`, section 3. macOS
 only for now.]*
 
+*[2026-10-25 — a bare `sudo -s` / `sudo -i` prints the block too. With no
+command word the block used to print nothing, a rule meant for `sudo -v`, yet a
+shell does run, so `run as:` and `directory:` were lost. sudo passes
+`run_shell=true` (`-s`), `login_shell=true` (`-i`) and `implied_shell=true` (`-i`
+with no command) in the audit plugin's settings (`sudo_plugin(5)`); when any is
+set the block prints without an `input:` row (nothing was typed) and without
+`PATH:` (no bare name to qualify), and on macOS the approval plugin's `execute:`
+line names the shell. sudo rejects `-s` / `-i` alongside `-v`, `-k`, `-l` and
+`-e` before any plugin opens, so those stay silent. A sudo that does not send
+the keys keeps the old silence. Same day, `directory:` stopped claiming the
+invoking cwd where it is wrong: `-D DIR` (settings `cmnd_cwd`) shows `DIR` as
+typed, since sudo starts there or refuses, and `-i` without `-D` shows no
+`directory:` row, since the login shell starts in the target user's home, a
+lookup the audit plugin does not repeat (the sheet shows it). Both platforms.]*
+
 ## The resolved-path timing constraint (and the two-moment answer)
 
 The fully-resolved path (`/run/.../systemctl`) is more useful than the as-typed

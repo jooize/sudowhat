@@ -12,6 +12,10 @@
  *   - sw_audit_is_bare_name()      : the condition gating the PATH: row.
  *   - sw_audit_path_row_value()    : the caller's PATH as the PATH: row shows
  *                                    it, or nil when the row must not print.
+ *   - sw_audit_has_command_word()  : whether anything follows sudo's options,
+ *   - sw_audit_runs_shell()        : and whether -s / -i will run a shell when
+ *                                    nothing does.
+ *   - sw_audit_dir_row_value()     : the directory: row (-D, -i, invoking cwd).
  *
  * A SEPARATE binary from test_plugin_internals: that one #includes
  * plugin/sudowhat_approval.m, and the two plugins cannot share a translation
@@ -408,6 +412,78 @@ static void test_path_row_value(void) {
     OK(sw_audit_path_row_value(bare, -1, env) == nil, "negative optind -> nil");
 }
 
+/* The shell case: with no command word, sudo still runs something when -s or
+ * -i was given, and only then does the block print (run as: and directory:,
+ * no input:). The flags arrive as settings that read "true"; any other value,
+ * or a sudo that does not send the key, keeps the old silence. */
+static void test_runs_shell(void) {
+    char *none[] = { (char *)"sudo", NULL };
+    char *cmd[] = { (char *)"sudo", (char *)"id", NULL };
+    OK(!sw_audit_has_command_word(none, 1), "`sudo -s` has no command word");
+    OK(sw_audit_has_command_word(cmd, 1), "`sudo id` has one");
+    OK(!sw_audit_has_command_word(NULL, 0), "NULL argv has none");
+    OK(!sw_audit_has_command_word(cmd, -1), "negative optind has none");
+
+    char *s[] = { (char *)"run_shell=true", NULL };
+    char *i[] = { (char *)"login_shell=true", (char *)"implied_shell=true", NULL };
+    char *implied[] = { (char *)"implied_shell=true", NULL };
+    OK(sw_audit_runs_shell(s), "-s (run_shell) runs a shell");
+    OK(sw_audit_runs_shell(i), "-i (login_shell) runs a shell");
+    OK(sw_audit_runs_shell(implied), "implied_shell alone runs a shell");
+
+    /* `sudo -v`: no command word and no shell flag -> no block. */
+    char *v[] = { (char *)"progname=sudo", (char *)"update_ticket=true", NULL };
+    OK(!sw_audit_runs_shell(v), "-v runs no shell");
+    OK(!sw_audit_runs_shell(NULL), "NULL settings run no shell");
+
+    /* Only the exact value sudo writes counts. */
+    char *f[] = { (char *)"run_shell=false", NULL };
+    char *t1[] = { (char *)"run_shell=1", NULL };
+    char *pre[] = { (char *)"run_shell_x=true", NULL };
+    char *empty[] = { (char *)"run_shell=", NULL };
+    OK(!sw_audit_runs_shell(f), "run_shell=false is not a shell");
+    OK(!sw_audit_runs_shell(t1), "run_shell=1 is not the bool sudo writes");
+    OK(!sw_audit_runs_shell(pre), "a longer key sharing the prefix does not match");
+    OK(!sw_audit_runs_shell(empty), "an empty value is not true");
+}
+
+/* The directory: row: -D as typed, no row under -i (the login shell starts in
+ * the target's home, which this plugin does not look up), else the invoking
+ * cwd. Escaped through the same core as every other value. */
+static void test_dir_row_value(void) {
+    char *ui[] = { (char *)"uid=501", (char *)"cwd=/Users/alice/src", NULL };
+    char *plain[] = { (char *)"progname=sudo", NULL };
+    char *s[] = { (char *)"run_shell=true", NULL };
+    char *i[] = { (char *)"login_shell=true", (char *)"implied_shell=true", NULL };
+    char *d[] = { (char *)"cmnd_cwd=/etc/nginx", NULL };
+    char *id[] = { (char *)"login_shell=true", (char *)"cmnd_cwd=/tmp", NULL };
+
+    EQ(sw_audit_dir_row_value(plain, ui), @"/Users/alice/src",
+       "a plain command -> the invoking cwd");
+    EQ(sw_audit_dir_row_value(s, ui), @"/Users/alice/src",
+       "-s keeps the invoking cwd");
+    OK(sw_audit_dir_row_value(i, ui) == nil,
+       "-i -> no row: the shell starts in the target's home");
+    EQ(sw_audit_dir_row_value(d, ui), @"/etc/nginx", "-D DIR -> DIR as typed");
+    EQ(sw_audit_dir_row_value(id, ui), @"/tmp", "-i -D DIR -> DIR");
+
+    char *emptyD[] = { (char *)"cmnd_cwd=", NULL };
+    EQ(sw_audit_dir_row_value(emptyD, ui), @"/Users/alice/src",
+       "an empty cmnd_cwd falls back to the invoking cwd");
+
+    char *noCwd[] = { (char *)"uid=501", NULL };
+    char *emptyCwd[] = { (char *)"uid=501", (char *)"cwd=", NULL };
+    OK(sw_audit_dir_row_value(plain, noCwd) == nil, "cwd absent -> no row");
+    OK(sw_audit_dir_row_value(plain, emptyCwd) == nil, "cwd empty -> no row");
+    OK(sw_audit_dir_row_value(NULL, NULL) == nil, "NULL arrays -> no row");
+
+    /* A hostile -D reaches the terminal as text, never as bytes. */
+    char *hostile[] = { (char *)"cmnd_cwd=/a\n/b‮c", NULL };
+    EQ(sw_audit_dir_row_value(hostile, ui),
+       ([NSString stringWithFormat:@"/a%@/b%@c", U(@"A"), U(@"202E")]),
+       "control byte and bidi override in -D are escaped to text");
+}
+
 int main(void) {
     @autoreleasepool {
         test_color_allowed();
@@ -421,7 +497,9 @@ int main(void) {
         test_is_bare_name();
         test_path_row_value();
         test_path_list_colour();
+        test_runs_shell();
+        test_dir_row_value();
         SW_SUMMARY("audit plugin internals (colour gate, frame, command line, "
-                   "fail-soft, PATH: row)");
+                   "fail-soft, PATH: row, shell, directory: row)");
     }
 }
