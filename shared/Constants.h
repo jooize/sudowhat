@@ -72,6 +72,15 @@
  * (nix module emits it, pam_sudowhat branches on it, the plugin checks it). */
 #define SUDOWHAT_GATE_ARG       "console-gate"
 
+/* Module argument that selects pam_sudowhat's third role, console-only: success
+ * for the local console (GUI) user, and for anyone else a printed refusal and a
+ * failure that stops sudo at once. The nopasswd-only `sudo_local` passes it as
+ *   auth requisite <pam_sudowhat.so> console-only
+ * so a non-console caller whose command needs authentication stops in PAM: no
+ * prompt, no cached credential. One definition, three readers (nix module emits
+ * it, pam_sudowhat branches on it, the plugin checks for it). */
+#define SUDOWHAT_CONSOLE_ONLY_ARG "console-only"
+
 /* Policy-deference marker. pam_sudowhat's auth entry (either role) sets this
  * environment variable when it runs, and the approval plugin reads it in
  * check() to learn whether sudo entered the PAM auth conversation for THIS

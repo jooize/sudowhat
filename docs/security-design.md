@@ -52,8 +52,10 @@ sudo /usr/bin/foo bar
       • else: caller must be the LOCAL CONSOLE session -- SessionGetInfo()
         reports graphic access and is not remote, and the console UID equals
         the invoking UID. A non-console caller never reaches this dialog: it is
-        sent to a native password (nonConsole="password", default) or denied
-        (nonConsole="deny") -- see below.
+        sent to a native password (nonConsole="password", default), allowed
+        only what sudoers runs without authentication
+        (nonConsole="nopasswd-only"), or denied (nonConsole="deny") -- see
+        below.
       • formats the command with shell-quoting and control-char escapes
       • writes the verify code and the resolved execute: line to /dev/tty --
         before the dialog in biometric mode; execute: after the password on
@@ -81,6 +83,23 @@ password on the caller's *own* terminal, and the approval plugin steps aside for
 them (no dialog) once sudo has authenticated them. Set `nonConsole = "deny"` to
 install `auth sufficient pam_permit.so` instead, which terminates the chain with
 no password path, so the approval plugin denies every non-console caller.
+
+`nonConsole = "nopasswd-only"` puts one more line between those two:
+`auth requisite pam_sudowhat.so console-only`. The console user passes it; any
+other caller gets one refusal line and sudo stops (`PAM_CRED_INSUFFICIENT`,
+because sudo treats `PAM_AUTH_ERR` as a wrong password and asks again). So a
+non-console caller whose command needs authentication never authenticates and
+never caches a credential. A command sudoers runs without authentication never
+enters PAM, leaves the auth marker absent, and the approval plugin steps aside
+for it, but only when `sudo_local` is exactly this three-line chain: with
+`pam_permit` ahead of `console-only`, a non-console caller could pass PAM, cache
+a credential, and later look waived.
+
+The approval plugin learns `nonConsole` from `sudo_local`'s shape alone
+(`sw_nonconsole_chain_of`): the gate variant is `password`, the exact
+three-line chain is `nopasswd-only`, and anything else is `deny`. PAM enforces
+the password path and the plugin enforces the waived one, so one file serving
+both keeps them from disagreeing.
 
 ## Trust root
 
@@ -143,10 +162,12 @@ the caller's own device, a daemon design this project rejected.)
 So a non-console caller authenticates, if at all, through sudo's own machinery
 on its own session. By default (`nonConsole = "password"`) that is sudo's
 native password / smartcard factor: stock sudo behaviour, kept intact. Set
-`nonConsole = "deny"` to refuse non-console callers entirely (a password alone
-then can't escalate over SSH or from a background job, at the cost of remote /
-headless sudo; screen sharing works inside the GUI login, so it is console and
-not covered).
+`nonConsole = "nopasswd-only"` so a non-console caller runs only what sudoers
+waived authentication for (a `NOPASSWD` rule kept for automation still works
+over SSH, and a password alone can't escalate), or `nonConsole = "deny"` to
+refuse non-console callers entirely, at the cost of remote / headless sudo.
+Screen sharing works inside the GUI login, so it is console and neither value
+covers it.
 This split separates *local-GUI* callers from *remote/headless* ones; it does
 **not** separate the human from another process inside the same GUI login (a
 background gui-domain agent is treated as console; see

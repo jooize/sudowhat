@@ -231,7 +231,7 @@ runtime configuration to tamper with. The module options
 |---|---|---|
 | `enable` | `false` | Install the bundles and wire up sudo. |
 | `package` | the flake's package | Which sudowhat build to install. |
-| `nonConsole` | `"password"` \| `"deny"` (`"password"`) | What SSH / headless callers get: sudo's native password on their own terminal, or refusal. See [the table below](#console-vs-non-console-callers). |
+| `nonConsole` | `"password"` \| `"nopasswd-only"` \| `"deny"` (`"password"`) | What SSH / headless callers get: sudo's native password on their own terminal, only the commands sudoers runs without authentication, or refusal. See [the table below](#console-vs-non-console-callers). |
 | `authCacheMinutes` | minutes \| `"defer"` (`0`) | sudo's credential cache. `0` = every command re-prompts; `"defer"` = leave your sudoers' own `timestamp_timeout` in place (writes no file). Never sets `timestamp_type=global`. |
 | `auditDisplay` | `"on"` \| `"off"` (`"on"`) | The pre-auth `run as / directory / input` (+ `PATH:`) terminal block. |
 | `execDisplay` | `"on"` \| `"off"` (`"on"`) | The resolved `execute:` terminal line. |
@@ -368,21 +368,26 @@ the uid alone. A caller is **console** only when both hold:
 Every other caller is **non-console**, including an SSH session running as
 the very user who is logged in at the screen.
 
-| Caller | Classified | `nonConsole = "password"` (default) | `nonConsole = "deny"` |
-|---|---|---|---|
-| A terminal in your GUI login, and anything started from it (tmux, scripts, editors) | console | Touch ID dialog showing the command¹ | Touch ID dialog showing the command¹ |
-| An SSH session, and tools that start over SSH (mosh) | non-console | Password or smartcard on the caller's own terminal | Refused, no prompt |
-| An unattended job running as a user (LaunchDaemon, cron) | non-console | Runs only under a sudoers rule that waives authentication (`NOPASSWD`); otherwise fails, since nobody can type a password | Refused, even under a `NOPASSWD` rule |
-| Another account on this Mac that is not at the screen (fast user switching) | non-console | Password on its own terminal | Refused, no prompt |
-| Root (uid 0) | exempt | Allowed, logged to the auth log | Allowed, logged to the auth log |
+| Caller | Classified | `"password"` (default) | `"nopasswd-only"` | `"deny"` |
+|---|---|---|---|---|
+| A terminal in your GUI login, and anything started from it (tmux, scripts, editors) | console | Touch ID dialog showing the command¹ | Touch ID dialog showing the command¹ | Touch ID dialog showing the command¹ |
+| An SSH session, and tools that start over SSH (mosh) | non-console | Password or smartcard on the caller's own terminal | `NOPASSWD` commands² run; anything else is refused with one line, no prompt | Refused, no prompt |
+| An unattended job running as a user (LaunchDaemon, cron) | non-console | Runs only under a sudoers rule that waives authentication (`NOPASSWD`); otherwise fails, since nobody can type a password | Runs only under a `NOPASSWD` rule²; otherwise refused | Refused, even under a `NOPASSWD` rule |
+| Another account on this Mac that is not at the screen (fast user switching) | non-console | Password on its own terminal | `NOPASSWD` commands² only | Refused, no prompt |
+| Root (uid 0) | exempt | Allowed, logged to the auth log | Allowed, logged to the auth log | Allowed, logged to the auth log |
 
 ¹ Skipped when sudoers waived authentication for the command (policy
 deference, on by default), so the command just runs, still disclosed on the
 terminal.
 
+² A command sudoers runs without authentication: a `NOPASSWD` rule, or
+`Defaults !authenticate` (the same switch). A password, a smartcard or a
+cached credential never stands in for one.
+
 While nobody is logged in at the screen (the login window), there is no
 console user, so every non-root caller is non-console. Under `deny`, that means
-a Mac whose GUI login is stuck cannot be repaired with sudo over SSH.
+a Mac whose GUI login is stuck cannot be repaired with sudo over SSH. Under
+`nopasswd-only`, only its `NOPASSWD` commands run there.
 
 A non-console caller is **never** shown a Touch ID dialog, which would render
 on the console user's screen; that impossibility is structural and not
@@ -536,8 +541,8 @@ form:
   screen remotely (Screen Sharing, Remote Management) types into the same
   login you do, so their sudo is console and they see the same dialog. Touch
   ID still needs a finger on this Mac, but when it is unavailable (lid closed,
-  no watch) the dialog asks for the password. `nonConsole = "deny"` does not
-  cover this case: keep screen sharing off, or limited to people you would let
+  no watch) the dialog asks for the password. Neither `"deny"` nor
+  `"nopasswd-only"` covers this case: keep screen sharing off, or limited to people you would let
   type at your keyboard.
 - **Generic icon in the dialog.** macOS takes the dialog icon from the calling
   process (`sudo`, no app bundle), and `LAContext` has no override API. Fixing

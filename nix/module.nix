@@ -22,30 +22,44 @@ in {
     };
 
     nonConsole = lib.mkOption {
-      type = lib.types.enum [ "password" "deny" ];
+      type = lib.types.enum [ "password" "nopasswd-only" "deny" ];
       default = "password";
       description = ''
         What a non-console caller — an SSH session, unattended automation, any
         non-GUI-login security session — may do with sudo. A non-console caller
         is NEVER shown a Touch ID dialog (that would
         render on the console user's screen — the reflexive-approval hole this
-        tool exists to close); this option only chooses between password and
-        denial.
+        tool exists to close); the three values allow less in turn.
 
         - `password` (the default): the `sudo_local` gate variant is installed.
           The local console user is still gated by the approval plugin's Touch
           ID prompt (no password), while a non-console caller falls through to
-          sudo's native password / smartcard factor on their OWN terminal, and
-          the approval plugin steps aside for them once sudo has authenticated
-          them. This is stock sudo behaviour for remote callers, kept intact —
-          sudowhat adds trustworthy console Touch ID without taking it away.
+          the rest of `/etc/pam.d/sudo` on their OWN terminal (on stock macOS a
+          smartcard, then the account password), and the approval plugin steps
+          aside for them once sudo has authenticated them. Commands sudoers
+          runs without authentication run too. This is stock sudo behaviour
+          for remote callers, kept intact — sudowhat adds trustworthy console
+          Touch ID without taking it away.
+        - `nopasswd-only`: a non-console caller may run exactly the commands
+          sudoers runs without authentication (a `NOPASSWD` rule, or
+          `Defaults !authenticate`, which is the same switch), and nothing
+          else. Anything that needs authentication is refused in PAM with one
+          line and no prompt, so a password alone cannot escalate over SSH or
+          from a background job, while a `NOPASSWD` rule meant for automation
+          keeps working there. A cached credential cannot stand in for a
+          waiver: a non-console caller never authenticates, so never caches
+          one, and sudo's per-terminal cache keeps a console credential on the
+          console's terminal (this module never sets `timestamp_type=global`;
+          do not set it elsewhere under this value).
         - `deny`: the console-only variant is installed. Only the user logged
           in at the screen may sudo; every non-console caller is denied without
           a prompt, even under a `NOPASSWD` rule. Choose this so a password
           alone cannot escalate over SSH or from a background job — at the cost
           of breaking remote / headless sudo (root-context automation stays
-          exempt). Screen sharing is not covered: it works inside the GUI login,
-          so it is console.
+          exempt).
+
+        Screen sharing is not covered by either restriction: it works inside
+        the GUI login, so it is console.
 
         Neither value grants new authority: sudoers still decides who may run
         what. The classification is by the caller's security session (local GUI
@@ -366,9 +380,14 @@ in {
         '';
       };
 
-    # /etc/pam.d/sudo_local — two variants. Apple's openpam fork does not parse
-    # the Linux-PAM bracket-list syntax `[success=done default=die]`, so the
-    # fail-closed semantics are expressed with simple control flags.
+    # /etc/pam.d/sudo_local — three variants, one per nonConsole value. The
+    # approval plugin reads nonConsole back from this file's shape alone
+    # (sw_nonconsole_chain_of), so each value's text must stay recognizable:
+    # change a variant here and its classifier there together.
+    #
+    # Apple's openpam fork does not parse the Linux-PAM bracket-list syntax
+    # `[success=done default=die]`, so the fail-closed semantics are expressed
+    # with simple control flags.
     #
     # The module path is the FULL store path, never a bare name: pam_sudowhat.so
     # is not in openpam's /usr/lib/pam search dir, and a `sufficient` line whose
@@ -392,6 +411,27 @@ in {
         #                                                the caller's own terminal.
         auth    requisite     ${pkg}/lib/pam/pam_sudowhat.so
         auth    sufficient    ${pkg}/lib/pam/pam_sudowhat.so console-gate
+      '' else if cfg.nonConsole == "nopasswd-only" then ''
+        # Managed by the sudowhat nix-darwin module (nonConsole = "nopasswd-only").
+        #
+        #   requisite  pam_sudowhat.so               - integrity; aborts sudo on tamper
+        #   requisite  pam_sudowhat.so console-only  - the local console (GUI) user
+        #                                              passes on; anyone else gets
+        #                                              one line and sudo stops, so
+        #                                              a command that needs
+        #                                              authentication never runs
+        #                                              for them and no credential
+        #                                              is cached
+        #   sufficient pam_permit.so                 - ends the chain for the
+        #                                              console user (Touch ID gates
+        #                                              them in the approval plugin)
+        #
+        # Commands sudoers runs without authentication never reach PAM; the
+        # approval plugin runs them for a non-console caller only under this
+        # exact chain.
+        auth    requisite     ${pkg}/lib/pam/pam_sudowhat.so
+        auth    requisite     ${pkg}/lib/pam/pam_sudowhat.so console-only
+        auth    sufficient    pam_permit.so
       '' else ''
         # Managed by the sudowhat nix-darwin module (nonConsole = "deny").
         #

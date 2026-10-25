@@ -177,6 +177,25 @@ static const char *find_kv(char * const arr[], const char *key) {
     return NULL;
 }
 
+/* Split /etc/pam.d/sudo_local content into its lines' tokens: whitespace-
+ * insensitive, '#' comments and blank lines skipped. The one tokenizer behind
+ * every sudo_local shape check below. nil content -> nil. */
+static NSArray<NSArray<NSString *> *> *sw_pam_lines(NSString *content) {
+    if (content == nil) return nil;
+    NSMutableArray<NSArray<NSString *> *> *lines = [NSMutableArray array];
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *rawLine in [content componentsSeparatedByString:@"\n"]) {
+        NSString *line = [rawLine stringByTrimmingCharactersInSet:ws];
+        if (line.length == 0 || [line hasPrefix:@"#"]) continue;
+        NSMutableArray<NSString *> *f = [NSMutableArray array];
+        for (NSString *tok in [line componentsSeparatedByCharactersInSet:ws]) {
+            if (tok.length > 0) [f addObject:tok];
+        }
+        [lines addObject:f];
+    }
+    return lines;
+}
+
 /* Classify /etc/pam.d/sudo_local content: is it the non-console GATE variant?
  *
  * The step-aside below is only safe when this file routes a non-console caller
@@ -194,14 +213,7 @@ static const char *find_kv(char * const arr[], const char *key) {
 static BOOL sudowhat_text_is_gate_variant(NSString *content) {
     if (content == nil) return NO;
     BOOL haveIntegrity = NO, haveGate = NO;
-    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
-    for (NSString *rawLine in [content componentsSeparatedByString:@"\n"]) {
-        NSString *line = [rawLine stringByTrimmingCharactersInSet:ws];
-        if (line.length == 0 || [line hasPrefix:@"#"]) continue;
-        NSMutableArray<NSString *> *f = [NSMutableArray array];
-        for (NSString *tok in [line componentsSeparatedByCharactersInSet:ws]) {
-            if (tok.length > 0) [f addObject:tok];
-        }
+    for (NSArray<NSString *> *f in sw_pam_lines(content)) {
         if (f.count < 3) continue;
         if (![f[0] isEqualToString:@"auth"]) continue;
         if (![f[2] isEqualToString:@SUDOWHAT_PAM_PATH]) continue;
@@ -216,14 +228,74 @@ static BOOL sudowhat_text_is_gate_variant(NSString *content) {
     return haveIntegrity && haveGate;
 }
 
-/* Reads /etc/pam.d/sudo_local and reports whether the non-console password
- * path (the gate variant) is installed. Unreadable / absent / wrong shape ->
- * NO, so the step-aside falls back to a deny. */
-static BOOL sudowhat_nonconsole_password_path_installed(void) {
+/* Classify /etc/pam.d/sudo_local content: is it the NOPASSWD-ONLY variant?
+ *
+ * Exactly these three lines, in this order, and nothing else:
+ *   auth requisite  <SUDOWHAT_PAM_PATH>
+ *   auth requisite  <SUDOWHAT_PAM_PATH> console-only
+ *   auth sufficient pam_permit.so
+ * The order is the safety. console-only refuses a non-console caller before
+ * pam_permit can let PAM succeed, so such a caller never gets a cached
+ * credential, and an absent marker for them can only mean sudoers waived
+ * authentication. A pam_permit line ahead of console-only, or any extra line,
+ * breaks that, so the match is exact rather than presence-based like the gate
+ * variant's. Same tokenizer and SUDOWHAT_PAM_PATH pinning as the checks above.
+ * file-static for the offline unit test. */
+static BOOL sudowhat_text_is_nopasswd_only_variant(NSString *content) {
+    NSArray<NSArray<NSString *> *> *want = @[
+        @[ @"auth", @"requisite", @SUDOWHAT_PAM_PATH ],
+        @[ @"auth", @"requisite", @SUDOWHAT_PAM_PATH, @SUDOWHAT_CONSOLE_ONLY_ARG ],
+        @[ @"auth", @"sufficient", @"pam_permit.so" ],
+    ];
+    NSArray<NSArray<NSString *> *> *lines = sw_pam_lines(content);
+    return lines != nil && [lines isEqualToArray:want];
+}
+
+/* What the installed sudo_local lets a non-console caller do, read from its
+ * shape. The module's nonConsole option chooses the shape; there is no other
+ * channel. Anything unrecognized is DENY. */
+typedef enum {
+    SW_NC_DENY = 0,        /* "deny", or a shape we do not recognize */
+    SW_NC_PASSWORD,        /* "password": the gate variant */
+    SW_NC_NOPASSWD_ONLY,   /* "nopasswd-only" */
+} sw_nonconsole_chain;
+
+static sw_nonconsole_chain sw_nonconsole_chain_of(NSString *content) {
+    if (sudowhat_text_is_gate_variant(content)) return SW_NC_PASSWORD;
+    if (sudowhat_text_is_nopasswd_only_variant(content)) return SW_NC_NOPASSWD_ONLY;
+    return SW_NC_DENY;
+}
+
+/* Reads /etc/pam.d/sudo_local and classifies it. Unreadable / absent / wrong
+ * shape -> SW_NC_DENY, so the step-aside falls back to a deny. */
+static sw_nonconsole_chain sw_installed_nonconsole_chain(void) {
     NSString *content = [NSString stringWithContentsOfFile:@SUDOWHAT_SUDO_LOCAL
                                                   encoding:NSUTF8StringEncoding
                                                      error:NULL];
-    return sudowhat_text_is_gate_variant(content);
+    return sw_nonconsole_chain_of(content);
+}
+
+/* Does the non-console branch step aside (allow) or refuse? Pure, so the table
+ * is unit-testable.
+ *
+ *   PASSWORD                         -> YES  (sudo collected a factor on the
+ *                                             caller's own terminal, or sudoers
+ *                                             waived it)
+ *   NOPASSWD_ONLY, marker absent     -> YES  (sudoers waived authentication;
+ *                                             console-only rules out a cached
+ *                                             credential)
+ *   NOPASSWD_ONLY, marker present    -> NO   (PAM ran and passed for a caller
+ *                                             console-only should have refused:
+ *                                             PAM and this plugin disagree on
+ *                                             the session, so refuse)
+ *   DENY                             -> NO */
+static BOOL sw_nonconsole_allows(sw_nonconsole_chain chain, BOOL markerPresent) {
+    switch (chain) {
+    case SW_NC_PASSWORD:      return YES;
+    case SW_NC_NOPASSWD_ONLY: return !markerPresent;
+    case SW_NC_DENY:          return NO;
+    }
+    return NO;
 }
 
 /* Does /etc/pam.d/sudo_local carry pam_sudowhat's INTEGRITY line
@@ -246,14 +318,7 @@ static BOOL sudowhat_nonconsole_password_path_installed(void) {
  * sudo_local, not a guarantee against a root actor. */
 static BOOL sudowhat_text_has_integrity_line(NSString *content) {
     if (content == nil) return NO;
-    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
-    for (NSString *rawLine in [content componentsSeparatedByString:@"\n"]) {
-        NSString *line = [rawLine stringByTrimmingCharactersInSet:ws];
-        if (line.length == 0 || [line hasPrefix:@"#"]) continue;
-        NSMutableArray<NSString *> *f = [NSMutableArray array];
-        for (NSString *tok in [line componentsSeparatedByCharactersInSet:ws]) {
-            if (tok.length > 0) [f addObject:tok];
-        }
+    for (NSArray<NSString *> *f in sw_pam_lines(content)) {
         if (f.count == 3
             && [f[0] isEqualToString:@"auth"]
             && [f[1] isEqualToString:@"requisite"]
@@ -1691,18 +1756,24 @@ static int sudowhat_check(char * const command_info[],
              * which is exactly the reflexive-approval hole this guard exists to
              * close. Remote approval would need the rejected daemon design.
              *
-             * If the gate variant is NOT installed (default console-only
-             * config: `sufficient pam_permit.so`), PAM authenticated nobody, so
-             * stepping aside would grant passwordless root — deny instead,
-             * exactly as before this feature existed. */
-            if (sudowhat_nonconsole_password_path_installed()) {
-                /* Terminal-password mode. sudo already collected the factor,
-                 * inside the policy step that also resolved the command, so the
-                 * execute: line lands after auth and before execve -- a
-                 * last-look, not a preview. With execConfirm on, the decision
-                 * moves back after the display -- but only for a caller sudo
-                 * actually authenticated, which is what the marker from (1d)
-                 * tells it.
+             * The nopasswd-only variant refuses in PAM every non-console
+             * caller whose command needs authentication, so the only ones that
+             * reach this point there are commands sudoers waived (marker
+             * absent): step aside for those too.
+             *
+             * If neither variant is installed (the deny config: `sufficient
+             * pam_permit.so` alone), PAM authenticated nobody, so stepping aside
+             * would grant passwordless root — deny instead, exactly as before
+             * this feature existed. See sw_nonconsole_allows. */
+            sw_nonconsole_chain chain = sw_installed_nonconsole_chain();
+            if (sw_nonconsole_allows(chain, markerPresent)) {
+                /* Terminal-password mode, or a waived command. Under
+                 * "password", sudo already collected any factor inside the
+                 * policy step that also resolved the command, so the execute:
+                 * line lands after auth and before execve -- a last-look, not a
+                 * preview. With execConfirm on, the decision moves back after
+                 * the display -- but only for a caller sudo actually
+                 * authenticated, which is what the marker from (1d) tells it.
                  * See sw_step_aside_allow. */
                 int verdict = sw_step_aside_allow(commandC, run_argv,
                                                   sw_runas_name(command_info),
@@ -1710,15 +1781,20 @@ static int sudowhat_check(char * const command_info[],
                 if (verdict != 1) return verdict;
                 syslog(LOG_AUTHPRIV | LOG_NOTICE,
                        "sudowhat: non-console caller allowed (invoking uid %u, "
-                       "tty %s); sudo required a factor on the caller's own "
-                       "session", g_inv.uid,
-                       g_inv.have_tty ? g_inv.tty : "unknown");
+                       "tty %s); %s", g_inv.uid,
+                       g_inv.have_tty ? g_inv.tty : "unknown",
+                       markerPresent
+                           ? "sudo required a factor on the caller's own session"
+                           : "sudoers waived authentication");
                 return 1;
             }
             /* Name the session, not the uid: a same-uid SSH session lands
              * here too, and its uid IS the console user's. */
-            set_errstr(errstr, "sudowhat: not in the console's GUI login "
-                               "session (nonConsole = deny)");
+            set_errstr(errstr, chain == SW_NC_NOPASSWD_ONLY
+                ? "sudowhat: not in the console's GUI login session "
+                  "(nonConsole = nopasswd-only)"
+                : "sudowhat: not in the console's GUI login session "
+                  "(nonConsole = deny)");
             return 0;
         }
 

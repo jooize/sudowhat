@@ -55,6 +55,10 @@ Defaults timestamp_timeout=0
 auth    requisite     $PAM_DST
 auth    sufficient    $PAM_DST console-gate
 
+# To let non-console callers run ONLY what sudoers runs without authentication
+# (NOPASSWD), replace the second line with these two, in this order:
+#   auth  requisite   $PAM_DST console-only
+#   auth  sufficient  pam_permit.so
 # To instead DENY all non-console callers (console-only lockdown), replace the
 # second line with:  auth  sufficient  pam_permit.so
 #

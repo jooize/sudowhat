@@ -170,6 +170,100 @@ static void test_gate_variant_detection(void) {
        "commented-out console-gate line does not count");
 }
 
+static void test_nopasswd_only_variant_detection(void) {
+    /* sudowhat_text_is_nopasswd_only_variant decides whether a waived command
+     * may run for a non-console caller: only an EXACT three-line chain with
+     * console-only ahead of pam_permit counts. Anything else -> deny. */
+    NSString *pam = @SUDOWHAT_PAM_PATH;
+
+    NSString *good = [NSString stringWithFormat:
+        @"# managed by nix\nauth requisite %@\n"
+        @"auth requisite %@ console-only\nauth sufficient pam_permit.so\n",
+        pam, pam];
+    OK(sudowhat_text_is_nopasswd_only_variant(good),
+       "nopasswd-only variant accepted");
+
+    NSString *spaced = [NSString stringWithFormat:
+        @"\n  auth\trequisite\t%@  \n# a comment\n"
+        @"auth   requisite  %@   console-only \n\n"
+        @"   auth sufficient\tpam_permit.so\n", pam, pam];
+    OK(sudowhat_text_is_nopasswd_only_variant(spaced),
+       "tabs/extra spaces/blank lines/comments tolerated");
+
+    /* pam_permit before console-only: a non-console caller passes PAM and can
+     * cache a credential, so a later absent marker would lie. */
+    NSString *permitFirst = [NSString stringWithFormat:
+        @"auth requisite %@\nauth sufficient pam_permit.so\n"
+        @"auth requisite %@ console-only\n", pam, pam];
+    OK(!sudowhat_text_is_nopasswd_only_variant(permitFirst),
+       "pam_permit ahead of console-only rejected");
+
+    NSString *noIntegrity = [NSString stringWithFormat:
+        @"auth requisite %@ console-only\nauth sufficient pam_permit.so\n", pam];
+    OK(!sudowhat_text_is_nopasswd_only_variant(noIntegrity),
+       "missing integrity line rejected");
+
+    NSString *integrityAfter = [NSString stringWithFormat:
+        @"auth requisite %@ console-only\nauth requisite %@\n"
+        @"auth sufficient pam_permit.so\n", pam, pam];
+    OK(!sudowhat_text_is_nopasswd_only_variant(integrityAfter),
+       "integrity line after console-only rejected");
+
+    NSString *sufficientOnly = [NSString stringWithFormat:
+        @"auth requisite %@\nauth sufficient %@ console-only\n"
+        @"auth sufficient pam_permit.so\n", pam, pam];
+    OK(!sudowhat_text_is_nopasswd_only_variant(sufficientOnly),
+       "console-only as sufficient (failure ignored) rejected");
+
+    NSString *wrongPath = [NSString stringWithFormat:
+        @"auth requisite %@\n"
+        @"auth requisite /usr/local/lib/pam/evil.so console-only\n"
+        @"auth sufficient pam_permit.so\n", pam];
+    OK(!sudowhat_text_is_nopasswd_only_variant(wrongPath),
+       "console-only at wrong module path rejected");
+
+    NSString *extra = [NSString stringWithFormat:
+        @"%@auth sufficient pam_tid.so\n", good];
+    OK(!sudowhat_text_is_nopasswd_only_variant(extra),
+       "an extra line rejected");
+
+    NSString *commented = [NSString stringWithFormat:
+        @"auth requisite %@\n# auth requisite %@ console-only\n"
+        @"auth sufficient pam_permit.so\n", pam, pam];
+    OK(!sudowhat_text_is_nopasswd_only_variant(commented),
+       "commented-out console-only line does not count");
+
+    OK(!sudowhat_text_is_nopasswd_only_variant(nil), "nil content rejected");
+    OK(!sudowhat_text_is_nopasswd_only_variant(@""), "empty content rejected");
+
+    /* The three shapes the module writes classify as their three values, and
+     * an unknown shape is deny. */
+    NSString *gate = [NSString stringWithFormat:
+        @"auth requisite %@\nauth sufficient %@ console-gate\n", pam, pam];
+    NSString *deny = [NSString stringWithFormat:
+        @"auth requisite %@\nauth sufficient pam_permit.so\n", pam];
+    OK(sw_nonconsole_chain_of(gate) == SW_NC_PASSWORD, "gate -> password");
+    OK(sw_nonconsole_chain_of(good) == SW_NC_NOPASSWD_ONLY,
+       "console-only chain -> nopasswd-only");
+    OK(sw_nonconsole_chain_of(deny) == SW_NC_DENY, "pam_permit chain -> deny");
+    OK(sw_nonconsole_chain_of(permitFirst) == SW_NC_DENY,
+       "unrecognized shape -> deny");
+    OK(sw_nonconsole_chain_of(nil) == SW_NC_DENY, "unreadable -> deny");
+}
+
+static void test_nonconsole_allows(void) {
+    OK(sw_nonconsole_allows(SW_NC_PASSWORD, YES),
+       "password: authenticated caller steps aside");
+    OK(sw_nonconsole_allows(SW_NC_PASSWORD, NO),
+       "password: waived command steps aside");
+    OK(sw_nonconsole_allows(SW_NC_NOPASSWD_ONLY, NO),
+       "nopasswd-only: waived command steps aside");
+    OK(!sw_nonconsole_allows(SW_NC_NOPASSWD_ONLY, YES),
+       "nopasswd-only: PAM ran for a non-console caller -> refuse");
+    OK(!sw_nonconsole_allows(SW_NC_DENY, NO), "deny: waived command refused");
+    OK(!sw_nonconsole_allows(SW_NC_DENY, YES), "deny: everything refused");
+}
+
 /* The verify code is a channel-binding security signal the user compares
  * against the Touch ID sheet. It is written to the controlling terminal
  * (/dev/tty) — which a shell's `>`/`2>`/`&>` cannot touch — and to NOWHERE
@@ -945,6 +1039,12 @@ static void test_integrity_line_detection(void) {
     OK(sudowhat_text_has_integrity_line(gate),
        "gate variant has the integrity line");
 
+    NSString *nopasswdOnly = [NSString stringWithFormat:
+        @"auth requisite %@\nauth requisite %@ console-only\n"
+        @"auth sufficient pam_permit.so\n", pam, pam];
+    OK(sudowhat_text_has_integrity_line(nopasswdOnly),
+       "nopasswd-only variant has the integrity line");
+
     NSString *none = @"auth sufficient pam_permit.so\n";
     OK(!sudowhat_text_has_integrity_line(none), "no integrity line -> NO");
 
@@ -1023,6 +1123,8 @@ int main(void) {
         test_find_kv_first_match_wins();
         test_find_kv_value_with_equals();
         test_gate_variant_detection();
+        test_nopasswd_only_variant_detection();
+        test_nonconsole_allows();
         test_nonce_alphabet_and_length();
         test_nonce_edge_sizes();
         test_verify_code_to_tty();

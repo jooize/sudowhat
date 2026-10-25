@@ -10,6 +10,10 @@
  * at the PAM layer (the LAContext prompt later
  * is the user-facing auth gate). On any failure returns PAM_AUTH_ERR
  * and sudo aborts.
+ *
+ * A module argument selects one of two further roles, each keyed on whether
+ * the caller is the local console (GUI) user: `console-gate` (nonConsole =
+ * "password") and `console-only` (nonConsole = "nopasswd-only").
  */
 
 #import <Foundation/Foundation.h>
@@ -41,6 +45,27 @@ static void sudowhat_log(int prio, const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     syslog(prio | LOG_AUTHPRIV, "pam_sudowhat: %s", buf);
+}
+
+/* Show one line to the caller through the application's PAM conversation
+ * (sudo prints a PAM_ERROR_MSG on the caller's terminal). Best effort: with no
+ * conversation, or one that fails, the refusal still stands, unexplained. */
+static void sudowhat_conv_error(pam_handle_t *pamh, const char *text) {
+    const void *item = NULL;
+    if (pam_get_item(pamh, PAM_CONV, &item) != PAM_SUCCESS || item == NULL) {
+        return;
+    }
+    const struct pam_conv *conv = item;
+    if (conv->conv == NULL) return;
+    /* openpam declares msg as `char *`; neither PAM nor sudo writes through it. */
+    struct pam_message msg = { .msg_style = PAM_ERROR_MSG, .msg = (char *)text };
+    const struct pam_message *msgp = &msg;
+    struct pam_response *resp = NULL;
+    if (conv->conv(1, &msgp, &resp, conv->appdata_ptr) == PAM_SUCCESS
+        && resp != NULL) {
+        free(resp->resp);
+        free(resp);
+    }
 }
 
 __attribute__((visibility("default")))
@@ -96,6 +121,53 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags,
                 return PAM_SUCCESS;   /* local console: no password here */
             }
             return PAM_AUTH_ERR;      /* non-console: fall through to password */
+        }
+
+        /* Third role — CONSOLE-ONLY. The nopasswd-only variant of
+         * /etc/pam.d/sudo_local invokes this module as
+         *   auth requisite <pam_sudowhat.so> console-only
+         * between the integrity line and `sufficient pam_permit.so`. The local
+         * console user passes on to pam_permit (Touch ID gates them in the
+         * approval plugin). Any other caller reached the auth stack because
+         * sudoers requires authentication for this command, and nopasswd-only
+         * gives them no way to provide it: say so and stop. Refusing HERE,
+         * before pam_permit, is what keeps a non-console caller from ever
+         * holding a cached credential, so the approval plugin can read an
+         * absent marker as "sudoers waived authentication".
+         *
+         * PAM_CRED_INSUFFICIENT, not PAM_AUTH_ERR: sudo treats PAM_AUTH_ERR,
+         * PAM_PERM_DENIED, PAM_MAXTRIES and PAM_AUTHINFO_UNAVAIL as a wrong
+         * password and asks again (passwd_tries times, "Sorry, try again"),
+         * which would print this refusal three times. Any other code ends the
+         * attempt at once with one "PAM authentication error" line, and
+         * "insufficient credentials" is the one that says what happened. */
+        if (argc >= 1 && argv[0] != NULL
+            && strcmp(argv[0], SUDOWHAT_CONSOLE_ONLY_ARG) == 0) {
+            const char *userName = NULL;
+            if (pam_get_user(pamh, &userName, NULL) != PAM_SUCCESS
+                || userName == NULL) {
+                sudowhat_log(LOG_ERR,
+                             "console-only: could not determine invoking user");
+                return PAM_CRED_INSUFFICIENT;
+            }
+            struct passwd *pw = getpwnam(userName);
+            if (pw == NULL) {
+                sudowhat_log(LOG_ERR,
+                             "console-only: no passwd entry for user '%s'",
+                             userName);
+                return PAM_CRED_INSUFFICIENT;
+            }
+            if ([SudoWhatPamSessionGuard isInvokingUserActiveConsole:pw->pw_uid]) {
+                return PAM_SUCCESS;   /* local console: on to pam_permit */
+            }
+            sudowhat_conv_error(pamh,
+                "sudowhat: not in the console's GUI login session, so only "
+                "NOPASSWD commands run (nonConsole = nopasswd-only)");
+            sudowhat_log(LOG_NOTICE,
+                         "console-only: refused non-console caller '%s' "
+                         "(uid %u); the command needs authentication",
+                         userName, pw->pw_uid);
+            return PAM_CRED_INSUFFICIENT;
         }
 
         /* First role — INTEGRITY (no module argument). */

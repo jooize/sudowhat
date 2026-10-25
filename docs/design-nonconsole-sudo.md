@@ -21,6 +21,19 @@ caller is still NEVER shown biometric — that is structural and deliberately no
 configurable (a remote caller's dialog would render on the console user's screen;
 see the README "Non-console defense").
 
+**v0.19.4 update — a third value, `"nopasswd-only"`.** A non-console caller
+may run exactly the commands sudoers runs without authentication, and nothing
+else. The plugin alone could not do this safely: it learns "sudoers waived
+authentication" from an absent marker, but a cached credential also leaves the
+marker absent, and under the `pam_permit` chain a non-console caller passes PAM
+and can cache one. So PAM refuses first. `pam_sudowhat` gains a third role,
+`console-only` (success for the console user; for anyone else a refusal line
+and `PAM_CRED_INSUFFICIENT`, which sudo does not retry), placed as `requisite`
+between the integrity line and `sufficient pam_permit.so`. The plugin steps
+aside for a non-console caller with the marker absent only when `sudo_local` is
+exactly that three-line chain. `deny` keeps its own chain, so the plugin still
+reads `nonConsole` from `sudo_local`'s shape and needs no second channel.
+
 ## As built (v0.5.0)
 
 Goal: let a non-root, non-console caller — an SSH session, or unattended

@@ -1,8 +1,8 @@
 # sudowhat PAM config. The Touch ID prompt itself is rendered post-PAM by the
 # sudo approval plugin loaded from /etc/sudo.conf. A non-console caller is NEVER
 # shown that biometric sheet (it would render on the console user's screen); the
-# only choice is password vs. denial, made by which variant of this file you
-# install.
+# choice is password, NOPASSWD commands only, or denial, made by which variant
+# of this file you install.
 #
 # Apple's openpam fork does not parse the Linux-PAM bracket-list syntax
 # `[success=done default=die]`, so the fail-closed semantics use simple flags.
@@ -24,6 +24,17 @@
 auth    requisite     /usr/local/lib/pam/pam_sudowhat.so
 auth    sufficient    /usr/local/lib/pam/pam_sudowhat.so console-gate
 
+# NOPASSWD-ONLY variant — a non-console caller may run exactly the commands
+# sudoers runs without authentication (NOPASSWD, `Defaults !authenticate`) and
+# nothing else. Replace the `console-gate` line above with these two, in this
+# order (the approval plugin checks this exact chain):
+#
+#   auth    requisite     /usr/local/lib/pam/pam_sudowhat.so console-only
+#   auth    sufficient    pam_permit.so
+#
+# console-only refuses any non-console caller who reaches PAM, so no password
+# path and no cached credential exist for them.
+#
 # DENY variant — to lock sudo to the local console only (so a stolen password
 # alone cannot escalate remotely), replace the `console-gate` line above with:
 #
